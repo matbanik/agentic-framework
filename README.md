@@ -6,6 +6,12 @@
 > Extracted from a real, long-running project. **Every rule in `GUARDRAILS.md` exists because a
 > specific failure actually happened.** None of it is theoretical.
 
+![Development lifecycle overview](core/.agent/docs/diagrams/development-lifecycle-overview.png)
+
+The nine-phase delivery loop — research → plan → independent review → implement → validate →
+human-gated commit. ([SVG source](core/.agent/docs/diagrams/development-lifecycle-overview.svg) ·
+full write-up in [`development-lifecycle.md`](core/.agent/docs/development-lifecycle.md))
+
 ---
 
 ## Start here (in this order)
