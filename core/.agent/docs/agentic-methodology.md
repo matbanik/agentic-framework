@@ -28,7 +28,7 @@
 
 ## 1. Executive Summary
 
-{{PROJECT_NAME_TITLE}} is a trading portfolio analysis platform built using a **human-supervised, dual-agent orchestration model**. Two roles — the **primary driver** (currently Claude, Opus 4.8/Sonnet 5 per tier — see `.agent/docs/harness-profiles.md`) and the **external reviewer** (currently Codex GPT-5.6-sol primary; full chain in `.agent/docs/model-routing.md`) — perform complementary roles under structured workflows, with a human orchestrator maintaining oversight at every critical gate.
+{{PROJECT_NAME_TITLE}} is a trading portfolio analysis platform built using a **human-supervised, dual-agent orchestration model**. Two roles — the **primary driver** (currently Claude, Opus 5/Sonnet 5 per tier — see `.agent/docs/harness-profiles.md`) and the **external reviewer** (currently Codex GPT-5.6-sol primary; full chain in `.agent/docs/model-routing.md`) — perform complementary roles under structured workflows, with a human orchestrator maintaining oversight at every critical gate.
 
 The methodology has delivered **200+ Manageable Execution Units (MEUs)** across 11 phases — from domain entities through REST API, MCP server, Electron GUI, pipeline engine, and market data expansion — with a disciplined TDD-first approach that prevents the common failure modes of AI-generated code.
 
@@ -195,7 +195,7 @@ The `AGENTS.md` file (the master instruction file for all AI agents) codifies ha
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │  PLANNING — Primary Driver (per harness profile;                   │
-│  currently Claude Opus 4.8 — see harness-profiles.md)              │
+│  currently Claude Opus 5 — see harness-profiles.md)              │
 │  → Reads context files, scopes project, generates plan             │
 │  → Post-review gate branches on plan_to_exec_gate                  │
 │    (harness-profiles.md / model-routing.md / GUARDRAILS SIGN 1):   │
@@ -213,7 +213,7 @@ The `AGENTS.md` file (the master instruction file for all AI agents) codifies ha
                ▼
 ┌────────────────────────────────────────────────────────────┐
 │  EXECUTION — Primary Driver (per harness profile;           │
-│  currently Claude Opus 4.8 / Sonnet 5 — see harness-profiles.md) │
+│  currently Claude Opus 5 / Sonnet 5 — see harness-profiles.md) │
 │  → TDD cycle per MEU (FIC → Red → Green → Quality)        │
 │  → Creates handoff artifact with evidence bundle           │
 └──────────────┬─────────────────────────────────────────────┘
@@ -460,7 +460,7 @@ Workflows reference **roles** (orchestrator, coder, tester, reviewer), not speci
 
 | Role | Current Assignment | Could Be |
 |------|-------------------|----------|
-| Planner/Executor (primary driver) | Claude Opus 4.8 / Sonnet 5 per tier | Any model with extended thinking |
+| Planner/Executor (primary driver) | Claude Opus 5 / Sonnet 5 per tier | Any model with extended thinking |
 | Validator/Reviewer (external reviewer) | Codex GPT-5.6-sol (primary); Gemini 3.5 (surface-only); headless `claude -p` (last resort) | Any model with code execution |
 | Researcher | Multiple (Gemini, ChatGPT, Claude) | Any model with web search |
 
@@ -506,7 +506,7 @@ Token efficiency is built into every workflow:
 | `.agent/roles/researcher.md` | Researcher role definition | [View](https://{{REPO_URL}}/blob/main/.agent/roles/researcher.md) |
 | `.agent/skills/git-workflow/SKILL.md` | Agent-safe git operations | [View](https://{{REPO_URL}}/blob/main/.agent/skills/git-workflow/SKILL.md) |
 | `.agent/docs/development-lifecycle.md` | **Operational source of truth** — phase-by-phase *how* | [View](https://{{REPO_URL}}/blob/main/.agent/docs/development-lifecycle.md) |
-| `.agent/docs/model-delegation.md` | Sonnet 5 (mechanical) vs Opus 4.8 (correctness) work-class routing | [View](https://{{REPO_URL}}/blob/main/.agent/docs/model-delegation.md) |
+| `.agent/docs/model-delegation.md` | Sonnet 5 (mechanical) vs Opus 5 (correctness) work-class routing | [View](https://{{REPO_URL}}/blob/main/.agent/docs/model-delegation.md) |
 | `.agent/docs/harness-profiles.md` | Harness capability flags (role, plan_to_exec_gate, injects_auto_approval, tool-name substitution) | [View](https://{{REPO_URL}}/blob/main/.agent/docs/harness-profiles.md) |
 | `.agent/docs/model-routing.md` | Canonical model/CLI routing matrix — which model fills each role | [View](https://{{REPO_URL}}/blob/main/.agent/docs/model-routing.md) |
 | `.agent/workflows/skill-optimize.md` | `/skill-optimize` — evolve instruction docs from reflection evidence | [View](https://{{REPO_URL}}/blob/main/.agent/workflows/skill-optimize.md) |

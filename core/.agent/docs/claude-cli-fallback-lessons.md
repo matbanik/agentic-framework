@@ -159,7 +159,7 @@ When Claude ran all verification but couldn't write the file, the orchestrator w
 | **Working dir** | `-C {{PROJECT_ROOT}}` | Set via shell `Cwd` (no `-C` flag) |
 | **Full access** | `-s danger-full-access` | `--permission-mode bypassPermissions` |
 | **Read-only** | `-s read-only` | `--permission-mode plan` |
-| **Model select** | N/A (uses account default) | `--model claude-opus-4-8` |
+| **Model select** | N/A (uses account default) | `--model claude-opus-5` |
 | **Reasoning** | `-c model_reasoning_effort=xhigh` | `--effort max` |
 | **Output file** | `-o output.md` (final message only) | `--output-format json` (full JSON to stdout) |
 | **Max turns** | N/A (runs until done) | `--max-turns 15` |

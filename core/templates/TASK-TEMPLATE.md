@@ -39,7 +39,7 @@ context_tool_decision:
 > `context_strategy`, **Durable outputs** = `durable_outputs`, and optional
 > **`builder_model`** (10-column tables). Legacy 9-column tables remain valid.
 > Cursor builder pins: `{composer-2.5-fast|cursor-grok-4.5-high-fast}`; Claude:
-> `{opus-4.8|sonnet-5}`; never `auto` / Fable 5 as builder.
+> `{opus-5|sonnet-5}`; never `auto` / Fable 5 as builder.
 
 | # | Task | Owner | Deliverable | Validation | Depends on | Context strategy | Durable outputs | builder_model | Status |
 |---|---|---|---|---|---|---|---|---|---|

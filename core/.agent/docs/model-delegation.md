@@ -3,9 +3,9 @@
 > **Canonical routing matrix:** [`.agent/docs/model-routing.md`](model-routing.md) is the source of truth for the full routed stack (3 model tiers — Coordinator / Builder / Router — plus an external reviewer and two execution modes) and the independent-reviewer chain. **This file is the detailed work-class taxonomy *within* the Coordinator and Builder tiers** — which specific tasks are "mechanical" (delegate) vs "correctness" (keep).
 >
 > **Harness-conditional coordinator defaults (Q1–Q2, 2026-07-22):** on **Cursor**, the
-> coordinator is **`cursor-grok-4.5-high-fast`** (full replace of Opus 4.8 for Cursor
-> coordinator work); on **Claude Code**, the coordinator remains **Opus 4.8**. Builder pins:
-> Cursor `{composer-2.5-fast|cursor-grok-4.5-high-fast}`; Claude Code `{opus-4.8|sonnet-5}`.
+> coordinator is **`cursor-grok-4.5-high-fast`** (full replace of Opus 5 for Cursor
+> coordinator work); on **Claude Code**, the coordinator remains **Opus 5**. Builder pins:
+> Cursor `{composer-2.5-fast|cursor-grok-4.5-high-fast}`; Claude Code `{opus-5|sonnet-5}`.
 > Never `auto` / Fable 5 as builder.
 >
 > **Source:** `Local Canon + Human-approved` (2026-06-13 `instruction-set-optimization`, decision D5; Q1–Q8 2026-07-22). Evidence: `docs/execution/plans/2026-06-13-instruction-set-optimization/audit-findings.md` §6. Effort guidance: `.agent/skills/cli-dispatch/SKILL.md` §Reviewer Effort Policy.
@@ -27,7 +27,7 @@ the right depth for well-specified mechanical work (higher effort invites overth
 
 ## Keep on the coordinator (high/xhigh) — the correctness class
 
-Coordinator = Cursor `cursor-grok-4.5-high-fast` or Claude Code Opus 4.8 (see above).
+Coordinator = Cursor `cursor-grok-4.5-high-fast` or Claude Code Opus 5 (see above).
 
 - Planning + FIC authoring + spec-sufficiency.
 - Domain / service correctness MEUs (broker adapters, dedup, identifier resolver, import routes, UoW lifecycle) — anything with real correctness or security risk.

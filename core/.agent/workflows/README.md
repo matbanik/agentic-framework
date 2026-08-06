@@ -8,7 +8,7 @@
 | Slash Command | Workflow File | Executor |
 |---|---|---|
 | `/create-plan` | `.agent/workflows/create-plan.md` | current_agent (auto-dispatches `/plan-critical-review` at Step 5 **and** `/execution-critical-review` at Step 6/§6a — a standalone run owns its own execution review) |
-| `/delegated-plan-creation` | `.agent/workflows/delegated-plan-creation.md` | **claude_cli** (Fable 5 / Opus 4.8 — Fable 5 for very-large single-shot architecture tasks, Opus 4.8 (coordinator tier) otherwise; Sonnet 5 (builder tier) handles delegated bulk work — see `.agent/docs/model-routing.md`) for plan Steps 1-4; **orchestrator** handles the `external_reviewer` review loop (Step 5). Use when planning benefits from deeper reasoning or to preserve orchestrator context. |
+| `/delegated-plan-creation` | `.agent/workflows/delegated-plan-creation.md` | **claude_cli** (Fable 5 / Opus 5 — Fable 5 for very-large single-shot architecture tasks, Opus 5 (coordinator tier) otherwise; Sonnet 5 (builder tier) handles delegated bulk work — see `.agent/docs/model-routing.md`) for plan Steps 1-4; **orchestrator** handles the `external_reviewer` review loop (Step 5). Use when planning benefits from deeper reasoning or to preserve orchestrator context. |
 | `/execution-session` | `.agent/workflows/execution-session.md` | current_agent (auto-dispatches `/execution-critical-review` at Step 4c) |
 | `/orchestrated-delivery` | `.agent/workflows/orchestrated-delivery.md` | current_agent |
 | `/pre-build-research` | `.agent/workflows/pre-build-research.md` | current_agent |

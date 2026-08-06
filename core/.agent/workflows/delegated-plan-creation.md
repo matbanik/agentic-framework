@@ -1,10 +1,10 @@
 ---
-description: Delegate /create-plan Steps 1-4 to Claude Code CLI (Opus 4.8 or Fable 5) for plan generation, then run the Codex review/correction loop from the in-harness orchestrator (Cursor default `cursor-grok-4.5-high-fast`; Claude Code Opus 4.8). Use when the planning task benefits from Fable 5's deeper reasoning on the Claude CLI planner, or when the orchestrator wants to reserve context for execution.
+description: Delegate /create-plan Steps 1-4 to Claude Code CLI (Opus 5 or Fable 5) for plan generation, then run the Codex review/correction loop from the in-harness orchestrator (Cursor default `cursor-grok-4.5-high-fast`; Claude Code Opus 5). Use when the planning task benefits from Fable 5's deeper reasoning on the Claude CLI planner, or when the orchestrator wants to reserve context for execution.
 ---
 
 # Delegated Plan Creation Workflow
 
-Delegate plan generation (Steps 1-4 of `/create-plan`) to Claude Code CLI using Opus 4.8 or Fable 5, then handle the Codex plan-critical-review correction loop from the in-harness orchestrator. Cursor orchestrator default is `cursor-grok-4.5-high-fast` (not Fable 5); Claude Code orchestrator default remains Opus 4.8. Fable 5 applies only to the *Claude CLI planner* spawn for complex plans. This separates expensive planning from mechanical review corrections.
+Delegate plan generation (Steps 1-4 of `/create-plan`) to Claude Code CLI using Opus 5 or Fable 5, then handle the Codex plan-critical-review correction loop from the in-harness orchestrator. Cursor orchestrator default is `cursor-grok-4.5-high-fast` (not Fable 5); Claude Code orchestrator default remains Opus 5. Fable 5 applies only to the *Claude CLI planner* spawn for complex plans. This separates expensive planning from mechanical review corrections.
 
 ## When to Use
 
@@ -22,12 +22,12 @@ Delegate plan generation (Steps 1-4 of `/create-plan`) to Claude Code CLI using 
 ## Architecture
 
 ```
-Phase 1: Claude CLI (Fable 5 / Opus 4.8) — Planning
+Phase 1: Claude CLI (Fable 5 / Opus 5) — Planning
   └── Reads context files, build plan, templates
   └── Generates implementation-plan.md + task.md
   └── STOPS (does NOT dispatch Codex or start execution)
 
-Phase 2: Orchestrator (Cursor `cursor-grok-4.5-high-fast` / Claude Code Opus 4.8; primary driver per `.agent/docs/harness-profiles.md`) — Review Loop
+Phase 2: Orchestrator (Cursor `cursor-grok-4.5-high-fast` / Claude Code Opus 5; primary driver per `.agent/docs/harness-profiles.md`) — Review Loop
   └── Dispatches Codex GPT-5.6 Sol for /plan-critical-review
   └── Reads verdict, applies corrections if needed
   └── Re-dispatches until approved or round cap (3)
@@ -140,7 +140,7 @@ the Codex review loop separately.
 | Model | CLI Flag | Effort | Budget | Use When |
 |-------|----------|--------|--------|----------|
 | **Fable 5** | `--model claude-fable-5` | `--effort high` | `$35` | Complex multi-MEU plans, architecture-heavy, spec gaps |
-| **Opus 4.8** | `--model claude-opus-4-8` | `--effort high` | `$20` | Standard plans, single-MEU, well-specified |
+| **Opus 5** | `--model claude-opus-5` | `--effort high` | `$20` | Standard plans, single-MEU, well-specified |
 
 > [!WARNING]
 > **Fable 5 at `--effort high` burns ~3× Opus-equivalent usage** against subscription quota.
@@ -153,7 +153,7 @@ the Codex review loop separately.
 # Delete stale output
 Remove-Item -Force -ErrorAction SilentlyContinue {{RECEIPTS_DIR}}/dispatch/claude-plan-output.txt
 
-# Dispatch (Fable 5 example — swap model for Opus 4.8)
+# Dispatch (Fable 5 example — swap model for Opus 5)
 Get-Content {{RECEIPTS_DIR}}/dispatch/prompt.txt | claude -p `
   --model claude-fable-5 `
   --effort high `
@@ -167,7 +167,7 @@ Get-Content {{RECEIPTS_DIR}}/dispatch/prompt.txt | claude -p `
 **Parameters:**
 - `--permission-mode bypassPermissions` — planner needs full file access (reads ~10+ files, writes plan files, runs MEU status commands)
 - `--max-turns 80` — generous for Steps 1-4 (empirical: 26 turns for 2-MEU plan)
-- `--max-budget-usd 35` — hard cap (Fable 5); use $20 for Opus 4.8
+- `--max-budget-usd 35` — hard cap (Fable 5); use $20 for Opus 5
 - Working directory: set via `Cwd` in `run_command` (Claude has no `-C` flag)
 
 ### Background Dispatch
@@ -287,7 +287,7 @@ Present to the user:
 ```
 Plan approved by Codex GPT-5.6 Sol in {N} rounds.
 
-Planner: {Fable 5 | Opus 4.8} @ {effort} — {turns} turns
+Planner: {Fable 5 | Opus 5} @ {effort} — {turns} turns
 Review: {N} rounds (R1: {findings}, R2: {findings}, ...)
 
 Plan files:
@@ -319,7 +319,7 @@ Per the canonical gate rule (`.agent/docs/harness-profiles.md`, `GUARDRAILS.md` 
 
 | Aspect | Standard `/create-plan` | Delegated Plan Creation |
 |--------|------------------------|------------------------|
-| Planner | Current agent (Cursor `cursor-grok-4.5-high-fast` / Claude Code Opus 4.8) | Claude CLI (Fable 5 / Opus 4.8) |
+| Planner | Current agent (Cursor `cursor-grok-4.5-high-fast` / Claude Code Opus 5) | Claude CLI (Fable 5 / Opus 5) |
 | Review dispatch | Planner dispatches Codex | **Orchestrator** dispatches Codex |
 | Corrections | Planner applies + re-dispatches | **Orchestrator** applies + re-dispatches |
 | Context cost | Uses orchestrator context window | Preserves orchestrator context |
@@ -331,8 +331,8 @@ Per the canonical gate rule (`.agent/docs/harness-profiles.md`, `GUARDRAILS.md` 
 ## Hard Rules
 
 1. **The planner NEVER dispatches Codex.** This avoids 3-level subprocess chains and saves planner budget.
-2. **The orchestrator applies all corrections.** Corrections are mechanical (file edits) and don't need Fable 5/Opus 4.8 reasoning.
+2. **The orchestrator applies all corrections.** Corrections are mechanical (file edits) and don't need Fable 5/Opus 5 reasoning.
 3. **Codex R1 uses `high` effort; R2+ uses `medium`.** First review is substantive; follow-ups verify mechanical fixes.
-4. **Budget the planner generously** — $35 for Fable 5, $20 for Opus 4.8. Under-budgeting causes the planner to stop mid-plan.
+4. **Budget the planner generously** — $35 for Fable 5, $20 for Opus 5. Under-budgeting causes the planner to stop mid-plan.
 5. **Always use stdin pipe** for the planning prompt (`Get-Content prompt.txt | claude -p ...`).
 6. **Check CLI versions before first dispatch** in the session.

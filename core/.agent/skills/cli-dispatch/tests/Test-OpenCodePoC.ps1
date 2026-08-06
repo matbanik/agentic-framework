@@ -5,7 +5,7 @@
 .DESCRIPTION
   Validates whether OpenCode CLI can replace or supplement Codex/Claude CLIs
   for dispatching tasks via Amazon Bedrock. Tests two models:
-    - Claude Opus 4.8 via Bedrock (anthropic.claude-opus-4-8)
+    - Claude Opus 5 via Bedrock (anthropic.claude-opus-5)
     - GPT-5.5 via Bedrock (openai.gpt-5.5 - GA on Bedrock since June 1, 2026)
 
 .NOTES
@@ -40,8 +40,8 @@ $script:SkipCount = 0
 $script:Results = @()
 
 # --- Configuration ---
-$script:BedrockClaudeModel = "amazon-bedrock/anthropic.claude-opus-4-8"
-$script:BedrockClaudeModelAlt = "amazon-bedrock/us.anthropic.claude-opus-4-8"
+$script:BedrockClaudeModel = "amazon-bedrock/anthropic.claude-opus-5"
+$script:BedrockClaudeModelAlt = "amazon-bedrock/us.anthropic.claude-opus-5"
 $script:BedrockGPTModel = "amazon-bedrock/openai.gpt-5.5"
 $script:TestTimeout = 120
 
@@ -206,10 +206,10 @@ function Test-OpenCodeHello {
     }
 }
 
-# --- Test 3: Bedrock Claude Opus 4.8 ---
+# --- Test 3: Bedrock Claude Opus 5 ---
 
 function Test-OpenCodeBedrockClaude {
-    Write-TestHeader -Name "OpenCode CLI - Bedrock Claude Opus 4.8"
+    Write-TestHeader -Name "OpenCode CLI - Bedrock Claude Opus 5"
     $outputFile = Join-Path $OutputDir "opencode-bedrock-claude-output.txt"
     Clean-File -Path $outputFile
 
@@ -511,7 +511,7 @@ if ($coreTotal -eq 0) {
 } elseif ($corePassed -eq $coreTotal) {
     Write-Host "  VIABLE - OpenCode CLI can serve as a Bedrock dispatch target" -ForegroundColor Green
     Write-Host "    > Add to cli-dispatch SKILL.md as Route 7: OpenCode Bedrock" -ForegroundColor Green
-    Write-Host "    > Supports both Claude Opus 4.8 AND GPT-5.5 via Bedrock" -ForegroundColor Green
+    Write-Host "    > Supports both Claude Opus 5 AND GPT-5.5 via Bedrock" -ForegroundColor Green
 } elseif ($corePassed -ge 2) {
     Write-Host "  PARTIAL - Some core tests failed, investigate before integration" -ForegroundColor Yellow
     $failed = $coreTests | Where-Object { $_.Status -eq "FAIL" }

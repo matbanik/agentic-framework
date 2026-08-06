@@ -580,7 +580,7 @@ flowchart LR
 |------|---------|
 | [`AGENTS.md`](https://{{REPO_URL}}/blob/main/AGENTS.md) | Master agent instructions |
 | [`.agent/docs/emerging-standards.md`](https://{{REPO_URL}}/blob/main/.agent/docs/emerging-standards.md) | Evolving code standards |
-| [`.agent/docs/model-delegation.md`](model-delegation.md) | Mechanical (Sonnet 5) vs correctness (Opus 4.8) work-class routing — see `.agent/docs/model-routing.md` for the current canonical routing matrix |
+| [`.agent/docs/model-delegation.md`](model-delegation.md) | Mechanical (Sonnet 5) vs correctness (Opus 5) work-class routing — see `.agent/docs/model-routing.md` for the current canonical routing matrix |
 | [`.agent/roles/`](https://{{REPO_URL}}/blob/main/.agent/roles) | Role specifications (orchestrator, coder, tester, reviewer, researcher, guardrail) |
 | [`.agent/schemas/`](https://{{REPO_URL}}/blob/main/.agent/schemas) | JSON schemas for structured outputs |
 
@@ -778,9 +778,9 @@ A 2-week audit (21 reflections, 31 reviews, 18 measured sessions) found **116 pa
 | Class | Model + Effort | Examples |
 |-------|----------------|----------|
 | **Mechanical** (delegate to **Sonnet 5** — builder tier, low/medium effort — cheaper, and effort research shows higher effort *over*thinks well-specified work) | `mechanical-edit` subagent with the builder-tier model (`.agent/docs/model-routing.md`) | GUI style migrations, count/token reconciliation, doc-only status sweeps, test-fixture construction, closeout-artifact drafting from template, the pre-review mechanical self-check pass |
-| **Correctness** (keep on **Opus 4.8** — coordinator tier, high/xhigh effort) | Opus 4.8 main loop + frontier reviewer | Planning + FIC + spec-sufficiency, domain/service correctness MEUs (broker adapters, dedup, identifier resolver, import routes, UoW lifecycle), implementor self-verification, the adversarial reviewer |
+| **Correctness** (keep on **Opus 5** — coordinator tier, high/xhigh effort) | Opus 5 main loop + frontier reviewer | Planning + FIC + spec-sufficiency, domain/service correctness MEUs (broker adapters, dedup, identifier resolver, import routes, UoW lifecycle), implementor self-verification, the adversarial reviewer |
 
-The Opus 4.8 main loop stays the orchestrator; frontier model + frontier effort is reserved for the correctness class and the adversarial reviewer. Policy: [`model-delegation.md`](model-delegation.md), superseded for current model names by [`model-routing.md`](model-routing.md).
+The Opus 5 main loop stays the orchestrator; frontier model + frontier effort is reserved for the correctness class and the adversarial reviewer. Policy: [`model-delegation.md`](model-delegation.md), superseded for current model names by [`model-routing.md`](model-routing.md).
 
 #### Beat 2 — Multi-Model Execution Parity (`2026-06-16`, MEU-243 review — historical: the review below refers to the builder-tier model as it was named at the time, Sonnet 4.6; the tier is now filled by Sonnet 5)
 

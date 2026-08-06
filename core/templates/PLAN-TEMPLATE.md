@@ -65,7 +65,7 @@ grants permission to spawn a worker.
 
 Task tables in `task.md` may include an optional **`builder_model`** column (10-col
 schema). Cursor pins: `{composer-2.5-fast|cursor-grok-4.5-high-fast}`; Claude:
-`{opus-4.8|sonnet-5}`; never `auto` / Fable 5 as builder. Legacy 9-column tables remain
+`{opus-5|sonnet-5}`; never `auto` / Fable 5 as builder. Legacy 9-column tables remain
 valid.
 
 ---

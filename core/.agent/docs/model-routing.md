@@ -21,7 +21,7 @@ that describe *how* work runs rather than a distinct model tier.
 
 **`role` (from [harness-profiles.md](harness-profiles.md)) → tier mapping:**
 `primary-driver` → Coordinator (**harness-conditional:** Cursor default
-`cursor-grok-4.5-high-fast`; Claude Code **Opus 4.8**) + Builder (**harness-conditional:**
+`cursor-grok-4.5-high-fast`; Claude Code **Opus 5**) + Builder (**harness-conditional:**
 Cursor `{composer-2.5-fast|cursor-grok-4.5-high-fast}`; Claude Code **Sonnet 5**,
 delegated); `reviewer` → external reviewer; `surface-orchestrator` → surface-orchestration
 mode (Gemini 3.5); `isolated-worker` → isolated-worker mode (`claude -p`); `host` → no
@@ -30,7 +30,7 @@ delegation target the Coordinator spawns, not a harness role.
 
 | Tier | Task class | Executor | Why |
 |---|---|---|---|
-| **Coordinator** | Orchestration, planning, architecture, synthesis, governance-doc edits, correctness-critical reasoning, troubleshooting, deep-infra | **Harness-conditional:** Cursor default **`cursor-grok-4.5-high-fast`**; Claude Code **Opus 4.8** (primary-driver session, high/xhigh effort) | Holds the dependency graph; makes the judgment calls |
+| **Coordinator** | Orchestration, planning, architecture, synthesis, governance-doc edits, correctness-critical reasoning, troubleshooting, deep-infra | **Harness-conditional:** Cursor default **`cursor-grok-4.5-high-fast`**; Claude Code **Opus 5** (primary-driver session, high/xhigh effort) | Holds the dependency graph; makes the judgment calls |
 | **Builder** | Bulk implementation, mechanical edits, test scaffolding, file/log audits, doc sweeps, CI-log reading | **Harness-conditional:** Cursor `{composer-2.5-fast\|cursor-grok-4.5-high-fast}`; Claude Code **Sonnet 5** subagent (low/medium effort) | Near-coordinator quality on the majority of coding; cheaper bulk path on Claude Code |
 | **Router** | High-volume classification, triage, grep-collation, inventory, routing decisions | **Haiku 4.5** subagent | Cheapest/fastest — *not* for real logic or multi-file reasoning |
 | **Reviewer** (independent) | Adversarial plan & code review | **External CLI** — see the review chain below | Cross-vendor diversity catches failure modes the author's model shares; also offloads tokens off the Claude budget |
@@ -38,7 +38,7 @@ delegation target the Coordinator spawns, not a harness role.
 | **Isolated worker** | Large parallel/independent workstreams, overnight bursts, isolated-context tasks | **`claude -p` headless**, one per git worktree | Each spawn is an isolated main agent (full Task tool, fresh depth budget, no shared context); worktrees prevent file conflicts |
 
 **Canonical models (2026-07):** Cursor coordinator/builder pins
-`cursor-grok-4.5-high-fast` / `composer-2.5-fast`; Claude Code Opus 4.8 / Sonnet 5 /
+`cursor-grok-4.5-high-fast` / `composer-2.5-fast`; Claude Code Opus 5 / Sonnet 5 /
 Haiku 4.5; GPT-5.6-sol (Codex, **validator/reviewer default**); Gemini 3.5 fast (high).
 Fable 5 is reserved for very-large single-shot architecture tasks — never a Cursor
 orchestrator default and never a `builder_model` pin. These supersede every earlier
@@ -73,7 +73,7 @@ If none of 1–3 is reachable, follow the rate-limit HARD STOP in
 ## Delegation & nesting rules
 
 - **Delegate down, not up.** The harness-conditional coordinator (Cursor
-  `cursor-grok-4.5-high-fast` / Claude Code Opus 4.8) dispatches builder/router
+  `cursor-grok-4.5-high-fast` / Claude Code Opus 5) dispatches builder/router
   subagents and the external reviewer; a builder subagent does not promote itself to
   coordinator. For the detailed "which tasks are mechanical (delegate) vs correctness
   (keep on coordinator)" taxonomy, see [`.agent/docs/model-delegation.md`](model-delegation.md).
@@ -95,7 +95,7 @@ If none of 1–3 is reachable, follow the rate-limit HARD STOP in
 
 | If the task is… | Route to… |
 |---|---|
-| Deciding *what* to build / how to architect it | Coordinator (Cursor `cursor-grok-4.5-high-fast` / Claude Code Opus 4.8) |
+| Deciding *what* to build / how to architect it | Coordinator (Cursor `cursor-grok-4.5-high-fast` / Claude Code Opus 5) |
 | Troubleshooting, race conditions, deep-infra, correctness-critical | Coordinator (same harness defaults) — never Gemini |
 | Writing lots of straightforward code / tests to a clear spec | Builder (`composer-2.5-fast` or `cursor-grok-4.5-high-fast` on Cursor; Sonnet 5 on Claude Code) |
 | Reading logs, auditing many files, mechanical find-replace across a repo | Builder (same pins as above) |
@@ -121,5 +121,5 @@ The orchestrator evaluates routing signals, walks this table top-to-bottom, and 
 | **9** | `task == exec_review AND contract_surfaces == 0 AND loc < 300 AND scope != cross-pkg` | GPT-5.6 Sol | **medium** | $0.80-1.50 |
 | **10** | `task == exec_review AND (contract_surfaces >= 1 OR loc >= 300 OR scope == cross-pkg)` | GPT-5.6 Sol | **high** | $2-4 |
 | **11** | `task == creative` | Opus 4.5 | **medium** | $1-3 |
-| **12** | `task == decision AND risk == high` | Opus 4.8 | **max** | $3-10 |
+| **12** | `task == decision AND risk == high` | Opus 5 | **max** | $3-10 |
 | **0** | *(default — catch-all / no other row matches)* | GPT-5.6 Sol | **high** | $2-4 |

@@ -265,7 +265,7 @@ When Codex CLI is rate-limited or unavailable:
 | Primary | Task Type | Substitute | Quality Trade-off |
 |---------|-----------|------------|-------------------|
 | Codex GPT-5.6 Sol | Validation review (surface-level) | **agy / Gemini** (surface only) or Gemini web | **First fallback for surface work.** Cross-vendor; NOT for deep-infra/troubleshooting reviews. |
-| Codex GPT-5.6 Sol | Validation review (deep/infra) | **Claude CLI (Opus 4.8)** | Last resort. Run with `--effort high`. Same-vendor risk if coordinator is Claude. |
+| Codex GPT-5.6 Sol | Validation review (deep/infra) | **Claude CLI (Opus 5)** | Last resort. Run with `--effort high`. Same-vendor risk if coordinator is Claude. |
 | Codex GPT-5.6 Sol | Validation review | GPT-5.6 Sol (web, manual) | Same model family; no file access, requires manual copy-paste of results. |
 
 

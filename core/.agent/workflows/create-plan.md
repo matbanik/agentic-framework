@@ -185,9 +185,9 @@ The plan must include:
   output and action. Use `isolated` only when the resolved harness exposes an authorized
   fresh worker; otherwise emit `compact_continue`.
 - **Model assessment (harness-conditional):** orchestrator default is Cursor
-  `cursor-grok-4.5-high-fast` or Claude Code Opus 4.8. Prefer the optional 10-column
+  `cursor-grok-4.5-high-fast` or Claude Code Opus 5. Prefer the optional 10-column
   `builder_model` column with Cursor pins `{composer-2.5-fast|cursor-grok-4.5-high-fast}`
-  and Claude pins `{opus-4.8|sonnet-5}`; never `auto` / Fable 5 as builder. For every
+  and Claude pins `{opus-5|sonnet-5}`; never `auto` / Fable 5 as builder. For every
   non-`shared` row, evaluate isolation benefit (authorized fresh-worker vs
   `compact_continue`) before emitting `isolated`.
 - A spec-sufficiency section per MEU with source-backed resolutions for any under-specified behavior
@@ -288,7 +288,7 @@ Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/plan-critical-review`
 **Reviewer Agent Priority** (canonical chain defined once in [`.agent/docs/model-routing.md`](../docs/model-routing.md) §Independent-reviewer chain):
 1. **Codex CLI (GPT-5.6-sol)** — Primary (`-c model_reasoning_effort=medium` for routine Round 1; `high` for plans touching risk paths / contract surfaces — see `cli-dispatch/SKILL.md` §Reviewer Effort Policy)
 2. **Gemini 3.5** — Secondary, **surface-level plans only** (never deep-infra/troubleshooting reviews)
-3. **headless `claude -p` (Opus 4.8, different context)** — Last-resort fallback when Codex is rate-limited **and** the plan is too deep for Gemini (`--effort high --permission-mode bypassPermissions`; flag as same-vendor review; `max` only for explicitly-tagged deep sub-reviews)
+3. **headless `claude -p` (Opus 5, different context)** — Last-resort fallback when Codex is rate-limited **and** the plan is too deep for Gemini (`--effort high --permission-mode bypassPermissions`; flag as same-vendor review; `max` only for explicitly-tagged deep sub-reviews)
 
 **Prompt template for dispatch:**
 ```

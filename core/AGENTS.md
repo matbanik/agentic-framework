@@ -306,7 +306,7 @@ All handoff artifacts, review artifacts, and evidence bundles must follow the co
 
 | Aspect | Decision |
 |---|---|
-| **Implementor model** | **Harness-conditional coordinator:** on **Cursor**, default **`cursor-grok-4.5-high-fast`** (full replace of Opus 4.8 for all Cursor coordinator work) with builder pins `{composer-2.5-fast \| cursor-grok-4.5-high-fast}`; on **Claude Code**, default **Claude Opus 4.8** (coordinator/reasoning) + **Sonnet 5** (builder/bulk, delegated). Primary executor for PLANNING and EXECUTION; performs implementor self-verification and pre-handoff checks in VERIFICATION mode. Full tier map: [`.agent/docs/model-routing.md`](.agent/docs/model-routing.md) |
+| **Implementor model** | **Harness-conditional coordinator:** on **Cursor**, default **`cursor-grok-4.5-high-fast`** (full replace of Opus 5 for all Cursor coordinator work) with builder pins `{composer-2.5-fast \| cursor-grok-4.5-high-fast}`; on **Claude Code**, default **Claude Opus 5** (coordinator/reasoning) + **Sonnet 5** (builder/bulk, delegated). Primary executor for PLANNING and EXECUTION; performs implementor self-verification and pre-handoff checks in VERIFICATION mode. Full tier map: [`.agent/docs/model-routing.md`](.agent/docs/model-routing.md) |
 | **Reviewer model** | **GPT-5.6-sol (Codex)** — default independent reviewer in VERIFICATION mode; `high` effort for security-sensitive/risk-path changes. Independent-reviewer fallback chain (Codex → Gemini surface-only → headless `claude -p`) is defined once in [`.agent/docs/model-routing.md`](.agent/docs/model-routing.md) — do not restate it here. |
 | **Reviewer capability** | Run commands, execute tests, check builds, create handoff docs with test improvements |
 | **Validation priority** | 1. Contract tests pass/fail → 2. Security posture → 3. Adversarial edge cases → 4. Code style consistency → 5. Documentation accuracy |
@@ -315,7 +315,7 @@ All handoff artifacts, review artifacts, and evidence bundles must follow the co
 
 ### Cross-Vendor Handoff Protocol
 
-When handing off from implementor (Opus 4.8 / Sonnet 5) to reviewer (Codex GPT-5.6-sol), the handoff payload must include:
+When handing off from implementor (Opus 5 / Sonnet 5) to reviewer (Codex GPT-5.6-sol), the handoff payload must include:
 1. **Changed files** — list of absolute paths with line-level diff summaries
 2. **FIC reference** — the acceptance criteria being validated
 3. **Test results** — compressed output (passing count + any failures)

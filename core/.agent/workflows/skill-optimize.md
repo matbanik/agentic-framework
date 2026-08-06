@@ -74,7 +74,7 @@ learning rate"). Drop any edit suppressed by the rejected-edit **buffer**
 
 Produce the candidate via `propose.produce_candidate` (applies edits to a COPY).
 Dispatch the **judge** — **GPT-5.6 Sol @ high**, a DIFFERENT model family than the
-optimizer (Claude Opus 4.8 fallback only if it does NOT collide with the optimizer
+optimizer (Claude Opus 5 fallback only if it does NOT collide with the optimizer
 family; else `block_for_human`). Score **candidate-vs-baseline pairwise, both orders**,
 over the **val** set, then the untouched **test** slice, via `gate.run_gate`:
 - **accept** iff candidate wins val by the ε margin AND does not regress test;

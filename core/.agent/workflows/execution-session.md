@@ -174,7 +174,7 @@ Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/execution-critical-re
 **Reviewer Agent Priority** (canonical chain in [`.agent/docs/model-routing.md`](../docs/model-routing.md) §Independent-reviewer chain):
 1. **Codex CLI (GPT-5.6-sol)** — Primary (`-c model_reasoning_effort=medium` routine; `high` for risk paths / contract surfaces / concurrency / security — see `cli-dispatch/SKILL.md` §Reviewer Effort Policy)
 2. **Gemini 3.5** — Secondary, **surface-level reviews only** (never deep-infra/troubleshooting)
-3. **headless `claude -p` (Opus 4.8, fresh isolated context)** — Last resort when Codex rate-limited AND the change is too deep for Gemini (`--effort high --permission-mode bypassPermissions`; flag verdict as same-vendor; `max` only for tagged deep sub-reviews)
+3. **headless `claude -p` (Opus 5, fresh isolated context)** — Last resort when Codex rate-limited AND the change is too deep for Gemini (`--effort high --permission-mode bypassPermissions`; flag verdict as same-vendor; `max` only for tagged deep sub-reviews)
 4. **All rungs rate-limited/unavailable** — HARD STOP (never self-review)
 
 **Correction Loop:**
