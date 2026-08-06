@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "meu-status.schema.json",
+  "title": "MEU Status SSOT",
+  "description": "Single source of truth for all MEU completion status data. Drives computed counts, generated Markdown regions, and query/retrieve operations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "phases", "meus", "summary_bands", "narrative_sections"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version — always 1 for this iteration"
+    },
+    "phases": {
+      "type": "array",
+      "description": "Ordered phase metadata — drives grouping, source links, and Phase Status Tracker",
+      "items": {
+        "$ref": "#/$defs/Phase"
+      }
+    },
+    "meus": {
+      "type": "array",
+      "description": "The per-MEU records — the primary data",
+      "items": {
+        "$ref": "#/$defs/MEU"
+      }
+    },
+    "summary_bands": {
+      "type": "array",
+      "description": "Summary table band ordering + display strings (range text is non-derivable for split ranges)",
+      "items": {
+        "$ref": "#/$defs/SummaryBand"
+      }
+    },
+    "narrative_sections": {
+      "type": "array",
+      "description": "Opaque catch-all for free-form prose blocks preserved verbatim outside generated regions",
+      "items": {
+        "$ref": "#/$defs/NarrativeSection"
+      }
+    }
+  },
+  "$defs": {
+    "Phase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "band", "sources", "execution_plans", "last_updated", "note"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Phase key as used in headers (1, 1A, 3E, 8b, P2.75)"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable phase name"
+        },
+        "band": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Priority band label (P0, P1, P2, P2.5, etc.)"
+        },
+        "sources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The > Source: doc links (lossless)"
+        },
+        "execution_plans": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Plan-folder links shown in BUILD_PLAN registry"
+        },
+        "last_updated": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Phase Status Tracker Last Updated date (YYYY-MM-DD)"
+        },
+        "note": {
+          "type": ["string", "null"],
+          "description": "Freeform phase status annotation (preserved verbatim)"
+        }
+      }
+    },
+    "MEU": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row_key", "id", "slug", "phase", "band", "matrix_item",
+        "build_ref", "description", "status", "status_labels",
+        "surface_overrides", "dependencies_raw", "dependency_parse_status",
+        "depends_on", "execution_plan", "updated", "closed_reason", "note"
+      ],
+      "properties": {
+        "row_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UNIQUE key — id, or id+suffix for legacy duplicates"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "MEU identifier (may repeat for legacy duplicates)"
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable slug (kebab-case)"
+        },
+        "phase": {
+          "type": "string",
+          "minLength": 1,
+          "description": "FK → phases[].id"
+        },
+        "band": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Summary grouping key (kept explicit; bands can span/split phases)"
+        },
+        "matrix_item": {
+          "type": "string",
+          "description": "build-priority-matrix Order ref (1, 3a, 5.A)"
+        },
+        "build_ref": {
+          "oneOf": [
+            { "$ref": "#/$defs/BuildRef" },
+            { "type": "null" }
+          ],
+          "description": "Lossless link reconstruction for BUILD_PLAN registry"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "MEU description text"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "deferred", "in_progress", "ready_for_review", "changes_required", "approved", "closed"],
+          "description": "Canonical status enum — used for computed counts"
+        },
+        "status_labels": {
+          "$ref": "#/$defs/StatusLabels",
+          "description": "Lossless per-surface display text"
+        },
+        "surface_overrides": {
+          "oneOf": [
+            { "$ref": "#/$defs/SurfaceOverrides" },
+            { "type": "null" }
+          ],
+          "description": "Only when a surface renders a different description/matrix for the same MEU"
+        },
+        "dependencies_raw": {
+          "type": "string",
+          "description": "Verbatim dependency prose from build-priority-matrix"
+        },
+        "dependency_parse_status": {
+          "type": "string",
+          "enum": ["parsed", "ambiguous", "none"],
+          "description": "parsed = deps extracted; ambiguous = treated as NOT unblocked; none = no deps"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Explicit parsed dependency row_keys (only when dependency_parse_status == parsed)"
+        },
+        "execution_plan": {
+          "type": ["string", "null"],
+          "description": "Optional per-MEU plan folder name"
+        },
+        "updated": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Last status change date (YYYY-MM-DD)"
+        },
+        "closed_reason": {
+          "type": ["string", "null"],
+          "description": "REQUIRED when status == closed (ADR ref / human decision)"
+        },
+        "note": {
+          "type": ["string", "null"],
+          "description": "Freeform per-MEU prose"
+        }
+      },
+      "if": {
+        "properties": { "status": { "const": "closed" } }
+      },
+      "then": {
+        "properties": {
+          "closed_reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "BuildRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "anchor", "text"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relative path to build-plan spec file"
+        },
+        "anchor": {
+          "type": ["string", "null"],
+          "description": "Optional section anchor"
+        },
+        "text": {
+          "type": ["string", "null"],
+          "description": "Link display text"
+        }
+      }
+    },
+    "StatusLabels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "build_plan"],
+      "properties": {
+        "registry": {
+          "type": ["string", "null"],
+          "description": "Display text in meu-registry.md"
+        },
+        "build_plan": {
+          "type": ["string", "null"],
+          "description": "Display text in BUILD_PLAN.md"
+        }
+      }
+    },
+    "SurfaceOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "build_plan": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "description": { "type": ["string", "null"] },
+                "matrix_item": { "type": ["string", "null"] }
+              }
+            },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "SummaryBand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label", "range"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Band grouping key (P0, P1, P2.5, etc.)"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Display label for summary table"
+        },
+        "range": {
+          "type": "string",
+          "minLength": 1,
+          "description": "MEU range text (non-derivable for split ranges)"
+        }
+      }
+    },
+    "NarrativeSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor", "title", "body"],
+      "properties": {
+        "anchor": {
+          "type": "string",
+          "minLength": 1,
+          "description": "URL-safe anchor ID"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Section heading text"
+        },
+        "body": {
+          "type": "string",
+          "description": "Section content (preserved verbatim)"
+        }
+      }
+    }
+  }
+}

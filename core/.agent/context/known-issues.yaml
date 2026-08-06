@@ -1,0 +1,4 @@
+# Known-issues SSOT — start empty; agents/humans add via tools/issue_triage.py
+# Schema fields: see tools/issue_triage/model.py and .agent/docs/issue-lifecycle-guide.md
+version: 1
+issues: []

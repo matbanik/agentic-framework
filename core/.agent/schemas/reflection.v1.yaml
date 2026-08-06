@@ -1,0 +1,198 @@
+# Reflection Schema v1 — Instruction Coverage
+# Source: synthesis §4 (cross-model research synthesis)
+# Format: YAML in fenced code block (synthesis §2 — 7.3pt reasoning advantage over JSON)
+
+# This schema defines the structure agents must emit at session end.
+# Field semantics follow the synthesis §4 best-of-breed schema.
+#
+# 2026-07-21: token tracking and model recording retired. Session-level token
+# counts (tokens_in/tokens_out/turns), environment, implementor_model, and the
+# per-model dispatch_log were Antigravity-era telemetry that no longer functions
+# under the Cursor / Claude Code / multi-CLI harness mix. Legacy reflections
+# retaining those fields still parse (extra fields are ignored); new reflections
+# must not emit them. Finding categories and verdict counts moved to review_churn.
+
+schema: v1
+
+fields:
+  session:
+    description: "Session metadata"
+    required: true
+    properties:
+      id:
+        type: string
+        description: "Unique session identifier (UUID or conversation ID)"
+      task_class:
+        type: string
+        enum: [tdd, review, debug, refactor, security, planning, research, other]
+        description: "Primary task classification for this session"
+      outcome:
+        type: string
+        enum: [success, partial, failed]
+        description: "Overall session outcome"
+
+  sections:
+    description: "Per-section usage data. One entry per AGENTS.md H2 section consulted."
+    type: array
+    items:
+      properties:
+        id:
+          type: string
+          description: "Must match a section_id from registry.yaml"
+        cited:
+          type: boolean
+          description: "True only if the agent actually consulted this section's text to make a decision"
+        influence:
+          type: integer
+          enum: [0, 1, 2, 3]
+          description: |
+            0 = ignored (did not consider)
+            1 = read-only (read but did not change output)
+            2 = shaped-output (influenced phrasing or structure)
+            3 = decisive (determined a yes/no decision)
+
+  loaded:
+    description: "Files dynamically loaded during the session"
+    required: true
+    properties:
+      workflows:
+        type: array
+        items: { type: string }
+        description: "Workflow file_ids from registry.yaml that were loaded"
+      roles:
+        type: array
+        items: { type: string }
+        description: "Role file_ids from registry.yaml that were adopted"
+      skills:
+        type: array
+        items: { type: string }
+        description: "Skill file_ids from registry.yaml that were invoked"
+      refs:
+        type: array
+        items: { type: string }
+        description: "Other reference files consulted"
+
+  decisive_rules:
+    description: "Top rules that determined key decisions. Max 5 entries."
+    type: array
+    max_items: 5
+    items:
+      type: string
+      description: "Format: P{0-3}:{rule-id-or-description}"
+
+  conflicts:
+    description: "Instruction conflicts encountered during the session"
+    type: array
+    items:
+      type: string
+      description: "Brief description of conflicting instructions"
+
+  note:
+    description: "One sentence max. Free-form observation about instruction usage."
+    type: string
+    max_length: 200
+
+  slim_candidate:
+    description: |
+      AC-3.1: ≥1 instruction/section the agent judged over-weight, redundant, or
+      relocatable this session (anti-bloat nudge). OPTIONAL/defaulted — legacy
+      reflections without it still parse (AC-1.6); "≥1 present" is encouraged by
+      the template/lint gate, NEVER schema-required. Each entry: a section_id or
+      short description.
+    required: false
+    type: array
+    items:
+      type: string
+
+  overthinking_observed:
+    description: |
+      AC-3.2: true if the agent over-edited already-correct output or manufactured
+      low-value findings this session. Ties to the metrics `findings_invalidated > 20%`
+      trigger (see docs/execution/metrics.md → Trend Analysis Thresholds). Optional/defaulted.
+    required: false
+    type: boolean
+    default: false
+
+  review_churn:
+    description: "AC-2.2: review-round churn signal. Optional (legacy reflections omit it)."
+    required: false
+    properties:
+      rounds_to_approval:
+        type: object
+        properties:
+          plan: { type: integer, description: "Plan-critical-review rounds to approved" }
+          execution: { type: integer, description: "Execution-critical-review rounds to approved" }
+      findings_per_round:
+        type: array
+        description: "Per-round severity counts, e.g. [{round: 1, critical: 0, high: 1, medium: 2, low: 0}]"
+        items:
+          type: object
+      churned_findings:
+        type: integer
+        description: "Count of findings that recurred across rounds (not resolved on first pass)"
+      finding_categories:
+        type: object
+        required: false
+        description: |
+          Map of finding category to count, e.g. { claim_to_state_drift: 2, weak_test: 1 }.
+          AC-2.1: use the CONTROLLED vocabulary (free text is bucketed to `other` by the
+          aggregator). Canonical categories:
+            claim_to_state_drift, count_reconciliation, weak_test, boundary_validation,
+            stale_reference, fix_generalization_miss, effort_mismatch, source_label_missing,
+            self_review_violation, placeholder_or_deferral, scope_creep, back_compat_break,
+            provenance_error, overthinking, contract_drift, other
+          (Relocated here from the retired dispatch_log block, 2026-07-21.)
+      verdicts:
+        type: object
+        required: false
+        description: "Map of reviewer verdict to count, e.g. { approved: 1, changes_required: 2 }. (Relocated from the retired dispatch_log block.)"
+
+  meu_work_classes:
+    description: "AC-2.3: per-MEU work classification — drives delegation analysis. Optional."
+    required: false
+    type: array
+    items:
+      type: string
+      enum: [mechanical, correctness, mixed]
+
+# Example (typical session):
+#
+# ```yaml
+# schema: v1
+# session:
+#   id: f3808170-c32e-4197-bbb7-baf770c38b7c
+#   task_class: tdd
+#   outcome: success
+# sections:
+#   - id: testing_tdd_protocol
+#     cited: true
+#     influence: 3
+#   - id: execution_contract
+#     cited: true
+#     influence: 2
+#   - id: planning_contract
+#     cited: false
+#     influence: 1
+# loaded:
+#   workflows: [tdd_implementation]
+#   roles: [coder, tester]
+#   skills: [quality_gate]
+#   refs: []
+# decisive_rules:
+#   - "P1:tests-first-implementation-after"
+#   - "P0:never-modify-tests-to-pass"
+#   - "P1:fic-before-code"
+# conflicts: []
+# note: "Planning contract not needed for single-MEU execution."
+# slim_candidate: [dual_agent_workflow]
+# overthinking_observed: false
+# review_churn:
+#   rounds_to_approval: { plan: 1, execution: 2 }
+#   findings_per_round:
+#     - { round: 1, critical: 0, high: 1, medium: 1, low: 0 }
+#     - { round: 2, critical: 0, high: 0, medium: 0, low: 0 }
+#   churned_findings: 0
+#   finding_categories: { contract_drift: 1, weak_test: 1 }
+#   verdicts: { changes_required: 1, approved: 1 }
+# meu_work_classes: [correctness]
+# ```

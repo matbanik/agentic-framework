@@ -1,0 +1,332 @@
+# Instruction Registry — AGENTS.md Section Inventory
+# Generated: 2026-04-25
+# Source: Every H2 heading in AGENTS.md, auto-derived snake_case IDs
+# Priority heuristic (synthesis §6):
+#   P0 = safety/guardrail rules (auto_prune: false)
+#   P1 = quality gates
+#   P2 = workflow/process
+#   P3 = convenience/speed
+# H3 sub-sections inherit priority from their parent H2.
+
+sections:
+  # --- P0: Safety / Guardrail Rules (never auto-prune) ---
+  - section_id: priority_0_system_constraints_non_negotiable
+    heading: "PRIORITY 0 — SYSTEM CONSTRAINTS (Non-Negotiable)"
+    priority: P0
+    safety: true
+    auto_prune: false
+    description: "Terminal redirect rules, priority hierarchy, no-pipe checks"
+
+  - section_id: pre_handoff_self_review_mandatory
+    heading: "Pre-Handoff Self-Review (Mandatory)"
+    priority: P0
+    safety: true
+    auto_prune: false
+    description: "Mandatory self-review protocol before any handoff"
+
+  - section_id: execution_contract
+    heading: "Execution Contract"
+    priority: P0
+    safety: true
+    auto_prune: false
+    description: "Git commit policy, MEU gate, anti-placeholder enforcement"
+
+  - section_id: windows_shell_powershell
+    heading: "Windows Shell (PowerShell)"
+    priority: P0
+    safety: true
+    auto_prune: false
+    description: "Platform-specific safety rules for PowerShell execution"
+
+  # --- P1: Quality Gates ---
+  - section_id: testing_tdd_protocol
+    heading: "Testing & TDD Protocol"
+    priority: P1
+    safety: false
+    auto_prune: false
+    description: "Tests-first workflow, FIC-based TDD, test immutability"
+
+  - section_id: planning_contract
+    heading: "Planning Contract"
+    priority: P1
+    safety: false
+    auto_prune: false
+    description: "Spec sufficiency gate, boundary input contract, plan files location"
+
+  - section_id: testing_requirements
+    heading: "Testing Requirements"
+    priority: P1
+    safety: false
+    auto_prune: false
+    detail_home: ".agent/docs/testing-strategy.md"
+    description: "Test pyramid, fixture conventions, coverage targets (slim stub; detail relocated)"
+
+  - section_id: code_quality
+    heading: "Code Quality"
+    priority: P1
+    safety: false
+    auto_prune: false
+    description: "Linting, type checking, style conventions"
+
+  - section_id: validation_pipeline
+    heading: "Validation Pipeline"
+    priority: P1
+    safety: false
+    auto_prune: false
+    detail_home: ".agent/docs/testing-strategy.md"
+    description: "Multi-stage validation toolchain (slim stub; detail relocated)"
+
+  - section_id: dual_agent_workflow
+    heading: "Dual-Agent Workflow"
+    priority: P1
+    safety: false
+    auto_prune: false
+    description: "Opus/Codex handoff protocol"
+
+  # --- P2: Workflow / Process ---
+  - section_id: quick_commands
+    heading: "Quick Commands"
+    priority: P2
+    safety: false
+    auto_prune: true
+    detail_home: ".agent/docs/commands.md"
+    description: "Common developer command reference (slim stub; detail relocated)"
+
+  - section_id: architecture
+    heading: "Architecture"
+    priority: P2
+    safety: false
+    auto_prune: true
+    detail_home: ".agent/docs/architecture.md"
+    description: "Monorepo layer structure and dependency rules (slim stub; detail relocated)"
+
+  - section_id: project_context
+    heading: "Project Context"
+    priority: P2
+    safety: false
+    auto_prune: true
+    description: "{{PROJECT_NAME_TITLE}} does NOT execute trades clarification"
+
+  - section_id: communication_policy
+    heading: "Communication Policy"
+    priority: P2
+    safety: false
+    auto_prune: true
+    description: "Risk surfacing, literal instruction mode"
+
+  - section_id: session_discipline
+    heading: "Session Discipline"
+    priority: P2
+    safety: false
+    auto_prune: true
+    description: "Session start/end checklist, context file hygiene"
+
+  - section_id: operating_model
+    heading: "Operating Model"
+    priority: P2
+    safety: false
+    auto_prune: true
+    description: "PLANNING/EXECUTION/VERIFICATION modes and role adoption"
+
+  - section_id: roles_workflows
+    heading: "Roles & Workflows"
+    priority: P2
+    safety: false
+    auto_prune: true
+    description: "Six deterministic roles, workflow invocation"
+
+  - section_id: commits
+    heading: "Commits"
+    priority: P2
+    safety: false
+    auto_prune: true
+    description: "Git commit conventions and signing"
+
+  - section_id: artifact_naming_convention
+    heading: "Artifact Naming Convention"
+    priority: P2
+    safety: false
+    auto_prune: true
+    detail_home: ".agent/docs/artifact-naming.md"
+    description: "Date-based handoff/reflection naming + Template-First rule. Absorbs the former handoff_protocol (handoff creation/continuity)."
+
+  # --- P3: Convenience / Speed ---
+  - section_id: skills
+    heading: "Skills"
+    priority: P3
+    safety: false
+    auto_prune: true
+    detail_home: ".agent/docs/commands.md"
+    description: "On-demand skill loading reference (slim stub; detail relocated)"
+
+  - section_id: mcp_servers
+    heading: "MCP Servers"
+    priority: P3
+    safety: false
+    auto_prune: true
+    detail_home: ".agent/docs/commands.md"
+    description: "Available MCP server configuration (slim stub; detail relocated)"
+
+  - section_id: context_docs
+    heading: "Context & Docs"
+    priority: P3
+    safety: false
+    auto_prune: true
+    detail_home: ".agent/docs/commands.md"
+    description: "Context files and documentation pointers (slim stub; detail relocated)"
+
+  - section_id: instruction_coverage_reflection
+    heading: "Instruction Coverage Reflection"
+    priority: P2
+    safety: false
+    auto_prune: false
+    detail_home: ".agent/docs/artifact-naming.md"
+    description: "Meta-prompt for session-end reflection YAML emission (slim stub; detail relocated)"
+
+  - section_id: rtk_token_optimized_commands
+    heading: "RTK (Token-Optimized Commands)"
+    priority: P3
+    safety: false
+    auto_prune: true
+    detail_home: ".agent/docs/commands.md"
+    description: "rtk command prefix for context-token savings (slim stub; detail relocated)"
+
+# --- Workflow / Role / Skill Files ---
+workflows:
+  - file_id: create_plan
+    path: ".agent/workflows/create-plan.md"
+    load_mode: on_demand
+
+  - file_id: execution_session
+    path: ".agent/workflows/execution-session.md"
+    load_mode: on_demand
+
+  - file_id: orchestrated_delivery
+    path: ".agent/workflows/orchestrated-delivery.md"
+    load_mode: on_demand
+
+  - file_id: pre_build_research
+    path: ".agent/workflows/pre-build-research.md"
+    load_mode: on_demand
+
+  - file_id: tdd_implementation
+    path: ".agent/workflows/tdd-implementation.md"
+    load_mode: on_demand
+
+  - file_id: validation_review
+    path: ".agent/workflows/validation-review.md"
+    load_mode: on_demand
+
+  - file_id: plan_critical_review
+    path: ".agent/workflows/plan-critical-review.md"
+    load_mode: on_demand
+
+  - file_id: execution_critical_review
+    path: ".agent/workflows/execution-critical-review.md"
+    load_mode: on_demand
+
+  - file_id: plan_corrections
+    path: ".agent/workflows/plan-corrections.md"
+    load_mode: on_demand
+
+  - file_id: execution_corrections
+    path: ".agent/workflows/execution-corrections.md"
+    load_mode: on_demand
+
+  - file_id: meu_handoff
+    path: ".agent/workflows/meu-handoff.md"
+    load_mode: on_demand
+
+  - file_id: e2e_testing
+    path: ".agent/workflows/e2e-testing.md"
+    load_mode: on_demand
+
+  - file_id: gui_integration_testing
+    path: ".agent/workflows/gui-integration-testing.md"
+    load_mode: on_demand
+
+  - file_id: security_audit
+    path: ".agent/workflows/security-audit.md"
+    load_mode: on_demand
+
+  - file_id: session_meta_review
+    path: ".agent/workflows/session-meta-review.md"
+    load_mode: on_demand
+
+  - file_id: skill_optimize
+    path: ".agent/workflows/skill-optimize.md"
+    load_mode: on_demand
+
+roles:
+  - file_id: orchestrator
+    path: ".agent/roles/orchestrator.md"
+    load_mode: on_demand
+
+  - file_id: coder
+    path: ".agent/roles/coder.md"
+    load_mode: on_demand
+
+  - file_id: tester
+    path: ".agent/roles/tester.md"
+    load_mode: on_demand
+
+  - file_id: reviewer
+    path: ".agent/roles/reviewer.md"
+    load_mode: on_demand
+
+  - file_id: researcher
+    path: ".agent/roles/researcher.md"
+    load_mode: on_demand
+
+  - file_id: guardrail
+    path: ".agent/roles/guardrail.md"
+    load_mode: on_demand
+
+skills:
+  - file_id: backend_startup
+    path: ".agent/skills/backend-startup/SKILL.md"
+    load_mode: on_demand
+
+  - file_id: ci_troubleshooting
+    path: ".agent/skills/ci-troubleshooting/SKILL.md"
+    load_mode: on_demand
+
+  - file_id: quality_gate
+    path: ".agent/skills/quality-gate/SKILL.md"
+    load_mode: on_demand
+
+  - file_id: e2e_testing_skill
+    path: ".agent/skills/e2e-testing/SKILL.md"
+    load_mode: on_demand
+
+  - file_id: git_workflow
+    path: ".agent/skills/git-workflow/SKILL.md"
+    load_mode: on_demand
+
+  - file_id: pre_handoff_review
+    path: ".agent/skills/pre-handoff-review/SKILL.md"
+    load_mode: on_demand
+
+  - file_id: session_meta_review_skill
+    path: ".agent/skills/session-meta-review/SKILL.md"
+    load_mode: on_demand
+
+  - file_id: terminal_preflight
+    path: ".agent/skills/terminal-preflight/SKILL.md"
+    load_mode: on_demand
+
+  - file_id: skill_optimizer
+    path: ".agent/skills/skill-optimizer/SKILL.md"
+    load_mode: on_demand
+
+# --- Protected regions (skill-optimizer outputs; metadata only, not a behavioral rule) ---
+# Machine-staged LEARNED edits land ONLY between these markers and are adopted by a
+# human by hand (tools/skill_optimize/stage.py). See AGENTS.md §Human Approval Gate.
+protected_regions:
+  - region_id: learned_instructions
+    marker_start: "<!-- LEARNED:START id={region_id} -->"
+    marker_end: "<!-- LEARNED:END -->"
+    written_by: "skill-optimize workflow (staged for human adoption; never auto-merged)"
+    applies_to: ["skills", "workflows", "emerging-standards.md"]
+    safety_docs_opt_in: ["AGENTS.md"]
+    always_blocked_for_human: ["GUARDRAILS.md"]

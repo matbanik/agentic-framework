@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=../../tools/meu_status/meu-status.schema.json
+# Empty seed — register MEUs via /session-grouping or tools/meu_status.py.
+# Replace the starter phase with your real phases (Block D / build plan).
+version: 1
+phases:
+  - id: "1"
+    name: Starter
+    band: P0
+    sources: []
+    execution_plans: []
+    last_updated: null
+    note: "Replace with your real phase list after adoption."
+meus: []
+summary_bands:
+  - key: P0
+    label: P0
+    range: Starter
+narrative_sections: []

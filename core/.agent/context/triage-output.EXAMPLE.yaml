@@ -1,0 +1,13 @@
+# Ephemeral handoff from /issue-triage → /session-grouping.
+# Generate with: python tools/issue_triage.py triage
+# Do not treat this example as live state — delete or overwrite after first real triage.
+archived: []
+actionable: []
+deferred: []
+proposed_batches:
+  - slug: example-batch
+    issues: []
+    component: core
+    priority_band: P2
+    complexity: S
+    has_duplicates: false

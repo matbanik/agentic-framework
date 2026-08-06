@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewVerdict",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "review-verdict.v1"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "review_mode": {
+      "type": "string",
+      "enum": ["plan", "handoff", "multi-handoff", "execution"]
+    },
+    "target_plan": {
+      "type": "string"
+    },
+    "agent": {
+      "type": "string"
+    },
+    "requested_verbosity": {
+      "type": "string",
+      "enum": ["summary", "standard", "detailed"]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approved", "changes_required"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["Critical", "High", "Medium", "Low"]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["High", "Medium", "Low"]
+          },
+          "finding": { "type": "string" },
+          "file_line": { "type": "string" },
+          "recommendation": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["open", "fixed", "accepted_risk"]
+          }
+        },
+        "required": ["id", "severity", "confidence", "finding", "file_line", "recommendation", "status"],
+        "additionalProperties": false
+      }
+    },
+    "checklist_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "check": { "type": "string" },
+          "result": {
+            "type": "string",
+            "enum": ["pass", "fail", "partial", "n/a"]
+          },
+          "evidence": { "type": "string" }
+        },
+        "required": ["check", "result", "evidence"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "date",
+    "review_mode",
+    "target_plan",
+    "agent",
+    "requested_verbosity",
+    "verdict",
+    "summary",
+    "findings",
+    "checklist_results"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": { "const": "approved" }
+        }
+      },
+      "then": {
+        "properties": {
+          "findings": { "maxItems": 0 },
+          "checklist_results": {
+            "minItems": 1,
+            "items": {
+              "properties": {
+                "result": { "enum": ["pass", "n/a"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": { "const": "changes_required" }
+        }
+      },
+      "then": {
+        "properties": {
+          "findings": { "minItems": 1 }
+        }
+      }
+    }
+  ]
+}
