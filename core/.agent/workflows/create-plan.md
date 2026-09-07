@@ -184,10 +184,8 @@ The plan must include:
   `shared|compact_continue|isolated`; every non-`shared` row names a concrete durable
   output and action. Use `isolated` only when the resolved harness exposes an authorized
   fresh worker; otherwise emit `compact_continue`.
-- **Model assessment (harness-conditional):** orchestrator default is Cursor
-  `cursor-grok-4.5-high-fast` or Claude Code Opus 5. Prefer the optional 10-column
-  `builder_model` column with Cursor pins `{composer-2.5-fast|cursor-grok-4.5-high-fast}`
-  and Claude pins `{opus-5|sonnet-5}`; never `auto` / Fable 5 as builder. For every
+- **Model assessment (harness-conditional):** orchestrator default is `coordinator`. Prefer the optional 10-column
+  `builder_model` column with class pins `{builder|coordinator}`; never `auto` / `architecture_single_shot` as builder. For every
   non-`shared` row, evaluate isolation benefit (authorized fresh-worker vs
   `compact_continue`) before emitting `isolated`.
 - A spec-sufficiency section per MEU with source-backed resolutions for any under-specified behavior

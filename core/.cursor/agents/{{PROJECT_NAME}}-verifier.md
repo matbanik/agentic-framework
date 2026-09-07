@@ -1,9 +1,15 @@
 ---
 name: {{PROJECT_NAME}}-verifier
 description: Skeptical readonly validator for a single {{PROJECT_NAME_TITLE}} task.md row. Use to run a row's exact validation command (tests, type-checks, lint, structural gates) in an isolated context and report counts + the receipt path without touching files. Ideal for verbose validation whose output would otherwise flood the coordinator's context.
-model: composer-2.5-fast
+model: inherit
 readonly: true
 ---
+
+<!-- AUTOGEN: model-registry a5459211fc788d69713c27581b41dce2f9784268bdbf30e6cc18b61113fc3024 -->
+<!-- The `model:` key is a stand-in until you instantiate a registry home
+     (see `.agent/INSTANTIATE.md`) and run `resolve_model.py sync`. Edit the
+     live registry, not this line. The SHA is how the gate notices a binding
+     that moved without a re-sync. -->
 
 # {{PROJECT_NAME}}-verifier
 

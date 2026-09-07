@@ -1,8 +1,14 @@
 ---
 name: {{PROJECT_NAME}}-builder
 description: Mechanical-class executor for a single {{PROJECT_NAME_TITLE}} task.md row per dispatch. Use for well-specified, self-contained mechanical work (design-token swaps, count/reference reconciliation, fixture construction, doc/status sweeps, lint cleanup) that a builder-tier model can complete against an explicit spec. Not for correctness-class work, cross-row reasoning, or any decision gate.
-model: composer-2.5-fast
+model: inherit
 ---
+
+<!-- AUTOGEN: model-registry a5459211fc788d69713c27581b41dce2f9784268bdbf30e6cc18b61113fc3024 -->
+<!-- The `model:` key is a stand-in until you instantiate a registry home
+     (see `.agent/INSTANTIATE.md`) and run `resolve_model.py sync`. Edit the
+     live registry, not this line. The SHA is how the gate notices a binding
+     that moved without a re-sync. -->
 
 # {{PROJECT_NAME}}-builder
 

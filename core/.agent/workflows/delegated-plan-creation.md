@@ -1,16 +1,16 @@
 ---
-description: Delegate /create-plan Steps 1-4 to Claude Code CLI (Opus 5 or Fable 5) for plan generation, then run the Codex review/correction loop from the in-harness orchestrator (Cursor default `cursor-grok-4.5-high-fast`; Claude Code Opus 5). Use when the planning task benefits from Fable 5's deeper reasoning on the Claude CLI planner, or when the orchestrator wants to reserve context for execution.
+description: Delegate /create-plan Steps 1-4 to Claude Code CLI (`coordinator` or `architecture_single_shot`) for plan generation, then run the Codex review/correction loop from the in-harness orchestrator (`coordinator` class). Use when the planning task benefits from `architecture_single_shot`'s deeper reasoning on the Claude CLI planner, or when the orchestrator wants to reserve context for execution.
 ---
 
 # Delegated Plan Creation Workflow
 
-Delegate plan generation (Steps 1-4 of `/create-plan`) to Claude Code CLI using Opus 5 or Fable 5, then handle the Codex plan-critical-review correction loop from the in-harness orchestrator. Cursor orchestrator default is `cursor-grok-4.5-high-fast` (not Fable 5); Claude Code orchestrator default remains Opus 5. Fable 5 applies only to the *Claude CLI planner* spawn for complex plans. This separates expensive planning from mechanical review corrections.
+Delegate plan generation (Steps 1-4 of `/create-plan`) to Claude Code CLI using `coordinator` or `architecture_single_shot`, then handle the Codex plan-critical-review correction loop from the in-harness orchestrator (`coordinator` class). `architecture_single_shot` applies only to the *Claude CLI planner* spawn for complex plans — not as the orchestrator default. This separates expensive planning from mechanical review corrections. Class→snapshot bindings live in the live registry home you instantiate (see `.agent/INSTANTIATE.md`).
 
 ## When to Use
 
-- The planning task is complex enough to benefit from Fable 5's deeper reasoning on the Claude CLI planner
+- The planning task is complex enough to benefit from `architecture_single_shot`'s deeper reasoning on the Claude CLI planner
 - The orchestrator wants to preserve context window for execution
-- The user explicitly requests delegated planning ("use Fable 5 to create the plan")
+- The user explicitly requests delegated planning ("use architecture_single_shot to create the plan")
 - Session grouping is already done — the MEU scope and project slug are known
 
 ## Prerequisites
@@ -22,13 +22,13 @@ Delegate plan generation (Steps 1-4 of `/create-plan`) to Claude Code CLI using 
 ## Architecture
 
 ```
-Phase 1: Claude CLI (Fable 5 / Opus 5) — Planning
+Phase 1: Claude CLI (`architecture_single_shot` / `coordinator`) — Planning
   └── Reads context files, build plan, templates
   └── Generates implementation-plan.md + task.md
   └── STOPS (does NOT dispatch Codex or start execution)
 
-Phase 2: Orchestrator (Cursor `cursor-grok-4.5-high-fast` / Claude Code Opus 5; primary driver per `.agent/docs/harness-profiles.md`) — Review Loop
-  └── Dispatches Codex GPT-5.6 Sol for /plan-critical-review
+Phase 2: Orchestrator (`coordinator` class; primary driver per `.agent/docs/harness-profiles.md`) — Review Loop
+  └── Dispatches `independent_reviewer` for /plan-critical-review
   └── Reads verdict, applies corrections if needed
   └── Re-dispatches until approved or round cap (3)
 
@@ -137,15 +137,14 @@ the Codex review loop separately.
 
 ### Model Selection
 
-| Model | CLI Flag | Effort | Budget | Use When |
+| Class | Resolve (`claude-p`) | Effort | Budget | Use When |
 |-------|----------|--------|--------|----------|
-| **Fable 5** | `--model claude-fable-5` | `--effort high` | `$35` | Complex multi-MEU plans, architecture-heavy, spec gaps |
-| **Opus 5** | `--model claude-opus-5` | `--effort high` | `$20` | Standard plans, single-MEU, well-specified |
+| **`architecture_single_shot`** | `$(resolve architecture_single_shot -Harness claude-p -Project <project-root>)` (when bound) | `--effort high` | generous | Complex multi-MEU plans, architecture-heavy, spec gaps |
+| **`coordinator`** | `$(resolve coordinator -Harness claude-p -Project <project-root>)` | `--effort high` | moderate | Standard plans, single-MEU, well-specified |
 
-> [!WARNING]
-> **Fable 5 at `--effort high` burns ~3× Opus-equivalent usage** against subscription quota.
-> Use `--effort medium` for cost savings if the plan scope is well-defined.
-> Budget $35 for Fable 5 (empirical: $26.67 for 2-MEU plan with 26 turns).
+> Per-class price bands and empirical budget guidance live in the registry catalog (`price_band`, `price_note`) — do not restate dollar figures here.
+>
+> **`architecture_single_shot` at `--effort high` burns more subscription quota** than `coordinator` at the same effort. Use `--effort medium` for cost savings if the plan scope is well-defined.
 
 ### Dispatch Command
 
@@ -153,9 +152,20 @@ the Codex review loop separately.
 # Delete stale output
 Remove-Item -Force -ErrorAction SilentlyContinue {{RECEIPTS_DIR}}/dispatch/claude-plan-output.txt
 
-# Dispatch (Fable 5 example — swap model for Opus 5)
+# Resolve planner class → snapshot (live registry home; see .agent/INSTANTIATE.md)
+# `-Project` is what makes the working project's overlay apply; without it the
+# answer comes from global policy even where this project has tightened the
+# class. Resolution is a prerequisite, not a step: a failure must stop the
+# dispatch rather than launch a planner with an empty `--model`.
+$ErrorActionPreference = 'Stop'
+Import-Module <registry-home>/tools/ModelRegistry.psm1 -Force
+$plannerClass = "coordinator"  # complex plans: architecture_single_shot when bound on this harness
+$plannerSlug = resolve $plannerClass -Harness claude-p -Project <project-root>
+if (-not $plannerSlug) { throw "resolve returned no slug for $plannerClass" }
+
+# Dispatch (coordinator example — swap class when architecture_single_shot is bound)
 Get-Content {{RECEIPTS_DIR}}/dispatch/prompt.txt | claude -p `
-  --model claude-fable-5 `
+  --model $plannerSlug `
   --effort high `
   --permission-mode bypassPermissions `
   --output-format json `
@@ -167,7 +177,8 @@ Get-Content {{RECEIPTS_DIR}}/dispatch/prompt.txt | claude -p `
 **Parameters:**
 - `--permission-mode bypassPermissions` — planner needs full file access (reads ~10+ files, writes plan files, runs MEU status commands)
 - `--max-turns 80` — generous for Steps 1-4 (empirical: 26 turns for 2-MEU plan)
-- `--max-budget-usd 35` — hard cap (Fable 5); use $20 for Opus 5
+- `--max-budget-usd` — hard cap; size per class band in registry catalog (`architecture_single_shot` needs a generous cap)
+- `-Project` — resolves against this project's accepted overlay, not global policy alone
 - Working directory: set via `Cwd` in `run_command` (Claude has no `-C` flag)
 
 ### Background Dispatch
@@ -319,7 +330,7 @@ Per the canonical gate rule (`.agent/docs/harness-profiles.md`, `GUARDRAILS.md` 
 
 | Aspect | Standard `/create-plan` | Delegated Plan Creation |
 |--------|------------------------|------------------------|
-| Planner | Current agent (Cursor `cursor-grok-4.5-high-fast` / Claude Code Opus 5) | Claude CLI (Fable 5 / Opus 5) |
+| Planner | Current agent (`coordinator` class) | Claude CLI (`architecture_single_shot` / `coordinator`) |
 | Review dispatch | Planner dispatches Codex | **Orchestrator** dispatches Codex |
 | Corrections | Planner applies + re-dispatches | **Orchestrator** applies + re-dispatches |
 | Context cost | Uses orchestrator context window | Preserves orchestrator context |
@@ -331,8 +342,8 @@ Per the canonical gate rule (`.agent/docs/harness-profiles.md`, `GUARDRAILS.md` 
 ## Hard Rules
 
 1. **The planner NEVER dispatches Codex.** This avoids 3-level subprocess chains and saves planner budget.
-2. **The orchestrator applies all corrections.** Corrections are mechanical (file edits) and don't need Fable 5/Opus 5 reasoning.
+2. **The orchestrator applies all corrections.** Corrections are mechanical (file edits) and don't need `architecture_single_shot`/`coordinator` reasoning.
 3. **Codex R1 uses `high` effort; R2+ uses `medium`.** First review is substantive; follow-ups verify mechanical fixes.
-4. **Budget the planner generously** — $35 for Fable 5, $20 for Opus 5. Under-budgeting causes the planner to stop mid-plan.
+4. **Budget the planner generously** — size the cap from the class's catalog band. Under-budgeting causes the planner to stop mid-plan.
 5. **Always use stdin pipe** for the planning prompt (`Get-Content prompt.txt | claude -p ...`).
 6. **Check CLI versions before first dispatch** in the session.

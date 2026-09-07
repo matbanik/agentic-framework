@@ -49,7 +49,7 @@ flowchart TD
     end
 
     subgraph PHASE_5["🔍 Phase 5: Plan Validation"]
-        E1["Submit to External Reviewer<br/>(Codex GPT-5.6-sol) (/plan-critical-review)"]
+        E1["Submit to External Reviewer<br/>(independent_reviewer) (/plan-critical-review)"]
         E2{"Approved?"}
         E3["/plan-corrections<br/>(fix findings)"]
         E4["Re-submit<br/>(≤3 rounds)"]
@@ -68,7 +68,7 @@ flowchart TD
     end
 
     subgraph PHASE_7["🔍 Phase 7: Implementation Validation"]
-        G1["Submit to External Reviewer<br/>(Codex GPT-5.6-sol) (/execution-critical-review)"]
+        G1["Submit to External Reviewer<br/>(independent_reviewer) (/execution-critical-review)"]
         G2{"Approved?"}
         G3["/execution-corrections<br/>(fix findings)"]
         G4["Re-submit<br/>(≤6 rounds)"]

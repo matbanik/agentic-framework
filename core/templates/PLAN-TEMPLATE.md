@@ -64,9 +64,12 @@ capability. Otherwise record and execute the row as `compact_continue`; metadata
 grants permission to spawn a worker.
 
 Task tables in `task.md` may include an optional **`builder_model`** column (10-col
-schema). Cursor pins: `{composer-2.5-fast|cursor-grok-4.5-high-fast}`; Claude:
-`{opus-5|sonnet-5}`; never `auto` / Fable 5 as builder. Legacy 9-column tables remain
-valid.
+schema), whose values are **capability classes** — `builder`, `coordinator`, or
+`verifier` — never model slugs and never `auto`. Which snapshot serves a class lives
+in the live registry home you instantiate (see `.agent/INSTANTIATE.md`); resolve it
+rather than pinning a value in a plan, so a model bump never reopens an approved plan.
+`architecture_single_shot` is reserved for its own shape and is never a builder.
+Legacy 9-column tables remain valid.
 
 ---
 

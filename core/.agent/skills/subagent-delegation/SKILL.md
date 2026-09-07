@@ -15,7 +15,7 @@ delegation where the **assistant** can address it from its own tool surface:
   routing, `readonly`, background). Autonomous `fresh_worker` resolves via that Task route.
   Cursor also reads `.claude/agents/`, with `.cursor/` winning name conflicts.
 - **Claude Code** — the Agent/Task tool + custom subagents in `.claude/agents/`
-  (`model: sonnet|opus|haiku|inherit|<id>`, a `tools` allowlist, `skills:` preload, `memory`).
+  (`model: sonnet|opus|haiku|inherit|<id>`, a `tools` allowlist, `skills:` preload, `memory`). <!-- model-slug-ok: Claude Code `.claude/agents/` frontmatter schema tier aliases (harness_id), not live routing pins -->
 
 This skill is how the orchestrator turns the execution framework's existing delegation
 contract (`task.md` `Owner`/`depends_on`/`context_strategy` columns + the
@@ -46,8 +46,8 @@ not from a product name and not from directory presence:
 
 | Resolved driver | Authorized autonomous mechanism | Agent dir | Model economy |
 |---|---|---|---|
-| Cursor (`Task` tool authorized) | Assistant-addressable Cursor `Task` tool (`{{PROJECT_NAME}}-builder` / `{{PROJECT_NAME}}-verifier`) | `.cursor/agents/` | Builder `composer-2.5-fast` (proven); coordinator `cursor-grok-4.5-high-fast` |
-| Claude Code (Agent/Task tool authorized) | Agent/Task tool (assistant-addressable) | `.claude/agents/` | Builder tier (`sonnet`) |
+| Cursor (`Task` tool authorized) | Assistant-addressable Cursor `Task` tool (`{{PROJECT_NAME}}-builder` / `{{PROJECT_NAME}}-verifier`) | `.cursor/agents/` | `builder` (proven); `coordinator` — resolve per harness in the live registry home (see `.agent/INSTANTIATE.md`) |
+| Claude Code (Agent/Task tool authorized) | Agent/Task tool (assistant-addressable) | `.claude/agents/` | `builder` class |
 | Anything else / no authorized tool | **`none`** | — | every `isolated` row degrades to `compact_continue` |
 
 > **Directory presence is explicitly NOT a detection signal** — it is never valid to infer the
@@ -57,7 +57,7 @@ not from a product name and not from directory presence:
 
 > **Cursor route (demonstrated 2026-07-21).** The assistant's `Task` tool exposes
 > `{{PROJECT_NAME}}-builder` and `{{PROJECT_NAME}}-verifier` as assistant-addressable subtypes; orchestrator-originated
-> dispatch uses that route + `.cursor/agents/`. Proven builder rung: `composer-2.5-fast`
+> dispatch uses that route + `.cursor/agents/`. Proven builder class: `builder`
 > (see `verification-log.md`). Verify the session's `Task` tool still lists the `{{PROJECT_NAME}}-*`
 > types at session start. Claude Code remains Agent/Task + `.claude/agents/` when that driver
 > is resolved — this section does not claim a Claude Code live probe.
@@ -126,8 +126,8 @@ An on-disk durable output is the precondition for `[x]`; a persuasive summary wi
 - Delegate **context-heavy, verbose, or mechanical** work so its output lands in the subagent's
   own context, not the coordinator's.
 - Keep **small tasks inline** — the dispatch prompt plus startup overhead can exceed the work.
-- On Cursor, use the **Auto** model economy (or the WP-6-verified fallback rung) for
-  builder-class dispatches; on Claude Code use the `sonnet` builder tier.
+- On Cursor, use the **`builder` class** (resolve per harness) for
+  builder-class dispatches; on Claude Code use the `builder` class.
 - Parallel subagents **multiply** token spend (Cursor docs) and this project runs them
   **sequentially, foreground**. In-harness subagents primarily **protect the coordinator's
   context** rather than guarantee net-token reduction (consistent with `cli-dispatch/SKILL.md`

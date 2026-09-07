@@ -263,7 +263,7 @@ When implementing a Manageable Execution Unit (MEU):
 - A thin spec is not a valid reason to ship a narrower implementation. Resolve the gap in planning/research, update the plan/FIC with the source-backed rule, then implement the full resolved contract.
 
 > [!CAUTION]
-> **Self-review prohibition.** The implementing agent (any agent/session that authored or edited the code, tests, or handoff under review) MUST NOT perform `/validation-review`, `/plan-critical-review`, or `/execution-critical-review` on its own work. These workflows require an independent agent (external reviewer — Codex CLI / GPT-5.6-sol; full chain in `.agent/docs/model-routing.md`) to prevent confirmation bias. The implementing agent's role is to **dispatch and collect results**, not to execute the review steps. If Codex CLI is unavailable or rate-limited, follow the fallback protocol in `.agent/skills/cli-dispatch/SKILL.md` §Rate-Limit Fallback — do NOT fall back to self-review. External validation is mandatory unless the human explicitly waives it.
+> **Self-review prohibition.** The implementing agent (any agent/session that authored or edited the code, tests, or handoff under review) MUST NOT perform `/validation-review`, `/plan-critical-review`, or `/execution-critical-review` on its own work. These workflows require an independent agent (external reviewer — Codex CLI / `independent_reviewer`; full chain in `.agent/docs/model-routing.md`) to prevent confirmation bias. The implementing agent's role is to **dispatch and collect results**, not to execute the review steps. If Codex CLI is unavailable or rate-limited, follow the fallback protocol in `.agent/skills/cli-dispatch/SKILL.md` §Rate-Limit Fallback — do NOT fall back to self-review. External validation is mandatory unless the human explicitly waives it.
 
 > [!CAUTION]
 > **Persistence & Definition of Done (anti-premature-stop, EXECUTION PHASE ONLY — Step 6+).** Applies only after the plan is approved (by external reviewer or human) and the agent has entered EXECUTION mode; it does NOT apply during PLANNING (Steps 1–4). The plan-review (Step 5) loop and its exits are governed by `create-plan.md` §5 and `GUARDRAILS.md` SIGN 1–2.
@@ -304,18 +304,24 @@ All handoff artifacts, review artifacts, and evidence bundles must follow the co
 
 ## Dual-Agent Workflow
 
+Roles are named by **capability class**. Which model snapshot a class resolves to is
+the live registry home's business (instantiate it per `.agent/INSTANTIATE.md`), per
+harness — resolve it, never restate it here:
+`Resolve-AgentModel -Class independent_reviewer -Harness codex-cli -AuthorVendor <vendor> -Project <project-root>`.
+The tier map, review chain, effort ceilings, and cost bands are defined once in
+[`.agent/docs/model-routing.md`](.agent/docs/model-routing.md).
+
 | Aspect | Decision |
 |---|---|
-| **Implementor model** | **Harness-conditional coordinator:** on **Cursor**, default **`cursor-grok-4.5-high-fast`** (full replace of Opus 5 for all Cursor coordinator work) with builder pins `{composer-2.5-fast \| cursor-grok-4.5-high-fast}`; on **Claude Code**, default **Claude Opus 5** (coordinator/reasoning) + **Sonnet 5** (builder/bulk, delegated). Primary executor for PLANNING and EXECUTION; performs implementor self-verification and pre-handoff checks in VERIFICATION mode. Full tier map: [`.agent/docs/model-routing.md`](.agent/docs/model-routing.md) |
-| **Reviewer model** | **GPT-5.6-sol (Codex)** — default independent reviewer in VERIFICATION mode; `high` effort for security-sensitive/risk-path changes. Independent-reviewer fallback chain (Codex → Gemini surface-only → headless `claude -p`) is defined once in [`.agent/docs/model-routing.md`](.agent/docs/model-routing.md) — do not restate it here. |
-| **Reviewer capability** | Run commands, execute tests, check builds, create handoff docs with test improvements |
+| **Implementor** | `coordinator` for PLANNING and EXECUTION, delegating bulk work to `builder`; performs implementor self-verification and pre-handoff checks in VERIFICATION mode |
+| **Reviewer** | `independent_reviewer` in VERIFICATION mode. It declares `vendor_distinct_from: author`, so the dispatch wrapper requires `-AuthorVendor` and refuses to guess it. Effort: the class default for routine work, one tier up for security-sensitive/risk-path changes, never above the snapshot's declared ceiling. Run commands, execute tests, check builds, create handoff docs — not prose-only review |
 | **Validation priority** | 1. Contract tests pass/fail → 2. Security posture → 3. Adversarial edge cases → 4. Code style consistency → 5. Documentation accuracy |
 
-> The reviewer (Codex GPT-5.6-sol) runs commands and creates handoff docs for findings. It is not limited to prose-only review — it produces executable evidence.
+> The reviewer (`independent_reviewer`) runs commands and creates handoff docs for findings. It is not limited to prose-only review — it produces executable evidence.
 
 ### Cross-Vendor Handoff Protocol
 
-When handing off from implementor (Opus 5 / Sonnet 5) to reviewer (Codex GPT-5.6-sol), the handoff payload must include:
+When handing off from `coordinator` / `builder` to `independent_reviewer`, the handoff payload must include:
 1. **Changed files** — list of absolute paths with line-level diff summaries
 2. **FIC reference** — the acceptance criteria being validated
 3. **Test results** — compressed output (passing count + any failures)

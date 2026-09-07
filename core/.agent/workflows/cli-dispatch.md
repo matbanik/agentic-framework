@@ -10,7 +10,7 @@ trigger: /cli-dispatch
 
 **Trigger:** `/cli-dispatch` or when the orchestrator identifies a task that benefits from a specialized agent.
 
-**Orchestrator:** You — the primary driver (per `.agent/docs/harness-profiles.md`). **Harness-conditional:** on **Cursor**, coordinator default is **`cursor-grok-4.5-high-fast`**; on **Claude Code**, coordinator default is **Opus 5**. You never leave; you dispatch and collect.
+**Orchestrator:** You — the primary driver (per `.agent/docs/harness-profiles.md`). **Harness-conditional:** the `coordinator` class resolves per harness from the live registry home you instantiate (see `.agent/INSTANTIATE.md`). You never leave; you dispatch and collect.
 
 ---
 
@@ -22,13 +22,13 @@ Determine which agent is best suited. Use this decision tree:
 Is this a HIGH-STAKES DECISION requiring deep deliberation?
   (architecture, breaking changes, security, irreversible choices,
    trade-off arbitration with >2 viable paths, cross-cutting changes)
-  → YES → Claude Code (Opus 5, effort=max)
+  → YES → Claude Code (`coordinator` class, effort at class ceiling)
 
 Is this a validation/review task?
-  → YES → Codex CLI (GPT-5.6 Sol, reasoning=high)
+  → YES → Codex CLI (`independent_reviewer` class, reasoning=high)
 
 Is this image generation?
-  → YES → Codex CLI (GPT-5.6 Sol, image_gen enabled)
+  → YES → Codex CLI (`image_generator` class)
 
 Is this data processing (OCR, PDF, large file, transcription)?
   → YES → agy CLI (Gemini 3.5 Flash High) — native Windows `agy -p` stdout capture (≥ 1.1.1)
@@ -43,8 +43,7 @@ in-harness Task is unavailable or undesirable?
      Never route independent review to a builder (Codex chain only).
 
 None of the above?
-  → Handle directly as orchestrator (harness-conditional default:
-     Cursor → cursor-grok-4.5-high-fast; Claude Code → Opus 5)
+  → Handle directly as orchestrator (`coordinator` class — resolve per harness)
 ```
 
 ## Step 2 — Read the Skill
@@ -129,7 +128,7 @@ Tone: <FORMAL/CASUAL/TECHNICAL/NARRATIVE>
 Length: <APPROXIMATE_WORD_COUNT>
 ```
 
-#### Critical Decision (Claude Opus 5)
+#### Critical Decision (`coordinator` class)
 ```
 You are performing a critical review that requires deep, extended reasoning.
 Think carefully before answering. Do NOT rush to a conclusion.
@@ -224,11 +223,11 @@ If the user wants changes or continuation:
 
 ## Anti-Patterns
 
-- ❌ **Never dispatch to agy for validation verdicts** — Codex remains the independent reviewer; agy is for data processing / Gemini Flash work (and surface-only rate-limit fallback when policy allows)
+- ❌ **Never dispatch to agy for validation verdicts** — `independent_reviewer` remains the reviewer; agy is for data processing / `surface_orchestrator` work (and surface-only rate-limit fallback when policy allows)
 - ❌ **Never use Codex for creative writing** — it is routed here for validation and image generation, not natural prose
 - ❌ **Never use Claude for image generation** — no image_gen tool
-- ❌ **Never use Opus 5 for routine reviews** — wasteful at $0.09+ per call; orchestrator handles these
-- ❌ **Never use Opus 4.5 for critical decisions** — Opus 5 has better judgment and adaptive thinking
+- ❌ **Never use `coordinator` for routine reviews** — wasteful at the class's price band; orchestrator handles these
+- ❌ **Never use `creative_prose` for critical decisions** — `coordinator` has better judgment and adaptive thinking
 - ❌ **Never invoke codex exec directly** — always use `Invoke-CodexDispatch.ps1` wrapper
 - ❌ **Never use a builder-tier CLI for independent review verdicts** — Codex chain only (self-review prohibition)
 - ❌ **Never forget `$null |` prefix for Claude CLI** — causes stdin hang (agy ≥ 1.1.1 must NOT use `$null |`)
@@ -236,4 +235,4 @@ If the user wants changes or continuation:
 - ❌ **Never use the obsolete agy side-channel file prompt as primary capture** — use `-p` + `*>` stdout (Windows fixed in 1.1.0+)
 - ❌ **Never forget `*>` redirect** — causes PowerShell buffer saturation
 - ❌ **Never use `codex exec --search`** — search is a top-level option
-- ❌ **Never skip `--effort max` on critical decisions** — default effort underutilizes Opus 5's thinking capacity
+- ❌ **Never skip effort at the class ceiling on critical decisions** — default effort underutilizes the coordinator class's thinking capacity
