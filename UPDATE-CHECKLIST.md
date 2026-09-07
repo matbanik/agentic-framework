@@ -4,9 +4,8 @@ Use this when the originating project's governance or subagent flows change and 
 need `_transfer-out/agentic-framework/` to match again. The package is **not** critical
 runtime data — prefer **delete outdated copies and re-copy**, then re-sanitize.
 
-Last refreshed: **2026-08-05** (Codex dispatch wrapper, review-verdict schema, macos-setup,
-deep-research-prompting skill, context-tool-decision-gate, full 19-file tools set,
-reference-integrity + accepted-divergence ledger).
+Last refreshed: **2026-09-07** (package-root `.agent/` registry-home template, class-based
+routing, Codex dispatch resolves from the live registry, sanitize `--verify` slug gate).
 
 ---
 
@@ -18,8 +17,7 @@ Refresh if **any** of these land in the source repo:
 |---|---|
 | `fresh_worker` / harness-profile row changes | Adopters branch on capability flags |
 | `.agent/skills/subagent-delegation/**` changes | Delegation gate is the portable contract |
-| `.cursor/agents/*` or `.claude/agents/*` changes | Builder/verifier guardrails + model pins |
-| Coordinator/builder model defaults change (`AGENTS.md`, `model-routing.md`, `model-delegation.md`) | Wrong pins = wrong cost/quality |
+| `.cursor/agents/*` or `.claude/agents/*` changes | Builder/verifier guardrails. Shipped files are AUTOGEN templates |
 | `TASK-TEMPLATE.md` / reflection template gain columns or `delegate_to` rules | Plan/task shape drift |
 | `create-plan.md` / `execution-session.md` delegation steps change | Orchestrator behavior |
 | New portable skill/workflow added under `.agent/` that is **not** product-specific | Package completeness |
@@ -27,9 +25,13 @@ Refresh if **any** of these land in the source repo:
 | `tools/issue_triage/**` or `tools/meu_status/**` CLI/schema changes | Adopter loop executability |
 | Issue taxonomy / category enums / triage workflow steps | Classification contract |
 | `session-grouping.md` / `issue-triage.md` / `issue-lifecycle-guide.md` | MEU planning handoffs |
+| Live registry `schema/`, `tools/ModelRegistry.psm1`, or the class contracts change | The package-root `.agent/` template must match the schema and module the live tools enforce |
+| The bump procedure in the live registry's `README.md` changes | `.agent/INSTANTIATE.md` §6 is its portable twin |
 
 Skip a full refresh for product-only work (UI, API, populated MEU registries, Electron E2E).
 **Never** copy live `known-issues.yaml` / `meu-status.yaml` content — refresh **empty seeds** only.
+**Never** recopy this package to bump a model. A bump is a live-registry edit plus
+`resolve sync` for AUTOGEN-marked agent-definition files. See `.agent/INSTANTIATE.md`.
 
 ---
 
@@ -134,6 +136,10 @@ Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 
 Keep / refresh `core/.cursor/agents/README.md` and `core/.claude/agents/README.md`.
 
+The shipped `.cursor/agents` / `.claude/agents` files are **AUTOGEN templates**
+generated from a registry, not hand-maintained pins. Refresh when guardrail prose
+changes. Do not recopy the package to move a `model:` value.
+
 ### Templates
 
 | Source | Destination |
@@ -143,6 +149,32 @@ Keep / refresh `core/.cursor/agents/README.md` and `core/.claude/agents/README.m
 | `docs/execution/plans/PLAN-TEMPLATE.md` | `core/templates/PLAN-TEMPLATE.md` |
 | `docs/execution/plans/TASK-TEMPLATE.md` | `core/templates/TASK-TEMPLATE.md` |
 | `docs/execution/reflections/TEMPLATE.md` | `core/templates/REFLECTION-TEMPLATE.md` |
+
+### Package-root `.agent/` — registry-home template
+
+The only group whose source is the **live registry home** (`P:/.agent`, or wherever
+`AGENT_MODEL_REGISTRY` points) rather than the source repo. It is also the only group
+that is not a blind re-copy: three of its six files are deliberately divergent, and
+copying them would ship this machine's pins to an adopter.
+
+| Source | Destination | Rule |
+|---|---|---|
+| `<registry home>/schema/model-registry.v1.schema.json` | `.agent/schema/` | **Re-copy.** Byte-identical — the template must validate against the same schema the live tools enforce. |
+| `<registry home>/tools/ModelRegistry.psm1` | `.agent/tools/` | **Re-copy.** Byte-identical; the module is slug-free by construction (it reads compiled JSON and embeds nothing). |
+| `<registry home>/model-registry.yaml` | `.agent/model-registry.template.yaml` | **Never a copy — hand-merge.** Carry across *new or changed class contracts only*. `catalog`, `bindings`, and `pins` stay empty; `forbid` and `eval_gate` are omitted entirely (they hold catalog ids and machine-local paths). |
+| `<registry home>/README.md` §Bumping a binding | `.agent/INSTANTIATE.md` §6 | **Hand-maintained twin.** Same sequence, no snapshot ids, no machine paths. |
+| — | `.agent/docs/model-classes.md` | **Hand-maintained.** Class list plus the `resolve` dispatch contract. Names no snapshots. |
+| — | `.agent/tools/resolve_model.py`, `.agent/tools/check_model_slugs.py` | **Do not copy the live tools.** These are thin locate-and-forward wrappers on purpose; the live implementations carry catalog examples and day-one binding tables inside docstrings. |
+
+Verify after touching this group — the package must carry **zero** slugs, which is
+what makes `agentic-framework` the one repo with an allow-listed count of 0:
+
+```powershell
+rtk proxy python <registry home>/tools/check_model_slugs.py --project . --enforce --format json *> {{RECEIPTS_DIR}}/framework-slug-check.txt
+```
+
+A nonzero allow-listed count here means a snapshot id leaked into the package. Find it
+and remove it; do not add a `raw_slug_allowlist` pattern to hide it.
 
 ---
 
@@ -166,10 +198,13 @@ rtk proxy python scripts/sanitize.py --verify *> {{RECEIPTS_DIR}}/agentic-framew
 
 ## Package-root docs (edit by hand — do not overwrite blindly)
 
-- [ ] `core/MANIFEST.md` — new/removed files, §5b agents, exclusions for product tooling
-- [ ] `README.md` — tree diagram matches on-disk layout
-- [ ] `ADOPTION-GUIDE.md` — copy paths for `.cursor/agents` / `.claude/agents`; `fresh_worker` steps
-- [ ] `ADOPTION-QUESTIONS.md` — A6/A9 (or current lettering) cover assistant-addressable workers + model pins
+- [ ] `core/MANIFEST.md` — new/removed files, §5b AUTOGEN agent templates, package-root `.agent/`
+- [ ] `README.md` — tree diagram matches on-disk layout (includes package-root `.agent/`)
+- [ ] `ADOPTION-GUIDE.md` — copy paths for `.cursor/agents` / `.claude/agents`; `fresh_worker` steps; Step 4 points at `.agent/INSTANTIATE.md`
+- [ ] `ADOPTION-QUESTIONS.md` — A6/A9 (or current lettering) cover assistant-addressable workers; registry instantiation points at `INSTANTIATE.md`
+- [ ] `.agent/INSTANTIATE.md` — §6 bump sequence still matches the live registry's `README.md`; §2 copy table lists every template file; no snapshot ids
+- [ ] `.agent/model-registry.template.yaml` — new/changed class contracts merged; `catalog`, `bindings`, `pins` still empty; no `forbid` / `eval_gate` values
+- [ ] `.agent/docs/model-classes.md` — class list matches the template's classes
 - [ ] `DOMAIN-MAPPING.md` — only if delegation vocabulary needs a domain note
 - [ ] This file (`UPDATE-CHECKLIST.md`) — bump **Last refreshed** date + note what changed
 - [ ] `examples/` — only if you intentionally refresh the worked review example

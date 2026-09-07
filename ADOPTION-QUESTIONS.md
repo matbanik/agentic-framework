@@ -27,7 +27,8 @@
 | A6 | Does it support **assistant-addressable subagents** (a `Task`/Agent tool the *orchestrator* can call, not only user-invoked `/name` agents)? To what nesting depth? | `fresh_worker` in `harness-profiles.md` + `.agent/skills/subagent-delegation/SKILL.md` | **`none`** (every `isolated` row degrades to `compact_continue`; metadata is never permission to spawn) |
 | A7 | Does it support **transcript compaction**? | `context_compaction` | `none` |
 | A8 | After an independent reviewer approves a plan, should execution **auto-continue**, or must a **human say go**? | `plan_to_exec_gate` | **`human`** |
-| A9 | If A6 is yes: which **builder / verifier** model pins should the planner use? (Cursor-style: fast builder + optional stronger builder; Claude-style: Sonnet/Opus.) | `builder_model` column on `task.md` + agent-def `model:` frontmatter | keep work on the coordinator; do not invent `auto` |
+| A9 | If A6 is yes: which **builder / verifier** capability classes should `task.md` `builder_model` name? Bind those classes in the registry from A10; shipped `.cursor/agents` / `.claude/agents` files are AUTOGEN templates, not hand-maintained pins. | `builder_model` column + AUTOGEN agent-def `model:` | keep work on the coordinator; do not invent `auto` |
+| A10 | Where will the **live model-capability registry** live? Copy the package-root `.agent/` template to that drive-root or workspace-root home and fill `catalog` and `bindings` yourself. | live registry home; see `.agent/INSTANTIATE.md` | instantiate a workspace-root `.agent/` from this package's template. **Do not** copy another machine's filled registry |
 
 ---
 
@@ -113,7 +114,7 @@ can be a serious breach:
 | F2 | Where do **handoffs, reviews, reflections** live? | artifact paths + naming | `.agent/context/handoffs/` |
 | F3 | Where may the agent write **temp/receipt files** (command output)? | the P0 redirect directory | a temp dir outside the repo |
 | F4 | Is there **version control**? Which? | the commit gate | assume git; never auto-commit |
-| F5 | Which **models** are available for coordinator / builder / router tiers? | `model-routing.md` | single model for all |
+| F5 | Which **snapshots** will you put in your registry catalog for coordinator / builder / router classes? | `model-routing.md` names classes; the catalog binds them (see `.agent/INSTANTIATE.md`) | one snapshot for every class if that is all you have |
 | F6 | Any **cost constraints**? (metered API vs flat subscription) | how aggressively to delegate to subagents | assume metered |
 
 ---

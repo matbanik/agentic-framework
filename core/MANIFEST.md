@@ -13,6 +13,24 @@ reading the file's own header (H1 / frontmatter `description:` / opening paragra
 
 ---
 
+## Package-root `.agent/` — registry-home template
+
+Human decision Q1: this directory **templates** the registry home for adopters.
+`core/.agent/` remains the in-package instruction copy. Both exist; neither
+replaces the other. The template ships the twelve global classes with empty
+`catalog`, `bindings`, and `pins`. A model bump is a live-registry edit, not a
+recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIATE.md`.
+
+- `.agent/INSTANTIATE.md` — How an adopter copies this template to a drive-root or workspace-root home, fills catalog/bindings, compiles, and runs the checker. §6 is the bump procedure: shortlist, add-to-catalog and compile, rehearse, eval-gate an isolated candidate, edit one binding, recompile, sync, enforce.
+- `.agent/model-registry.template.yaml` — Twelve global classes with contracts; catalog, bindings, and pins empty. No `forbid` or `eval_gate` values (those hold catalog ids / machine paths).
+- `.agent/docs/model-classes.md` — Class list and the `resolve` paste-able dispatch contract. Names no snapshots.
+- `.agent/schema/model-registry.v1.schema.json` — Same schema as the live registry.
+- `.agent/tools/resolve_model.py` — Thin locate-and-forward wrapper. Swap in the real tool once this home is live.
+- `.agent/tools/check_model_slugs.py` — Thin wrapper, same reason (the live implementation embeds catalog examples).
+- `.agent/tools/ModelRegistry.psm1` — Slug-free copy. Exports `resolve <class> [-Harness x] [-AuthorVendor y]`; prints the bare slug; infers harness when a class binds exactly one; raises `ambiguous_harness` rather than guessing.
+
+---
+
 ## 1. `core/` — root governance
 
 - `core/AGENTS.md` — Full operating model for AI agents on {{PROJECT_NAME_TITLE}}: priority hierarchy (P0 environment stability → P1 quality gates → P2 task completion → P3 speed), role specs, workflows, TDD protocol, execution contract, and validation pipeline.
@@ -22,7 +40,7 @@ reading the file's own header (H1 / frontmatter `description:` / opening paragra
 ## 2. `core/.agent/docs/`
 
 - `harness-profiles.md` — Capability-flag matrix (including `fresh_worker`) so governance docs/workflows behave correctly regardless of which agentic harness is driving the session, instead of hard-branching on harness name.
-- `model-routing.md` — Canonical answer to "which model/CLI handles which task, and why" — harness-conditional coordinator/builder pins + independent-reviewer chain.
+- `model-routing.md` — Canonical answer to "which capability class handles which task, and why" — class names only; snapshot bindings live in the live registry.
 - `model-delegation.md` — Mechanical vs. correctness work-class taxonomy, plus the in-harness `{{PROJECT_NAME}}-builder` / `{{PROJECT_NAME}}-verifier` route (gated by `fresh_worker`).
 - `context-compression.md` — Compression rules (verbosity tiers, delta-only diffs, cache boundaries) that all handoff/review/evidence artifacts must follow.
 - `development-lifecycle.md` — Canonical source-of-truth for the end-to-end 9-phase development process from inspiration to committed code, including human-intervention points.
@@ -102,10 +120,10 @@ reading the file's own header (H1 / frontmatter `description:` / opening paragra
 > `ADOPTION-GUIDE.md` Step 2). Cursor and Claude Code register subtypes from the filename stem /
 > frontmatter `name:`.
 
-- `.cursor/agents/{{PROJECT_NAME}}-builder.md` — Mechanical-class executor for one `task.md` row; Cursor default model pin `composer-2.5-fast`.
-- `.cursor/agents/{{PROJECT_NAME}}-verifier.md` — Readonly validator for one `task.md` row (`readonly: true`); same Cursor builder pin.
-- `.claude/agents/{{PROJECT_NAME}}-builder.md` — Same builder contract; Claude Code model pin `sonnet`.
-- `.claude/agents/{{PROJECT_NAME}}-verifier.md` — Same verifier contract; Claude Code `tools` allowlist (no Write/Edit) + model pin `sonnet`.
+- `.cursor/agents/{{PROJECT_NAME}}-builder.md` — Mechanical-class executor for one `task.md` row. AUTOGEN template: `model:` is filled from the registry, not hand-maintained.
+- `.cursor/agents/{{PROJECT_NAME}}-verifier.md` — Readonly validator for one `task.md` row (`readonly: true`). AUTOGEN template, same as builder.
+- `.claude/agents/{{PROJECT_NAME}}-builder.md` — Same builder contract; AUTOGEN template for the Claude Code agents harness.
+- `.claude/agents/{{PROJECT_NAME}}-verifier.md` — Same verifier contract; Claude Code `tools` allowlist (no Write/Edit). AUTOGEN template.
 - `README.md` (each agents dir) — Rename-after-instantiate instructions.
 
 ## 5c. `core/.agent/context/` — empty seeds (not live product data)

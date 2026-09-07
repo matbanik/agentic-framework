@@ -1,0 +1,359 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zorivest.local/schema/model-registry.v1.schema.json",
+  "title": "Model Capability Registry v1",
+  "description": "Closed contract for the machine-global model capability registry. Classes are capability contracts; the catalog holds per-snapshot facts; bindings are the current decisions. Every object is closed (additionalProperties: false) so a typo is a validation failure rather than a silently ignored field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "updated", "bump_gate", "catalog", "classes"],
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "errorCode": "unsupported_schema_version",
+      "description": "Pinned. A future incompatible shape ships as v2 with its own schema file."
+    },
+    "updated": { "$ref": "#/$defs/date" },
+    "bump_gate": {
+      "const": "human",
+      "errorCode": "bump_gate_must_be_human",
+      "description": "A binding change is a human commit. An auto gate would defeat AGENTS.md §Human Approval Gate, so the only legal value is 'human'."
+    },
+    "catalog": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Facts about snapshots; never decisions.",
+      "propertyNames": { "$ref": "#/$defs/catalogId" },
+      "additionalProperties": { "$ref": "#/$defs/catalogEntry" }
+    },
+    "classes": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Capability contracts plus their current bindings.",
+      "propertyNames": { "$ref": "#/$defs/className" },
+      "additionalProperties": { "$ref": "#/$defs/classEntry" }
+    },
+    "pins": {
+      "type": "object",
+      "description": "Named, never-bumped bindings for reproducibility.",
+      "propertyNames": { "$ref": "#/$defs/className" },
+      "additionalProperties": { "$ref": "#/$defs/pinEntry" }
+    },
+    "raw_slug_allowlist": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Glob patterns naming paths where a literal slug is history, not instruction."
+    },
+    "retired_slugs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/retiredSlug" },
+      "description": "Dead pins. Tier 1 fails on these even though no catalog entry binds them."
+    }
+  },
+  "$defs": {
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "absoluteUrl": {
+      "type": "string",
+      "pattern": "^https?://",
+      "errorCode": "source_must_be_absolute_url"
+    },
+    "catalogId": {
+      "type": "string",
+      "pattern": "^(?!.*latest)[a-z0-9][a-z0-9.-]*$",
+      "errorCode": "evergreen_alias_rejected",
+      "description": "Lowercase snapshot id. A vendor evergreen alias containing 'latest' is rejected at load: Anthropic's dateless 4.6+ ids are pinned snapshots, and treating any alias as evergreen is the documented misconception (research-brief §B)."
+    },
+    "className": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "errorCode": "invalid_class_name"
+    },
+    "vendor": {
+      "enum": ["openai", "anthropic", "cursor", "xai", "google"],
+      "errorCode": "unknown_vendor"
+    },
+    "harness": {
+      "enum": [
+        "codex-cli",
+        "cursor-task",
+        "cursor-agent-cli",
+        "claude-code-agents",
+        "claude-p",
+        "gemini-cli"
+      ],
+      "errorCode": "unknown_harness"
+    },
+    "effort": {
+      "enum": ["none", "low", "medium", "high", "xhigh", "max"],
+      "errorCode": "unknown_effort_level"
+    },
+    "priceBand": {
+      "enum": ["low", "medium", "high", "xhigh"],
+      "errorCode": "price_band_outside_ordinal",
+      "description": "The S5 ordinal. Dollar figures live in price_per_mtok; prose names bands only."
+    },
+    "authMode": {
+      "enum": ["chatgpt-plan", "api"],
+      "errorCode": "unknown_auth_mode"
+    },
+    "harnessId": {
+      "description": "Either a single slug, or — when the harness encodes effort in the model id — a map from effort level to slug.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/effort" },
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      ]
+    },
+    "catalogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendor", "harness_ids", "price_band", "capabilities"],
+      "properties": {
+        "vendor": { "$ref": "#/$defs/vendor" },
+        "family": { "type": "string", "minLength": 1 },
+        "released": { "$ref": "#/$defs/date" },
+        "verified_on": { "$ref": "#/$defs/date" },
+        "harness_ids": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/harness" },
+          "additionalProperties": { "$ref": "#/$defs/harnessId" }
+        },
+        "auth": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/authMode" }
+        },
+        "efforts": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/effort" }
+        },
+        "effort_ceiling_effective": { "$ref": "#/$defs/effort" },
+        "effort_in_slug": { "type": "boolean" },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "input_tokens": { "type": "integer", "exclusiveMinimum": 0 },
+            "reprices_whole_request_above": { "type": "boolean" }
+          }
+        },
+        "price_per_mtok": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "in": { "type": "number", "minimum": 0 },
+            "out": { "type": "number", "minimum": 0 },
+            "in_over_cliff": { "type": "number", "minimum": 0 },
+            "out_over_cliff": { "type": "number", "minimum": 0 }
+          }
+        },
+        "price_note": { "type": "string", "minLength": 1 },
+        "price_band": { "$ref": "#/$defs/priceBand" },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        },
+        "caveats": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/absoluteUrl" }
+        },
+        "rejected_for": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/className" },
+          "description": "Classes whose eval gate this snapshot failed. Facts stay true, so the entry stays; the candidate report stops proposing it."
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        },
+        "vendor_allow": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/vendor" }
+        },
+        "vendor_distinct_from": {
+          "const": "author",
+          "errorCode": "unsupported_vendor_distinction",
+          "description": "Evaluated against --author-vendor at call time. Absence of that input is author_vendor_required (S10), never a silent assume."
+        },
+        "effort_floor": { "$ref": "#/$defs/effort" },
+        "effort_default": { "$ref": "#/$defs/effort" },
+        "price_ceiling_band": { "$ref": "#/$defs/priceBand" },
+        "auth_mode": { "$ref": "#/$defs/authMode" },
+        "forbid": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/catalogId" }
+        },
+        "inherit_allowed": { "type": "boolean" },
+        "scope": {
+          "enum": ["surface_only"],
+          "errorCode": "unknown_scope"
+        },
+        "not_a_reviewer": { "type": "boolean" },
+        "invoke_only_on_explicit_human_direction": { "type": "boolean" },
+        "eval_gate": { "type": "string", "minLength": 1 }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug"],
+      "properties": {
+        "slug": { "$ref": "#/$defs/catalogId" },
+        "effort": { "$ref": "#/$defs/effort" },
+        "effort_map": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "routine": { "$ref": "#/$defs/effort" },
+            "risk_path": { "$ref": "#/$defs/effort" }
+          }
+        },
+        "fallbacks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/catalogId" }
+        },
+        "alternates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/catalogId" }
+        },
+        "extra_args": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "fallbackRung": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["harness", "class"],
+      "properties": {
+        "harness": { "$ref": "#/$defs/harness" },
+        "class": { "$ref": "#/$defs/className" },
+        "scope": { "enum": ["surface_only"] },
+        "flag_if_same_vendor_as_author": { "type": "boolean" }
+      }
+    },
+    "classEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extends": { "$ref": "#/$defs/className" },
+        "contract": { "$ref": "#/$defs/contract" },
+        "bindings": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/harness" },
+          "additionalProperties": { "$ref": "#/$defs/binding" }
+        },
+        "fallback_rungs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fallbackRung" }
+        }
+      },
+      "anyOf": [
+        { "required": ["contract"] },
+        { "required": ["extends"] }
+      ]
+    },
+    "pinEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug", "never_bump", "reason"],
+      "properties": {
+        "slug": { "$ref": "#/$defs/catalogId" },
+        "effort": { "$ref": "#/$defs/effort" },
+        "never_bump": {
+          "const": true,
+          "errorCode": "pin_must_declare_never_bump"
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "retiredSlug": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["slug", "reason"],
+          "properties": {
+            "slug": { "type": "string", "minLength": 1 },
+            "reason": { "type": "string", "minLength": 1 },
+            "retired_for": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/className" },
+              "description": "Scoped retirement: the snapshot remains a factual catalog entry and may stay explicitly bound elsewhere, but it is dead as a binding for these classes and is flagged wherever it appears in prose."
+            }
+          }
+        }
+      ]
+    },
+    "overlay": {
+      "$comment": "Project overlay contract (.agent/model-registry.local.yaml). An overlay may add classes, tighten constraints, and add pins; it may never loosen a global constraint, redefine a slug, or introduce a slug absent from the catalog. Those three are semantic checks the resolver performs against the loaded global registry — this schema only fixes the shape.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["extends"],
+      "properties": {
+        "extends": {
+          "const": "global",
+          "errorCode": "overlay_must_extend_global"
+        },
+        "classes": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/className" },
+          "additionalProperties": { "$ref": "#/$defs/overlayClassEntry" }
+        },
+        "pins": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/className" },
+          "additionalProperties": { "$ref": "#/$defs/pinEntry" }
+        },
+        "raw_slug_allowlist_extra": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "overlayClassEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extends": { "$ref": "#/$defs/className" },
+        "contract": { "$ref": "#/$defs/contract" },
+        "constraints": {
+          "$ref": "#/$defs/contract",
+          "description": "Tightening deltas applied to an already-global class. Loosening is rejected by the resolver."
+        },
+        "bindings": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/harness" },
+          "additionalProperties": { "$ref": "#/$defs/binding" }
+        },
+        "fallback_rungs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fallbackRung" }
+        }
+      }
+    }
+  }
+}

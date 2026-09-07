@@ -30,6 +30,12 @@ full write-up in [`development-lifecycle.md`](core/.agent/docs/development-lifec
 ## What's actually in here
 
 ```
+.agent/                template of a registry home — copy, fill catalog/bindings
+  INSTANTIATE.md       how an adopter writes their own drive/workspace-root registry
+  model-registry.template.yaml
+  docs/model-classes.md
+  schema/
+  tools/               thin wrappers + slug-free PowerShell module
 core/
   AGENTS.md            operating model, priority hierarchy, execution contract
   GUARDRAILS.md        the SIGNs — safety constraints, each from a real incident
@@ -45,8 +51,8 @@ core/
     context/           empty seeds: known-issues.yaml, meu-status.yaml, grouping/
     schemas/           reflection.v1.yaml, review-verdict.schema.json
   tools/               issue_triage + meu_status CLIs, Invoke-CodexDispatch.ps1/.sh
-  .cursor/agents/      Cursor Task subtypes: {{PROJECT_NAME}}-builder / -verifier
-  .claude/agents/      Claude Code Agent/Task defs (same pair; different model pins)
+  .cursor/agents/      AUTOGEN templates: {{PROJECT_NAME}}-builder / -verifier
+  .claude/agents/      AUTOGEN templates (same pair)
   templates/           plan, task, handoff, review, reflection, BUILD_PLAN-STUB
 scripts/
   instantiate.py       fill {{PLACEHOLDER}} tokens with your project's values (adopters run this)

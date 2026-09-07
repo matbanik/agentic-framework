@@ -128,8 +128,9 @@ Open `.agent/docs/harness-profiles.md`.
    it from its own tool surface (e.g. Cursor `Task` subtypes, Claude Code Agent/Task). Directory
    presence of `.cursor/agents/` or `.claude/agents/` is **not** a detection signal — both may
    exist while only one driver is active. If uncertain → `none`.
-6. If `fresh_worker` is set: load `.agent/skills/subagent-delegation/SKILL.md`, pin builder/verifier
-   models (A9), and fill `verification-log.md` after a live smoke (readonly verifier first; builder
+6. If `fresh_worker` is set: load `.agent/skills/subagent-delegation/SKILL.md`, bind
+   builder/verifier **classes** in the registry you instantiate in Step 4 (A9/A10),
+   and fill `verification-log.md` after a live smoke (readonly verifier first; builder
    write-route before claiming write-capable delegation).
 
 > **The rule that makes this portable: branch on a capability flag, never on a harness name.**
@@ -137,7 +138,20 @@ Open `.agent/docs/harness-profiles.md`.
 
 ---
 
-## Step 4 — Configure the reviewer chain (or replace it)
+## Step 4 — Instantiate the registry, then configure the reviewer chain
+
+Copy the package-root `.agent/` (a sibling of `core/`, `scripts/`, and `README.md`)
+to the live home you choose — a **drive-root** `.agent/` shared by several repos, or
+a **workspace-root** `.agent/` if this project owns the catalog. Fill `catalog` and
+`bindings` with the snapshots *your* harnesses accept, then compile and run the
+checker.
+
+The mechanics — locate order, fill list, wrappers, validation, overlays, and
+what not to do — live in [`.agent/INSTANTIATE.md`](.agent/INSTANTIATE.md). Follow
+that file; do not recopy its steps into this guide. `core/.agent/` is the
+in-package instruction copy. Do not instantiate into it.
+
+### Reviewer chain
 
 Open `.agent/docs/model-routing.md`.
 

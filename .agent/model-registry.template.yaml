@@ -1,0 +1,142 @@
+---
+# Model Capability Registry — TEMPLATE.
+#
+# This file is the shape of a registry home, not a live registry. Classes are
+# capability contracts. Bindings stay empty until an adopter fills them with
+# the snapshot ids their own harnesses actually accept. Catalog, pins, and
+# retired_slugs stay empty for the same reason: a package whose refresh cycle
+# is delete-and-recopy must not carry one machine's pin state.
+#
+# Copy this file to model-registry.yaml in your drive-root or workspace-root
+# `.agent/`, then follow INSTANTIATE.md. The unfilled template does not pass
+# schema validation (`catalog` requires at least one entry) — that is
+# intentional.
+
+schema_version: 1
+updated: '2026-09-05'
+bump_gate: human
+
+catalog: {}
+
+classes:
+
+  coordinator:
+    contract:
+      capabilities: [orchestration, deep_reasoning, agentic_exec]
+      effort_default: high
+    bindings: {}
+
+  builder:
+    contract:
+      capabilities: [agentic_exec, bulk_edit]
+      effort_default: medium
+      # `high` so both a cheap mechanical pin and a stronger Cursor pin can
+      # satisfy the class. A `medium` ceiling rejects the stronger pin.
+      price_ceiling_band: high
+      inherit_allowed: false
+    bindings: {}
+
+  # A separate class, not an alias, so the verifier can diverge from the
+  # builder later without touching any caller.
+  verifier:
+    extends: builder
+
+  router:
+    contract:
+      capabilities: [classification]
+      effort_default: low
+      price_ceiling_band: low
+    bindings: {}
+
+  independent_reviewer:
+    contract:
+      capabilities: [code_review, agentic_exec, read_only_sandbox]
+      vendor_distinct_from: author
+      effort_floor: medium
+      effort_default: high
+      price_ceiling_band: high
+      auth_mode: chatgpt-plan
+    bindings: {}
+    fallback_rungs:
+      - harness: gemini-cli
+        class: surface_orchestrator
+        scope: surface_only
+      - harness: claude-p
+        class: coordinator
+        flag_if_same_vendor_as_author: true
+
+  checklist_validator:
+    contract:
+      capabilities: [checklist_review]
+      effort_default: medium
+      price_ceiling_band: low
+    bindings: {}
+
+  surface_orchestrator:
+    contract:
+      capabilities: [surface_edit]
+      effort_default: high
+      scope: surface_only
+      price_ceiling_band: low
+    bindings: {}
+
+  isolated_worker:
+    contract:
+      capabilities: [agentic_exec]
+      effort_default: medium
+      not_a_reviewer: true
+    bindings: {}
+
+  architecture_single_shot:
+    contract:
+      capabilities: [very_large_single_shot]
+      effort_default: high
+      invoke_only_on_explicit_human_direction: true
+    bindings: {}
+
+  translator_prose:
+    contract:
+      capabilities: [long_form_prose]
+      vendor_allow: [openai]
+      effort_floor: high
+      effort_default: high
+      auth_mode: chatgpt-plan
+    bindings: {}
+
+  image_generator:
+    contract:
+      capabilities: [image_gen]
+      auth_mode: chatgpt-plan
+    bindings: {}
+
+  creative_prose:
+    contract:
+      capabilities: [creative_prose]
+      vendor_allow: [anthropic]
+      effort_default: medium
+    bindings: {}
+
+pins: {}
+
+raw_slug_allowlist:
+  - '**/docs/execution/plans/20*/**'
+  - '**/.agent/plans/20*/**'
+  - '**/.agent/context/handoffs/**'
+  - '**/.agent/context/sessions/**'
+  - '**/.agent/context/grouping/**'
+  - '**/docs/execution/reflections/**'
+  - '**/docs/execution/metrics.md'
+  - '**/_archive/**'
+  - '**/_inspiration/**'
+  - '**/tests/**/fixtures/**'
+  - '**/*.verdict.json'
+  - '**/meu-status.yaml'
+  - '**/known-issues.yaml'
+  - '**/known-issues-archive.md'
+  - '**/.agent/skills/subagent-delegation/verification-log.md'
+  - '**/.agent/skills/mcp-audit/resources/baseline-snapshot.json'
+  - '**/.agent/schemas/headroom-standalone-*.json'
+  - '**/.agent/context/MCP/**'
+  - 'C:/Temp/**'
+
+retired_slugs: []
