@@ -15,7 +15,9 @@
   - claude CLI in PATH (npm global)
   - agy CLI at $env:LOCALAPPDATA\agy\bin\agy.exe (version ≥ 1.1.1; stdout capture verified on 1.1.5)
   - All CLIs authenticated
-  - agy model set to "Gemini 3.5 Flash (High)" via TUI /model (or --model)
+  - agy model set to the `surface_orchestrator` binding for `gemini-cli` via TUI
+    /model (or --model); resolve it with
+    `Resolve-AgentModel -Class surface_orchestrator -Harness gemini-cli`
   - Stuck/broken MCP servers disabled — they block agy -p even for trivial prompts
 #>
 
@@ -31,6 +33,45 @@ $script:PassCount = 0
 $script:FailCount = 0
 $script:SkipCount = 0
 $script:Results = @()
+
+# Model ids come from the live registry home (see .agent/INSTANTIATE.md), not
+# from this script. A snapshot bump is one edit there; a test that named its
+# own model would keep dispatching to a retired one and report the failure as
+# a CLI defect.
+$script:RegistryModule = $null
+foreach ($candidate in @(
+        $(if ($env:AGENT_MODEL_REGISTRY) {
+            $override = $env:AGENT_MODEL_REGISTRY
+            if ((Test-Path -LiteralPath $override) -and (Get-Item -LiteralPath $override).PSIsContainer) {
+                Join-Path $override 'tools/ModelRegistry.psm1'
+            } else {
+                Join-Path (Split-Path -Parent $override) 'tools/ModelRegistry.psm1'
+            }
+        }),
+        'P:/.agent/tools/ModelRegistry.psm1',
+        $(if ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.agent/tools/ModelRegistry.psm1' })
+    )) {
+    if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+        $script:RegistryModule = (Resolve-Path -LiteralPath $candidate).Path
+        break
+    }
+}
+if (-not $script:RegistryModule) {
+    throw "registry_not_found: no ModelRegistry.psm1 at any S2 location"
+}
+Import-Module $script:RegistryModule -Force
+
+function Get-ClassModel {
+    param(
+        [Parameter(Mandatory)][string]$Class,
+        [Parameter(Mandatory)][string]$Harness
+    )
+    $resolved = Resolve-AgentModel -Class $Class -Harness $Harness
+    if (-not $resolved -or -not $resolved.Slug) {
+        throw "model registry could not resolve $Class on $Harness"
+    }
+    return $resolved.Slug
+}
 
 # --- Helpers ---
 
@@ -370,7 +411,8 @@ Return the complete report as markdown on stdout.
 # --- Test 4: Claude Creative Writing ---
 
 function Test-ClaudeCreativeWriting {
-    Write-TestHeader "Claude Code — Creative Writing (Opus 4.5)"
+    $model = Get-ClassModel -Class 'creative_prose' -Harness 'claude-p'
+    Write-TestHeader "Claude Code — Creative Writing ($model)"
 
     $outputFile = "$OutputDir\claude-writing-output.txt"
     $logFile = "$OutputDir\claude-writing-log.txt"
@@ -390,10 +432,10 @@ nature writer would.
 
     try {
         # Use cmd to pipe NUL to stdin
-        $cmdLine = "echo. | claude -p --model claude-opus-4-5-20251101 --permission-mode plan --output-format json --max-turns 5 --max-budget-usd 2 `"$($prompt -replace '"', '\"')`""
+        $cmdLine = "echo. | claude -p --model $model --permission-mode plan --output-format json --max-turns 5 --max-budget-usd 2 `"$($prompt -replace '"', '\"')`""
 
         $null | claude -p `
-            --model claude-opus-4-5-20251101 `
+            --model $model `
             --permission-mode plan `
             --output-format json `
             --max-turns 5 `

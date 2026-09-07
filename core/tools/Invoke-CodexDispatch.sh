@@ -6,7 +6,7 @@
 # Prefer this on macOS/Linux when pwsh is unavailable; otherwise either wrapper is valid.
 #
 # Placeholders (filled by scripts/instantiate.py):
-#   {{RECEIPTS_DIR}}  {{PROJECT_ROOT}}
+#   {{RECEIPTS_DIR}}  {{PROJECT_ROOT}}  {{PROJECT_NAME_UPPER}}
 #
 set -u
 set -o pipefail
@@ -16,7 +16,10 @@ SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SO
 MODE="ReviewReadOnly"
 REASONING_EFFORT="high"
 RETENTION="CompressOnSuccess"
-MODEL="gpt-5.6-sol"
+MODEL=""
+MODEL_GIVEN=0
+MODEL_CLASS="independent_reviewer"
+AUTHOR_VENDOR="${{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR:-}"
 PROMPT_FILE=""
 PROMPT_TEXT=""
 DISPATCH_ID=""
@@ -55,7 +58,11 @@ Common:
   --Mode ReviewReadOnly|ReviewWorkspace|FullAccess
   --ReasoningEffort medium|high|xhigh|max
   --Retention Keep|CompressOnSuccess|DeleteOnSuccess
-  --Model NAME
+  --Model NAME              (optional; omit to resolve -ModelClass from the registry)
+  --ModelClass NAME         (default: independent_reviewer)
+  --AuthorVendor VENDOR     (required for vendor_distinct_from: author;
+                             defaults to ${{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR},
+                             the same variable Invoke-CodexDispatch.ps1 reads)
   --DispatchId ID
   --OutputDir PATH          (must stay under {{RECEIPTS_DIR}})
   --OutputSchema PATH
@@ -82,7 +89,9 @@ while [[ $# -gt 0 ]]; do
     --Mode) MODE="${2:-}"; shift 2 ;;
     --ReasoningEffort) REASONING_EFFORT="${2:-}"; shift 2 ;;
     --Retention) RETENTION="${2:-}"; shift 2 ;;
-    --Model) MODEL="${2:-}"; shift 2 ;;
+    --Model) MODEL="${2:-}"; MODEL_GIVEN=1; shift 2 ;;
+    --ModelClass) MODEL_CLASS="${2:-}"; shift 2 ;;
+    --AuthorVendor) AUTHOR_VENDOR="${2:-}"; shift 2 ;;
     --PromptFile) PROMPT_FILE="${2:-}"; shift 2 ;;
     --PromptText) PROMPT_TEXT="${2:-}"; shift 2 ;;
     --DispatchId) DISPATCH_ID="${2:-}"; shift 2 ;;
@@ -218,11 +227,123 @@ fi
 if [[ -n "$PROMPT_TEXT" && -n "$PROMPT_FILE" ]]; then
   die "Cannot specify both --PromptText and --PromptFile."
 fi
-if [[ -z "$MODEL" ]]; then
+if [[ "$MODEL_GIVEN" -eq 1 && -z "$MODEL" ]]; then
   die "Model must be specified."
 fi
-if [[ ! "$MODEL" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+if [[ "$MODEL_GIVEN" -eq 1 && ! "$MODEL" =~ ^[a-zA-Z0-9.-]+$ ]]; then
   die "Invalid Model format."
+fi
+
+resolve_python() {
+  if [[ -n "${AGENT_RESOLVE_PYTHON:-}" ]]; then
+    echo "${AGENT_RESOLVE_PYTHON}"
+    return
+  fi
+  for candidate in python3 python py; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      echo "${candidate}"
+      return
+    fi
+  done
+}
+
+locate_resolver() {
+  if [[ -n "${AGENT_RESOLVE_SCRIPT:-}" ]]; then
+    echo "${AGENT_RESOLVE_SCRIPT}"
+    return
+  fi
+  local candidates=()
+  if [[ -n "${AGENT_MODEL_REGISTRY:-}" ]]; then
+    local override="${AGENT_MODEL_REGISTRY}"
+    if [[ -d "$override" ]]; then
+      candidates+=("${override}/tools/resolve_model.py")
+    else
+      candidates+=("$(dirname "$override")/tools/resolve_model.py")
+    fi
+  fi
+  candidates+=("P:/.agent/tools/resolve_model.py")
+  if [[ -n "${USERPROFILE:-}" ]]; then
+    candidates+=("${USERPROFILE}/.agent/tools/resolve_model.py")
+  fi
+  if [[ -n "${HOME:-}" ]]; then
+    candidates+=("${HOME}/.agent/tools/resolve_model.py")
+  fi
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -f "$c" ]]; then
+      echo "$c"
+      return
+    fi
+  done
+}
+
+PYTHON_BIN="$(resolve_python)"
+RESOLVER="$(locate_resolver)"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  die "registry_not_found: no interpreter available to read the resolver"
+fi
+if [[ -z "${RESOLVER}" || ! -f "${RESOLVER}" ]]; then
+  die "registry_not_found: no resolve_model.py at any S2 location"
+fi
+
+if [[ "$BENCHMARK_ISOLATION" -eq 1 ]]; then
+  PIN_SLUG="$("${PYTHON_BIN}" -c "import json, os, pathlib, sys
+candidates = []
+env = os.environ.get('AGENT_MODEL_REGISTRY')
+if env:
+    p = pathlib.Path(env)
+    candidates.append(p if p.suffix.lower() == '.json' else p / 'model-registry.json')
+candidates.append(pathlib.Path('P:/.agent/model-registry.json'))
+home = os.environ.get('USERPROFILE') or os.environ.get('HOME')
+if home:
+    candidates.append(pathlib.Path(home) / '.agent' / 'model-registry.json')
+for c in candidates:
+    if c.is_file():
+        doc = json.loads(c.read_text(encoding='utf-8'))
+        pin = (doc.get('pins') or {}).get('benchmark_headroom_baseline') or {}
+        slug = pin.get('slug')
+        if not slug:
+            sys.exit('unknown_pin: benchmark_headroom_baseline')
+        print(slug)
+        break
+else:
+    sys.exit('registry_not_found: no compiled registry for pin lookup')
+")" || die "registry_not_found: cannot read benchmark_headroom_baseline pin"
+  if [[ "$MODEL_GIVEN" -eq 0 ]]; then
+    MODEL="$PIN_SLUG"
+  fi
+else
+  # --project names the repo whose overlay governs this dispatch. Both wrappers
+  # dispatch the same reviews, so an overlay read by only one of them would make
+  # the answer depend on which shell the caller happened to be in.
+  RESOLVE_ARGS=(
+    resolve "${MODEL_CLASS}"
+    --harness codex-cli
+    --format env
+    --project "{{PROJECT_ROOT}}"
+  )
+  if [[ -n "${AUTHOR_VENDOR}" ]]; then
+    RESOLVE_ARGS+=(--author-vendor "${AUTHOR_VENDOR}")
+  fi
+  if [[ "${MODEL_GIVEN}" -eq 1 ]]; then
+    RESOLVE_ARGS+=(--slug "${MODEL}")
+  fi
+  if [[ -n "${REASONING_EFFORT}" ]]; then
+    RESOLVE_ARGS+=(--effort "${REASONING_EFFORT}")
+  fi
+  if ! RESOLVED="$("${PYTHON_BIN}" "${RESOLVER}" "${RESOLVE_ARGS[@]}")"; then
+    exit 1
+  fi
+  while IFS='=' read -r key value; do
+    value="${value%$'\r'}"
+    case "${key}" in
+      AGENT_MODEL_SLUG) MODEL="${value}" ;;
+      AGENT_MODEL_EFFORT) REASONING_EFFORT="${value}" ;;
+    esac
+  done <<< "${RESOLVED}"
+  if [[ -z "$MODEL" ]]; then
+    die "registry_not_found: resolver returned no slug for ${MODEL_CLASS}"
+  fi
 fi
 
 RECEIPTS_ROOT="$(physical_path "{{RECEIPTS_DIR}}")"
@@ -231,7 +352,7 @@ REPO_ROOT="$(physical_path "{{PROJECT_ROOT}}")"
 if [[ "$BENCHMARK_ISOLATION" -eq 1 ]]; then
   [[ "$MODE" == "ReviewReadOnly" ]] || die "BenchmarkIsolation requires Mode ReviewReadOnly."
   [[ "$REASONING_EFFORT" == "medium" ]] || die "BenchmarkIsolation requires ReasoningEffort medium."
-  [[ "$MODEL" == "gpt-5.6-sol" ]] || die "BenchmarkIsolation requires Model gpt-5.6-sol."
+  [[ "$MODEL" == "$PIN_SLUG" ]] || die "BenchmarkIsolation requires Model ${PIN_SLUG}."
   [[ "$USE_SEARCH" -eq 0 ]] || die "BenchmarkIsolation forbids search."
   [[ -n "$BENCHMARK_CONTEXT_RECEIPT" ]] || die "BenchmarkIsolation requires BenchmarkContextReceipt."
   [[ "$BENCHMARK_CONTEXT_SHA256" =~ ^[0-9a-f]{64}$ ]] || die "BenchmarkIsolation requires a lowercase SHA-256 context hash."

@@ -12,8 +12,26 @@ param(
     [ValidateSet('Keep', 'CompressOnSuccess', 'DeleteOnSuccess')]
     [string]$Retention = 'CompressOnSuccess',
 
+    # No default. Omitting -Model asks the registry which snapshot serves
+    # -ModelClass; passing -Model '' is a caller who said "use this" and handed
+    # over nothing, and stays the failure it always was. The two are told apart
+    # by $PSBoundParameters.ContainsKey('Model'), not by emptiness.
     [Parameter(Mandatory = $false)]
-    [string]$Model = 'gpt-5.6-sol',
+    [string]$Model,
+
+    # The capability class this dispatch needs. The live registry home
+    # (see .agent/INSTANTIATE.md) is the only place a class is bound to a
+    # concrete snapshot, so a model bump is one edit there and no edit here.
+    [Parameter(Mandatory = $false)]
+    [string]$ModelClass = 'independent_reviewer',
+
+    # Vendor of the agent that authored the work under review. Required for any
+    # class declaring `vendor_distinct_from: author`. Only the dispatching
+    # session knows this, so the wrapper never guesses it — absence is the named
+    # error `author_vendor_required`. A session may set
+    # {{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR once instead of passing it per call.
+    [Parameter(Mandatory = $false)]
+    [string]$AuthorVendor,
 
     [Parameter(Mandatory = $false)]
     [string]$PromptFile,
@@ -276,13 +294,110 @@ if (-not [string]::IsNullOrEmpty($PromptText) -and -not [string]::IsNullOrEmpty(
 }
 
 # Validate Model
-if ([string]::IsNullOrEmpty($Model)) {
+$modelWasGiven = $PSBoundParameters.ContainsKey('Model')
+if ($modelWasGiven -and [string]::IsNullOrEmpty($Model)) {
     [Console]::Error.WriteLine("Model must be specified.")
     exit 1
 }
-if ($Model -notmatch '^[a-zA-Z0-9.-]+$') {
+if ($modelWasGiven -and $Model -notmatch '^[a-zA-Z0-9.-]+$') {
     [Console]::Error.WriteLine("Invalid Model format.")
     exit 1
+}
+
+if ([string]::IsNullOrWhiteSpace($AuthorVendor) -and $env:{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR) {
+    $AuthorVendor = $env:{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR
+}
+
+$registryModulePath = $null
+$moduleCandidates = [System.Collections.Generic.List[string]]::new()
+if ($env:AGENT_MODEL_REGISTRY) {
+    $override = $env:AGENT_MODEL_REGISTRY
+    if ((Test-Path -LiteralPath $override) -and (Get-Item -LiteralPath $override).PSIsContainer) {
+        $moduleCandidates.Add((Join-Path $override 'tools/ModelRegistry.psm1'))
+    } else {
+        $overrideHome = Split-Path -Parent $override
+        $moduleCandidates.Add((Join-Path $overrideHome 'tools/ModelRegistry.psm1'))
+    }
+}
+$moduleCandidates.Add('P:/.agent/tools/ModelRegistry.psm1')
+if ($env:USERPROFILE) {
+    $moduleCandidates.Add((Join-Path $env:USERPROFILE '.agent/tools/ModelRegistry.psm1'))
+}
+foreach ($candidate in $moduleCandidates) {
+    if (Test-Path -LiteralPath $candidate) {
+        $registryModulePath = (Resolve-Path -LiteralPath $candidate).Path
+        break
+    }
+}
+if (-not $registryModulePath) {
+    [Console]::Error.WriteLine(
+        "registry_not_found: no ModelRegistry.psm1 at any S2 location: $($moduleCandidates -join ', ')")
+    exit 1
+}
+Import-Module $registryModulePath -Force -ErrorAction Stop
+
+$modelClassApplied = $ModelClass
+$effortClamped = $false
+$registryVersion = $null
+$registrySha256 = $null
+$overlaySha256 = $null
+$overlayPath = $null
+$pin = $null
+
+# The project whose overlay governs this dispatch. A project overlay is the only
+# place an adopter can tighten a shared class, and it binds nothing unless the
+# resolution names the project. The wrapper knows which repo it was instantiated
+# into, so nothing has to be passed in and no caller can forget to.
+$dispatchProjectRoot = '{{PROJECT_ROOT}}'
+
+if ($BenchmarkIsolation) {
+    try {
+        $pin = Get-AgentModelPin -Name 'benchmark_headroom_baseline'
+    }
+    catch {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit 1
+    }
+    $modelClassApplied = 'pin:benchmark_headroom_baseline'
+    $registryVersion = $pin.registry_version
+    $registrySha256 = $pin.registry_sha256
+    $modelResolution = if ($modelWasGiven) { 'explicit_override' } else { 'pin' }
+    if (-not $modelWasGiven) {
+        $Model = $pin.slug
+    }
+}
+else {
+    $resolveArgs = @{
+        Class   = $ModelClass
+        Harness = 'codex-cli'
+        Project = $dispatchProjectRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($AuthorVendor)) {
+        $resolveArgs['AuthorVendor'] = $AuthorVendor
+    }
+    if ($modelWasGiven) {
+        $resolveArgs['Slug'] = $Model
+    }
+    if ($ReasoningEffort) {
+        $resolveArgs['Effort'] = $ReasoningEffort
+    }
+
+    try {
+        $resolved = Resolve-AgentModel @resolveArgs
+    }
+    catch {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit 1
+    }
+
+    $Model = $resolved.slug
+    $ReasoningEffort = $resolved.effort
+    $effortClamped = [bool]$resolved.effort_clamped
+    $modelResolution = $resolved.resolution
+    $registryVersion = $resolved.registry_version
+    $registrySha256 = $resolved.registry_sha256
+    $overlaySha256 = $resolved.overlay_sha256
+    $overlayPath = $resolved.overlay_path
 }
 
 # Benchmark-specific scalar and lexical path checks run before generic
@@ -297,8 +412,9 @@ if ($BenchmarkIsolation) {
         [Console]::Error.WriteLine("BenchmarkIsolation requires ReasoningEffort medium.")
         exit 1
     }
-    if ($Model -ne 'gpt-5.6-sol') {
-        [Console]::Error.WriteLine("BenchmarkIsolation requires Model gpt-5.6-sol.")
+    if ($Model -ne $pin.slug) {
+        [Console]::Error.WriteLine(
+            "BenchmarkIsolation requires Model $($pin.slug).")
         exit 1
     }
     if ($UseSearch) {
@@ -871,7 +987,22 @@ $workingAgentsSha256 = if (Test-Path -LiteralPath $workingAgentsPath -PathType L
 $statusManifest = [ordered]@{
     schema_version = "dispatch-status.v1"
     dispatch_id = $DispatchId
+    # `model` keeps recording the concrete slug: a receipt has to stay readable
+    # years later without a registry lookup. The fields below record *how* that
+    # slug was chosen, so a past dispatch can still be explained after the
+    # registry has moved on.
     model = $Model
+    model_class = $modelClassApplied
+    author_vendor = if ([string]::IsNullOrWhiteSpace($AuthorVendor)) { $null } else { $AuthorVendor }
+    registry_version = $registryVersion
+    registry_sha256 = $registrySha256
+    overlay_sha256 = $overlaySha256
+    # Which project's policy governed the resolution. Without the path a reader
+    # cannot tell a dispatch bound by this repo's overlay from one bound only by
+    # whatever the global registry said that day.
+    overlay_path = $overlayPath
+    resolution = $modelResolution
+    effort_clamped = $effortClamped
     mode = $Mode
     sandbox = $sandboxLevel
     reasoning_effort = $ReasoningEffort
