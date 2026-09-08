@@ -29,7 +29,13 @@ param(
         'opencode-validation'
     )]
     [string]$Test = 'all',
-    [string]$OutputDir = '{{RECEIPTS_DIR}}\dispatch-tests\opencode',
+    # No baked default on purpose -- see the identical note in Test-CliDispatch.ps1.
+    # The literal '{{RECEIPTS_DIR}}\...' default meant running this in the packaged
+    # tree created a directory NAMED `{{RECEIPTS_DIR}}` inside core/ and wrote live
+    # CLI receipts into it, whose raw model slugs then failed the Tier-1 release gate.
+    # Resolution order is -OutputDir, then $env:RECEIPTS_DIR; Get-OutputDir fails
+    # closed rather than inventing a location (V31, ADOPTION-QUESTIONS.md F3).
+    [string]$OutputDir,
     [switch]$VerboseOutput
 )
 
@@ -95,6 +101,39 @@ function Ensure-Dir {
 function Clean-File {
     param([string]$Path)
     if (Test-Path $Path) { Remove-Item $Path -Force }
+}
+
+# Lazy, fail-closed receipts path. Returns $null and sets $script:OutputDirError
+# rather than throwing, so one bad path does not abort the remaining arms of a
+# `-Test all` run. Callers report it as a FAIL, never a SKIP: a receipts path that
+# cannot be used is a broken harness, and "could not run" must not read as a pass.
+$script:ResolvedOutputDir = $null
+$script:OutputDirError = $null
+function Get-OutputDir {
+    if ($script:ResolvedOutputDir) { return $script:ResolvedOutputDir }
+
+    $candidate = $OutputDir
+    if ([string]::IsNullOrWhiteSpace($candidate) -and -not [string]::IsNullOrWhiteSpace($env:RECEIPTS_DIR)) {
+        $candidate = Join-Path $env:RECEIPTS_DIR 'dispatch-tests/opencode'
+    }
+    if ([string]::IsNullOrWhiteSpace($candidate)) {
+        $script:OutputDirError = "receipts_dir_required: no -OutputDir and no RECEIPTS_DIR. " +
+            "Set RECEIPTS_DIR to an absolute directory outside the repo and outside any " +
+            "cloud-sync tree (ADOPTION-QUESTIONS.md F3/F3b), or pass -OutputDir."
+        return $null
+    }
+    # A path-shaped string that is not a path. Creating it SUCCEEDS, which is the
+    # whole reason this needs an explicit check.
+    if ($candidate -match '\{\{') {
+        $script:OutputDirError = "uninstantiated_output_dir: '$candidate' still contains a " +
+            "{{PLACEHOLDER}}. Creating it would put a literally-named directory in the " +
+            "package tree. Run instantiate.py first, or pass a real -OutputDir."
+        return $null
+    }
+
+    Ensure-Dir -Path $candidate
+    $script:ResolvedOutputDir = $candidate
+    return $candidate
 }
 
 function Get-Preview {
@@ -178,7 +217,9 @@ function Test-OpenCodeAuth {
 
 function Test-OpenCodeHello {
     Write-TestHeader -Name "OpenCode CLI - Hello World (default model)"
-    $outputFile = Join-Path $OutputDir "opencode-hello-output.txt"
+    $dir = Get-OutputDir
+    if (-not $dir) { Write-TestResult -Name "OpenCode Hello" -Passed $false -Msg $script:OutputDirError -Duration 0; return }
+    $outputFile = Join-Path $dir "opencode-hello-output.txt"
     Clean-File -Path $outputFile
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -210,7 +251,9 @@ function Test-OpenCodeHello {
 
 function Test-OpenCodeBedrockClaude {
     Write-TestHeader -Name "OpenCode CLI - Bedrock Claude Opus 5"
-    $outputFile = Join-Path $OutputDir "opencode-bedrock-claude-output.txt"
+    $dir = Get-OutputDir
+    if (-not $dir) { Write-TestResult -Name "Bedrock Claude" -Passed $false -Msg $script:OutputDirError -Duration 0; return }
+    $outputFile = Join-Path $dir "opencode-bedrock-claude-output.txt"
     Clean-File -Path $outputFile
 
     $prompt = 'You are a validation agent. Evaluate this Python function: "def add(a, b): return a + b". Reply with exactly: VERDICT: PASS, then a 1-line summary.'
@@ -264,7 +307,9 @@ function Test-OpenCodeBedrockGPT {
     Write-TestHeader -Name "OpenCode CLI - Bedrock GPT-5.5"
     Write-TestInfo -Msg "GPT-5.5 GA on Amazon Bedrock since June 1, 2026 (model: openai.gpt-5.5)"
 
-    $outputFile = Join-Path $OutputDir "opencode-bedrock-gpt-output.txt"
+    $dir = Get-OutputDir
+    if (-not $dir) { Write-TestResult -Name "Bedrock GPT-5.5" -Passed $false -Msg $script:OutputDirError -Duration 0; return }
+    $outputFile = Join-Path $dir "opencode-bedrock-gpt-output.txt"
     Clean-File -Path $outputFile
 
     $prompt = 'You are a validation agent. Evaluate this Python function: "def multiply(a, b): return a * b". Reply with exactly: VERDICT: PASS, then a 1-line summary.'
@@ -298,7 +343,9 @@ function Test-OpenCodeBedrockGPT {
 
 function Test-OpenCodeJsonOutput {
     Write-TestHeader -Name "OpenCode CLI - JSON Output (--format json)"
-    $outputFile = Join-Path $OutputDir "opencode-json-output.txt"
+    $dir = Get-OutputDir
+    if (-not $dir) { Write-TestResult -Name "JSON Output" -Passed $false -Msg $script:OutputDirError -Duration 0; return }
+    $outputFile = Join-Path $dir "opencode-json-output.txt"
     Clean-File -Path $outputFile
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -338,7 +385,9 @@ function Test-OpenCodeJsonOutput {
 
 function Test-OpenCodeDirFlag {
     Write-TestHeader -Name "OpenCode CLI - Working Directory (--dir)"
-    $outputFile = Join-Path $OutputDir "opencode-dir-output.txt"
+    $dir = Get-OutputDir
+    if (-not $dir) { Write-TestResult -Name "Dir Flag" -Passed $false -Msg $script:OutputDirError -Duration 0; return }
+    $outputFile = Join-Path $dir "opencode-dir-output.txt"
     Clean-File -Path $outputFile
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -370,8 +419,10 @@ function Test-OpenCodeDirFlag {
 
 function Test-OpenCodePermissions {
     Write-TestHeader -Name "OpenCode CLI - Auto-Approve Permissions"
-    $outputFile = Join-Path $OutputDir "opencode-perms-output.txt"
-    $testFile = Join-Path $OutputDir "opencode-perm-test-write.txt"
+    $dir = Get-OutputDir
+    if (-not $dir) { Write-TestResult -Name "Permissions" -Passed $false -Msg $script:OutputDirError -Duration 0; return }
+    $outputFile = Join-Path $dir "opencode-perms-output.txt"
+    $testFile = Join-Path $dir "opencode-perm-test-write.txt"
     Clean-File -Path $outputFile
     Clean-File -Path $testFile
 
@@ -406,7 +457,9 @@ function Test-OpenCodePermissions {
 
 function Test-OpenCodeValidation {
     Write-TestHeader -Name "OpenCode CLI - Validation Dispatch (full integration)"
-    $outputFile = Join-Path $OutputDir "opencode-validation-output.txt"
+    $dir = Get-OutputDir
+    if (-not $dir) { Write-TestResult -Name "Validation Dispatch" -Passed $false -Msg $script:OutputDirError -Duration 0; return }
+    $outputFile = Join-Path $dir "opencode-validation-output.txt"
     Clean-File -Path $outputFile
 
     $prompt = 'You are a validation agent. Review this function for correctness: "def calc_wash_sale(loss, replacement, original): return loss if replacement >= original else loss * (replacement / original)". Report: VERDICT (PASS/CHANGES_REQUIRED), FINDINGS (numbered, severity H/M/L), SUMMARY (one paragraph).'
@@ -445,13 +498,15 @@ Write-Host "===========================================================" -Foregr
 Write-Host "   OPENCODE CLI - BEDROCK DISPATCH PoC TEST SUITE          " -ForegroundColor Magenta
 Write-Host "===========================================================" -ForegroundColor Magenta
 Write-Host ""
-Write-Host "  Output dir: $OutputDir"
+Write-Host "  Output dir: $(if ($OutputDir) { $OutputDir } elseif ($env:RECEIPTS_DIR) { Join-Path $env:RECEIPTS_DIR 'dispatch-tests/opencode' } else { '<unset - dispatch arms will fail closed>' })"
 Write-Host "  Test scope: $Test"
 Write-Host "  Bedrock Claude: $script:BedrockClaudeModel"
 Write-Host "  Bedrock GPT:    $script:BedrockGPTModel"
 Write-Host ""
 
-Ensure-Dir -Path $OutputDir
+# Deliberately NOT created here. The install and auth arms write no receipts, so
+# creating the directory up front made every run -- including a bare
+# `-Test opencode-install` -- materialise it, placeholder name and all.
 
 $installed = $false
 

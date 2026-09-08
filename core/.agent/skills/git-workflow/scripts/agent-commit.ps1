@@ -326,8 +326,23 @@ else {
     # 4c: OpenAPI spec drift check
     Write-Host "  [4c] OpenAPI spec drift check..." -ForegroundColor Yellow
     if (Test-Path "tools/export_openapi.py") {
-        $null = uv run python tools/export_openapi.py -o openapi.committed.json 2>&1
-        $specDiff = git diff --name-only openapi.committed.json 2>$null
+        # "Regenerate rather than fail" applies to spec *drift*, not to the regeneration
+        # itself. Discarding the exporter's status into $null meant a crashed exporter
+        # produced no diff, and no diff was announced as "up to date" -- the strongest
+        # available claim, made at the exact moment the check had learned nothing.
+        $exportOutput = uv run python tools/export_openapi.py -o openapi.committed.json 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  FAILED: OpenAPI export exited $LASTEXITCODE, so spec drift is unknown:" -ForegroundColor Red
+            Write-Host $exportOutput -ForegroundColor Red
+            if ($LASTEXITCODE -eq 3) { exit 3 }
+            exit 1
+        }
+        $specDiff = git diff --name-only openapi.committed.json 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  FAILED: git diff on openapi.committed.json exited $LASTEXITCODE, so drift is unknown:" -ForegroundColor Red
+            Write-Host $specDiff -ForegroundColor Red
+            exit 1
+        }
         if ($specDiff) {
             Write-Host "  OpenAPI spec was stale — auto-regenerated and staged." -ForegroundColor DarkYellow
             git add openapi.committed.json

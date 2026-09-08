@@ -49,14 +49,31 @@ core/
     skills/            issue-triage, meu-status, deep-research-prompting,
                        subagent-delegation, cli-dispatch, ...
     context/           empty seeds: known-issues.yaml, meu-status.yaml, grouping/
-    schemas/           reflection.v1.yaml, review-verdict.schema.json
-  tools/               issue_triage + meu_status CLIs, Invoke-CodexDispatch.ps1/.sh
+    schemas/           reflection.v1.yaml, review-verdict.schema.json + .v2.json
+  tools/               preflight.sh (run first: 8 environment checks — receipts dir, rg
+                       proven able to match, python + deps, registry home, codex version),
+                       issue_triage + meu_status CLIs, Invoke-CodexDispatch.ps1/.sh,
+                       review_ledger.py (bounded review loop: budgets, mechanism stop),
+                       validate_closeout_artifacts.py + lint_task_contract.py (the
+                       closeout and Task-Table gates the templates call)
   .cursor/agents/      AUTOGEN templates: {{PROJECT_NAME}}-builder / -verifier
   .claude/agents/      AUTOGEN templates (same pair)
   templates/           plan, task, handoff, review, reflection, BUILD_PLAN-STUB
 scripts/
   instantiate.py       fill {{PLACEHOLDER}} tokens with your project's values (adopters run this)
-  sanitize.py          the authoring tool that produced the placeholders (audit/re-gen)
+  sanitize.py          the authoring tool that produced the placeholders (audit/re-gen).
+                       `--verify` is the release gate, five checks with five exit codes:
+                       raw source slugs (2), model slugs (3/4/5), versioned model names
+                       in prose (6), reference integrity (7), and `tools/` command paths
+                       (8). All five run even after one fails.
+                       `--selftest` proves the prose-name gate can fail.
+  refcheck.py          two gates. (1) Reference integrity: every repo-relative path named
+                       in a packaged .md resolves to a shipped file, or is
+                       MANIFEST-EXCLUDED. (2) `--tools-only`: every `tools/<name>` a doc
+                       tells you to *run* is shipped or classified — the reference gate
+                       cannot see a path buried inside a command, which is how five
+                       absent tools once shipped past a clean run.
+                       `--selftest` proves both can fail; run it before trusting a clean run.
   placeholders.py      shared substitution rules · README.md — usage
 UPDATE-CHECKLIST.md    when/how to refresh this package from the source repo
 ```

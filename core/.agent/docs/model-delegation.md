@@ -24,7 +24,11 @@ The `builder` class (and `verifier`, which extends it for read-only validation) 
 The `coordinator` class holds planning, correctness-critical reasoning, and orchestration (resolve per harness via the registry).
 
 - Planning + FIC authoring + spec-sufficiency.
-- Domain / service correctness MEUs (broker adapters, dedup, identifier resolver, import routes, UoW lifecycle) — anything with real correctness or security risk.
+- Domain / service correctness MEUs — anything with real correctness or security
+  risk. The test is whether a wrong answer would be *silently* wrong rather than
+  loud: money and quantity arithmetic, identity resolution, dedup/merge rules,
+  adapters to external systems, transaction/unit-of-work boundaries, and
+  authorization decisions all qualify.
 - Implementor self-verification + pre-handoff review.
 
 ## How to delegate

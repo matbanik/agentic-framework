@@ -12,6 +12,10 @@ set -u
 set -o pipefail
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Sibling helpers are resolved against THIS file, not the working directory: the working
+# directory is the tree under review, which for a read-only review is not the tree this
+# wrapper was installed into.
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
 MODE="ReviewReadOnly"
 REASONING_EFFORT="high"
@@ -23,6 +27,18 @@ AUTHOR_VENDOR="${{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR:-}"
 PROMPT_FILE=""
 PROMPT_TEXT=""
 DISPATCH_ID=""
+# Review-loop bound. Exactly one of --LoopId / --NonReviewDispatch is required;
+# see the gate below and .agent/docs/verification-principles.md V41/V43.
+LOOP_ID=""
+NON_REVIEW_DISPATCH=0
+GATE_ONLY=0
+LEDGER_GATE_RESULT="not-applicable"
+# Which kind of review this is. An assertion, not a source: with --LoopId the kind comes
+# from the mode the ledger recorded at `begin`, and a --Kind that disagrees is exit 1.
+KIND=""
+LEDGER_MODE=""
+DISPATCH_KIND=""
+TIMEOUT_FLOOR_APPLIED=0
 OUTPUT_DIR="{{RECEIPTS_DIR}}/dispatch"
 OUTPUT_SCHEMA=""
 USE_SEARCH=0
@@ -54,6 +70,13 @@ Mirrors tools/Invoke-CodexDispatch.ps1 for macOS/Linux (bash).
 Required (exactly one):
   --PromptFile PATH | --PromptText TEXT
 
+Required (exactly one) -- the review-loop bound:
+  --LoopId ID               Bind this dispatch to a review loop. review_ledger.py
+                            is consulted before dispatching; if it refuses, this
+                            script exits 9 without spending anything.
+  --NonReviewDispatch       Declare that this is not an independent review, so no
+                            round is consumed. Recorded in status.json.
+
 Common:
   --Mode ReviewReadOnly|ReviewWorkspace|FullAccess
   --ReasoningEffort medium|high|xhigh|max
@@ -70,16 +93,32 @@ Common:
   --CodexExecutable PATH|NAME
   --FullAccessJustification TEXT   (required for FullAccess; ≥20 non-ws chars)
   --ApiKeyEnvVar NAME
-  --TimeoutSec N            (0 = derive from ReasoningEffort)
+  --Kind plan|execution|discovery|handoff|multi-handoff
+                            Assert the kind of review. Optional: with --LoopId the
+                            kind is read from the loop's recorded mode, and a --Kind
+                            that disagrees is exit 1. `execution` and `multi-handoff`
+                            carry a 2700s timeout floor.
+  --TimeoutSec N            (0 = derive from ReasoningEffort, then raise to the
+                             floor for this dispatch kind if there is one)
   --PostKillGraceSec N
   --MinCodexCliVersion x.y.z
   --UseSearch
   --Force
+  --GateOnly                Consult the ledger and exit without dispatching.
   --NoProcessTreeKill
   --SkipCodexVersionCheck
   --BenchmarkIsolation
   --BenchmarkContextReceipt PATH
   --BenchmarkContextSha256 HEX64
+
+Exit codes:
+  0  dispatch completed (or --GateOnly and a round is permitted)
+  1  bad invocation / validation refused
+  3  something could not be checked -- missing python3, absent review_ledger.py,
+     or a dispatch failure. Never treat 3 as a pass.
+  9  the review ledger refused this round. A decision, not an error: apply the
+     specific relief its message names, or escalate. Kept distinct from 1 and 3
+     because "the loop is over" and "the tool broke" call for opposite responses.
 EOF
 }
 
@@ -95,6 +134,10 @@ while [[ $# -gt 0 ]]; do
     --PromptFile) PROMPT_FILE="${2:-}"; shift 2 ;;
     --PromptText) PROMPT_TEXT="${2:-}"; shift 2 ;;
     --DispatchId) DISPATCH_ID="${2:-}"; shift 2 ;;
+    --LoopId) LOOP_ID="${2:-}"; shift 2 ;;
+    --NonReviewDispatch) NON_REVIEW_DISPATCH=1; shift ;;
+    --GateOnly) GATE_ONLY=1; shift ;;
+    --Kind) KIND="${2:-}"; shift 2 ;;
     --OutputDir) OUTPUT_DIR="${2:-}"; shift 2 ;;
     --OutputSchema) OUTPUT_SCHEMA="${2:-}"; shift 2 ;;
     --FullAccessJustification) FULL_ACCESS_JUSTIFICATION="${2:-}"; shift 2 ;;
@@ -146,6 +189,20 @@ default_timeout() {
     xhigh) echo 2700 ;;
     max) echo 3600 ;;
     *) echo 900 ;;
+  esac
+}
+
+kind_timeout_floor() {
+  # A floor, not a default, and the twin of Get-KindTimeoutFloorSec in the .ps1: the
+  # effort tier says how hard the model thinks, which is a different question from how
+  # much material it has to read. An execution review reads the whole change plus its
+  # receipts, so a `medium` one inherits 900s and dies mid-verdict -- and the round is
+  # spent either way, because the ledger counts a dispatch it permitted.
+  # 0 means this kind has nothing to say about the timeout; the effort default stands.
+  case "$1" in
+    execution) echo 2700 ;;
+    multi-handoff) echo 2700 ;;
+    *) echo 0 ;;
   esac
 }
 
@@ -227,6 +284,120 @@ fi
 if [[ -n "$PROMPT_TEXT" && -n "$PROMPT_FILE" ]]; then
   die "Cannot specify both --PromptText and --PromptFile."
 fi
+# --- review-loop bound -------------------------------------------------------
+# Mirrors the same block in Invoke-CodexDispatch.ps1. It runs before the version
+# preflight and the long exec on purpose: the cheapest moment to refuse a round
+# is before it costs anything.
+if [[ -n "$LOOP_ID" && "$NON_REVIEW_DISPATCH" -eq 1 ]]; then
+  die "Specify --LoopId or --NonReviewDispatch, not both. A dispatch is either bound to a review loop or declared not to be one."
+fi
+if [[ -z "$LOOP_ID" && "$NON_REVIEW_DISPATCH" -eq 0 ]]; then
+  die "loop_id_required: pass --LoopId <id> to bind this dispatch to a review loop, or --NonReviewDispatch if it is not an independent review. There is no default: an unbound review dispatch is an unbounded review loop, and a forgotten flag would be indistinguishable from a deliberate one."
+fi
+if [[ -n "$LOOP_ID" && ! "$LOOP_ID" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]]; then
+  die "Invalid LoopId format. Must match ^[a-z0-9][a-z0-9._-]{0,127}\$ -- the same pattern review_ledger.py and review-verdict.schema.v2.json enforce, so an id accepted here is accepted there."
+fi
+# The vocabulary is review_ledger.py's ROUND_BUDGETS keys, not a second list of names:
+# the .ps1 twin spells the same set in a ValidateSet, and bash has no such thing, so the
+# check is explicit here rather than absent.
+if [[ -n "$KIND" ]]; then
+  case "$KIND" in
+    plan|execution|discovery|handoff|multi-handoff) ;;
+    *) die "Invalid Kind '$KIND'. Expected one of plan, execution, discovery, handoff, multi-handoff -- the modes review_ledger.py accepts at \`begin\`." ;;
+  esac
+fi
+if [[ -n "$KIND" && "$NON_REVIEW_DISPATCH" -eq 1 ]]; then
+  die "kind_not_applicable: --Kind names the kind of *review* this is, and --NonReviewDispatch says this is not a review. Drop one. Ignoring the flag instead would leave a receipt claiming a review kind for a dispatch that consumed no round."
+fi
+
+if [[ -n "$LOOP_ID" ]]; then
+  LEDGER_SCRIPT="$(dirname "$SCRIPT_PATH")/review_ledger.py"
+  if [[ ! -f "$LEDGER_SCRIPT" ]]; then
+    printf '%s\n' "ledger_unavailable: --LoopId was given but review_ledger.py is not present at $LEDGER_SCRIPT, so the round budget could not be checked. This is exit 3, not a pass: 'could not check' is not 'checked and permitted' (V5/V31). Restore the tool, or pass --NonReviewDispatch if this dispatch is genuinely not a review." >&2
+    exit 3
+  fi
+  LEDGER_PYTHON=""
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then LEDGER_PYTHON="$candidate"; break; fi
+  done
+  if [[ -z "$LEDGER_PYTHON" ]]; then
+    printf '%s\n' "ledger_unavailable: neither python3 nor python is on PATH, so review_ledger.py could not run and the round budget was not checked. Exit 3, not a pass. Install Python 3, or pass --NonReviewDispatch." >&2
+    exit 3
+  fi
+
+  # `set +e` around the call: this script runs under `set -e`, which would abort
+  # on the ledger's non-zero exit before the exit status could be inspected --
+  # turning a REFUSE (a decision that must be reported as exit 9) into an
+  # unexplained abort.
+  set +e
+  LEDGER_OUTPUT="$("$LEDGER_PYTHON" "$LEDGER_SCRIPT" evaluate --loop-id "$LOOP_ID" 2>&1)"
+  LEDGER_EXIT=$?
+  set -e
+
+  case "$LEDGER_EXIT" in
+    0)
+      LEDGER_GATE_RESULT="permitted"
+      printf '[ledger] %s\n' "$LEDGER_OUTPUT"
+      if [[ "$LEDGER_OUTPUT" =~ mode=([a-z0-9][a-z0-9-]*) ]]; then
+        LEDGER_MODE="${BASH_REMATCH[1]}"
+      fi
+      if [[ -z "$LEDGER_MODE" ]]; then
+        # 3, not a shrug: the mode is where the dispatch kind comes from, and the kind is
+        # what raises the timeout floor. Guessing would hand an execution review the
+        # 15-minute default -- the silent failure the floor exists to prevent.
+        printf '%s\n' "ledger_mode_unavailable: review_ledger.py permitted the round but its output did not name the loop's mode (expected 'mode=<plan|execution|discovery|handoff|multi-handoff>' on the OK line). The wrapper and the ledger ship as a pair; a ledger old enough to omit it is a mismatched pair, not a pass. Update tools/review_ledger.py." >&2
+        exit 3
+      fi
+      ;;
+    1)
+      printf '%s\n' "$LEDGER_OUTPUT" >&2
+      printf '%s\n' "[ledger] refused loop '$LOOP_ID'. Not dispatching. Escalate to a human, or apply the specific relief the message names -- do not re-run with --NonReviewDispatch to get past this." >&2
+      exit 9
+      ;;
+    *)
+      printf '%s\n' "$LEDGER_OUTPUT" >&2
+      printf '%s\n' "[ledger] could not evaluate loop '$LOOP_ID' (review_ledger.py exit $LEDGER_EXIT). Failing closed." >&2
+      exit 3
+      ;;
+  esac
+else
+  LEDGER_GATE_RESULT="bypassed-non-review"
+  printf '%s\n' "[ledger] --NonReviewDispatch: no round consumed, no loop bound."
+fi
+
+# --- dispatch kind + the timeout floor it implies -----------------------------
+# Resolved before --GateOnly returns so the floor is visible without paying for a
+# dispatch, and so a --Kind that disagrees with the ledger costs nothing to report.
+if [[ -n "$LOOP_ID" ]]; then
+  DISPATCH_KIND="$LEDGER_MODE"
+  if [[ -n "$KIND" && "$KIND" != "$DISPATCH_KIND" ]]; then
+    die "kind_mismatch: --Kind '$KIND' but loop '$LOOP_ID' was opened with mode '$DISPATCH_KIND'. The ledger wins, and the disagreement is exit 1 rather than a silent correction: it usually means this dispatch is aimed at the wrong loop, and that loop's budget is the one being spent."
+  fi
+else
+  DISPATCH_KIND="non-review"
+fi
+
+KIND_FLOOR_SEC="$(kind_timeout_floor "$DISPATCH_KIND")"
+if [[ "$TIMEOUT_SEC" -le 0 ]]; then
+  TIMEOUT_SEC="$(default_timeout "$REASONING_EFFORT")"
+  if (( KIND_FLOOR_SEC > TIMEOUT_SEC )); then
+    printf '%s\n' "[kind] $DISPATCH_KIND review: raising the derived --TimeoutSec from $TIMEOUT_SEC to the ${KIND_FLOOR_SEC}s floor for this kind."
+    TIMEOUT_SEC="$KIND_FLOOR_SEC"
+    TIMEOUT_FLOOR_APPLIED=1
+  fi
+elif (( KIND_FLOOR_SEC > TIMEOUT_SEC )); then
+  # An explicit --TimeoutSec is the caller's decision and is honoured; there are small
+  # execution reviews. But it is said out loud, because a truncated verdict looks
+  # identical to a reviewer that found nothing.
+  printf '%s\n' "[kind] $DISPATCH_KIND review with explicit --TimeoutSec $TIMEOUT_SEC, below the ${KIND_FLOOR_SEC}s floor for this kind. Honouring the caller. A no-terminal timeout here still spends the round."
+fi
+printf '%s\n' "[kind] dispatch kind '$DISPATCH_KIND', timeout ${TIMEOUT_SEC}s."
+
+if [[ "$GATE_ONLY" -eq 1 ]]; then
+  printf '%s\n' "[ledger] --GateOnly: gate result '$LEDGER_GATE_RESULT'. Exiting without dispatching."
+  exit 0
+fi
+
 if [[ "$MODEL_GIVEN" -eq 1 && -z "$MODEL" ]]; then
   die "Model must be specified."
 fi
@@ -261,7 +432,11 @@ locate_resolver() {
       candidates+=("$(dirname "$override")/tools/resolve_model.py")
     fi
   fi
-  candidates+=("P:/.agent/tools/resolve_model.py")
+  # Shared home from env, never a baked drive letter: a literal like "P:/.agent" is one
+  # machine's layout and is meaningless on macOS/Linux (.agent/INSTANTIATE.md S2).
+  if [[ -n "${AGENT_MODEL_REGISTRY_HOME:-}" ]]; then
+    candidates+=("${AGENT_MODEL_REGISTRY_HOME}/tools/resolve_model.py")
+  fi
   if [[ -n "${USERPROFILE:-}" ]]; then
     candidates+=("${USERPROFILE}/.agent/tools/resolve_model.py")
   fi
@@ -293,7 +468,9 @@ env = os.environ.get('AGENT_MODEL_REGISTRY')
 if env:
     p = pathlib.Path(env)
     candidates.append(p if p.suffix.lower() == '.json' else p / 'model-registry.json')
-candidates.append(pathlib.Path('P:/.agent/model-registry.json'))
+shared = os.environ.get('AGENT_MODEL_REGISTRY_HOME')
+if shared:
+    candidates.append(pathlib.Path(shared) / 'model-registry.json')
 home = os.environ.get('USERPROFILE') or os.environ.get('HOME')
 if home:
     candidates.append(pathlib.Path(home) / '.agent' / 'model-registry.json')
@@ -365,6 +542,7 @@ if [[ -n "$DISPATCH_ID" ]]; then
 else
   DISPATCH_ID="dispatch-$(date -u +%Y%m%d%H%M%S)-$((RANDOM % 9000 + 1000))"
 fi
+
 
 if [[ "$OUTPUT_DIR" == *"*"* || "$OUTPUT_DIR" == *"?"* || "$OUTPUT_DIR" == *"["* ]]; then
   die "OutputDir must not contain wildcard characters."
@@ -500,23 +678,47 @@ else
 fi
 FINAL_OUTPUT_PATH="$RUN_DIR/$FINAL_OUTPUT_FILE_NAME"
 
+# Resolved once, for every Python helper this wrapper calls. Prefers the project venv so
+# the helpers see the same dependencies the rest of the toolchain does, then PATH. Empty
+# means there is no interpreter, which each caller below treats as fail-closed rather than
+# assuming a bare `python3` exists.
+PYTHON_EXE=""
+if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+  PYTHON_EXE="$REPO_ROOT/.venv/bin/python"
+else
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      PYTHON_EXE="$(command -v "$candidate")"
+      break
+    fi
+  done
+fi
+SCHEMA_ADAPTER="$SCRIPT_DIR/adapt_output_schema.py"
+
 API_SCHEMA_PATH="$CANONICAL_SCHEMA"
+SCHEMA_ADAPT_NOTE=""
 if [[ -n "$OUTPUT_SCHEMA" ]]; then
+  # One shared implementation, called by both wrappers. This used to be four lines of
+  # inline Python that popped `allOf` from the ROOT only, while the .ps1 twin recursed,
+  # widened optionals and stripped the resulting nulls back out. Duplicated logic drifts:
+  # on POSIX every schema-constrained review then died on a 400 naming a keyword nested
+  # under `properties.findings.items`, a defect invisible on the machine where the other
+  # copy was correct. See adapt_output_schema.py for what the adaptation is and why.
   stripped="$RUN_DIR/api-schema.json"
-  if python3 - "$CANONICAL_SCHEMA" "$stripped" <<'PY'
-import json, sys
-src, dst = sys.argv[1], sys.argv[2]
-with open(src, encoding="utf-8") as f:
-    data = json.load(f)
-data.pop("allOf", None)
-with open(dst, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PY
-  then
+  if [[ ! -f "$SCHEMA_ADAPTER" ]]; then
+    # Dispatch with the unmodified schema and say so. The endpoint will reject it with a
+    # 400, which is loud and recoverable; what must not happen is a silent fallback that
+    # makes the 400 look like the model's fault.
+    SCHEMA_ADAPT_NOTE="schema adapter not found at $SCHEMA_ADAPTER, so the shipped schema was sent unadapted"
+    echo "WARNING: $SCHEMA_ADAPT_NOTE" >&2
+  elif [[ -z "$PYTHON_EXE" ]]; then
+    SCHEMA_ADAPT_NOTE="no python3/python interpreter found, so the shipped schema was sent unadapted"
+    echo "WARNING: $SCHEMA_ADAPT_NOTE" >&2
+  elif adapt_output="$("$PYTHON_EXE" "$SCHEMA_ADAPTER" adapt "$CANONICAL_SCHEMA" "$stripped" 2>&1)"; then
     API_SCHEMA_PATH="$stripped"
   else
-    API_SCHEMA_PATH="$CANONICAL_SCHEMA"
+    SCHEMA_ADAPT_NOTE="schema adaptation failed: $(echo "$adapt_output" | tr -d '\r' | tr '\n' ' ')"
+    echo "WARNING: $SCHEMA_ADAPT_NOTE" >&2
   fi
   ARGS+=(--output-schema "$API_SCHEMA_PATH")
   ARGS+=(-o "$FINAL_OUTPUT_PATH")
@@ -536,9 +738,8 @@ ARGS+=(-)
 START_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 START_EPOCH="$(date +%s)"
 
-if [[ "$TIMEOUT_SEC" -le 0 ]]; then
-  TIMEOUT_SEC="$(default_timeout "$REASONING_EFFORT")"
-fi
+# $TIMEOUT_SEC was resolved next to the ledger gate (effort default, then the kind
+# floor) so --GateOnly can report it and a review cannot reach this point holding a 0.
 
 EVENTS_FILE="$RUN_DIR/events.jsonl"
 : >"$EVENTS_FILE"
@@ -653,17 +854,55 @@ fi
 
 SCHEMA_VALIDATION_ERROR=""
 EXIT_VALUE="$CHILD_EXIT_CODE"
+
+# Undo the nullable widening the API schema needed (see adapt_output_schema.py) BEFORE
+# anything validates this file against the unmodified shipped schema, which is strict and
+# would refuse `"mechanism": null` for a finding that legitimately has none. The pre-strip
+# document is kept as final.raw.json rather than overwritten: a governance package must not
+# rewrite a reviewer's output with no auditable copy of what it actually said.
+NULL_STRIP_ERROR=""
 if [[ -n "$OUTPUT_SCHEMA" && -f "$FINAL_OUTPUT_PATH" ]]; then
-  PYTHON_EXE="python3"
-  if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
-    PYTHON_EXE="$REPO_ROOT/.venv/bin/python"
+  if [[ ! -f "$SCHEMA_ADAPTER" ]]; then
+    NULL_STRIP_ERROR="null-strip skipped: adapter not found at $SCHEMA_ADAPTER"
+  elif [[ -z "$PYTHON_EXE" ]]; then
+    NULL_STRIP_ERROR="null-strip skipped: no python3/python interpreter found"
+  elif ! strip_output="$("$PYTHON_EXE" "$SCHEMA_ADAPTER" strip-nulls "$FINAL_OUTPUT_PATH" \
+        --raw-copy "$RUN_DIR/final.raw.json" 2>&1)"; then
+    # Not fatal on its own: the model's output is on disk either way, and the validation
+    # below is what decides whether it is usable. Recorded so a downstream refusal is
+    # traceable to this step rather than looking like the model's answer was malformed.
+    NULL_STRIP_ERROR="$(echo "$strip_output" | tr -d '\r' | tr '\n' ' ')"
   fi
-  VALIDATOR="$REPO_ROOT/tools/validate_json_schema.py"
-  if [[ -f "$VALIDATOR" ]]; then
-    if ! validation_output="$("$PYTHON_EXE" "$VALIDATOR" "$FINAL_OUTPUT_PATH" "$CANONICAL_SCHEMA" 2>&1)"; then
+fi
+
+if [[ -n "$OUTPUT_SCHEMA" && -f "$FINAL_OUTPUT_PATH" ]]; then
+  VALIDATOR="$SCRIPT_DIR/validate_json_schema.py"
+  if [[ -z "$PYTHON_EXE" ]]; then
+    SCHEMA_VALIDATION_ERROR="no python3/python interpreter found, so $FINAL_OUTPUT_FILE_NAME was NOT validated. This is the absence of a check, not a failed one."
+    EXIT_VALUE=3
+    ERROR_SUMMARY="FAIL-CLOSED: $SCHEMA_VALIDATION_ERROR"
+  elif [[ ! -f "$VALIDATOR" ]]; then
+    # 3, not 0. This branch used to be an empty `if` with no `else`: an absent validator
+    # meant the verdict was never checked and the wrapper reported success anyway, which
+    # is how an unrun check comes to be believed. "Never checked" is also not 1 -- calling
+    # it a validation failure blames a clean output for a missing file.
+    SCHEMA_VALIDATION_ERROR="validator not found at $VALIDATOR, so $FINAL_OUTPUT_FILE_NAME was NOT validated. This is the absence of a check, not a failed one."
+    EXIT_VALUE=3
+    ERROR_SUMMARY="FAIL-CLOSED: $SCHEMA_VALIDATION_ERROR"
+  else
+    validation_output="$("$PYTHON_EXE" "$VALIDATOR" "$FINAL_OUTPUT_PATH" "$CANONICAL_SCHEMA" 2>&1)"
+    validation_code=$?
+    if [[ "$validation_code" -ne 0 ]]; then
       SCHEMA_VALIDATION_ERROR="$(echo "$validation_output" | tr -d '\r')"
-      EXIT_VALUE=1
-      ERROR_SUMMARY="JSON Schema validation failed: $SCHEMA_VALIDATION_ERROR"
+      # Propagate the validator's own 3 rather than flattening it to 1: 3 means jsonschema
+      # is not installed, which is an environment problem to fix, not a verdict to reject.
+      if [[ "$validation_code" -eq 3 ]]; then
+        EXIT_VALUE=3
+        ERROR_SUMMARY="JSON Schema validation could not run: $SCHEMA_VALIDATION_ERROR"
+      else
+        EXIT_VALUE=1
+        ERROR_SUMMARY="JSON Schema validation failed: $SCHEMA_VALIDATION_ERROR"
+      fi
     fi
   fi
 fi
@@ -739,6 +978,10 @@ export ICD_FINAL_NAME="$FINAL_OUTPUT_FILE_NAME"
 export ICD_SANITIZED_ARGV_JSON="$SANITIZED_ARGV_JSON"
 export ICD_DISPATCH_ID="$DISPATCH_ID"
 export ICD_MODEL="$MODEL"
+export ICD_LOOP_ID="$LOOP_ID"
+export ICD_LEDGER_GATE="$LEDGER_GATE_RESULT"
+export ICD_DISPATCH_KIND="$DISPATCH_KIND"
+export ICD_TIMEOUT_FLOOR_APPLIED="$TIMEOUT_FLOOR_APPLIED"
 export ICD_MODE="$MODE"
 export ICD_SANDBOX="$SANDBOX_LEVEL"
 export ICD_EFFORT="$REASONING_EFFORT"
@@ -756,6 +999,13 @@ export ICD_CHILD_EXIT="$CHILD_EXIT_CODE"
 export ICD_TERM_COUNT="$TERMINAL_EVENT_COUNT"
 export ICD_TERM_TYPE="$TERMINAL_EVENT_TYPE"
 export ICD_ERROR_SUMMARY="$ERROR_SUMMARY"
+export ICD_NULL_STRIP_ERROR="$NULL_STRIP_ERROR"
+export ICD_SCHEMA_ADAPT_NOTE="$SCHEMA_ADAPT_NOTE"
+if [[ -f "$RUN_DIR/final.raw.json" ]]; then
+  export ICD_NULL_STRIP_RAW_KEPT=1
+else
+  export ICD_NULL_STRIP_RAW_KEPT=0
+fi
 export ICD_BENCH="$BENCHMARK_ISOLATION"
 export ICD_BENCH_RECEIPT="$BENCHMARK_CONTEXT_CANONICAL"
 export ICD_BENCH_SHA="$BENCHMARK_CONTEXT_SHA256"
@@ -797,6 +1047,17 @@ manifest = {
     "schema_version": "dispatch-status.v1",
     "dispatch_id": env("ICD_DISPATCH_ID"),
     "model": env("ICD_MODEL"),
+    # The review-loop bound, recorded so a bypass leaves a trace.
+    # `bypassed-non-review` in a receipt whose prompt was plainly a review is the
+    # audit signal.
+    "loop_id": env("ICD_LOOP_ID") or None,
+    "ledger_gate": env("ICD_LEDGER_GATE"),
+    # The kind the ledger recorded for this loop, not the flag the caller typed, plus
+    # whether it moved the timeout. A truncated execution review whose receipt says
+    # `timeout_floor_applied: false` is a wrapper/ledger pairing problem; one that says
+    # true is a genuinely long review.
+    "dispatch_kind": env("ICD_DISPATCH_KIND"),
+    "timeout_floor_applied": bool(int(env("ICD_TIMEOUT_FLOOR_APPLIED") or "0")),
     "mode": env("ICD_MODE"),
     "sandbox": env("ICD_SANDBOX"),
     "reasoning_effort": env("ICD_EFFORT"),
@@ -817,6 +1078,13 @@ manifest = {
     "terminal_event_count": int(env("ICD_TERM_COUNT") or "0"),
     "terminal_event_type": env("ICD_TERM_TYPE"),
     "error_summary": env("ICD_ERROR_SUMMARY"),
+    # Null-strip and schema-adaptation outcomes. Recorded even on success (as None) so
+    # their absence from an old status.json is distinguishable from "it ran and had
+    # nothing to say". These are the same keys the .ps1 twin writes; the two wrappers
+    # feed the same downstream readers, so their status artifacts must agree.
+    "null_strip_error": env("ICD_NULL_STRIP_ERROR") or None,
+    "null_strip_raw_kept": bool(int(env("ICD_NULL_STRIP_RAW_KEPT") or "0")),
+    "schema_adapt_error": env("ICD_SCHEMA_ADAPT_NOTE") or None,
     "benchmark_isolation": bool(int(env("ICD_BENCH") or "0")),
     "benchmark_context_receipt": env("ICD_BENCH_RECEIPT") or None,
     "benchmark_context_sha256": env("ICD_BENCH_SHA") or None,

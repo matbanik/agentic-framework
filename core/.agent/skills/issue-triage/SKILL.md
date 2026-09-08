@@ -11,7 +11,7 @@ Record and manage known issues in the project's YAML single source of truth (`.a
 
 - **Discovered a bug or issue** during implementation → `add`
 - **Need to check if an issue already exists** → `list --json` or `get`
-- **Session end** → `verify` to flag stale issues
+- **Session end** → `verify` to flag stale issues, then §Distill and Close each one
 - **After modifying the YAML** → `render` to regenerate `known-issues.md`
 
 ## Quick Reference
@@ -89,6 +89,40 @@ Always regenerate the markdown and verify no drift:
 uv run python tools/issue_triage.py render
 uv run python tools/issue_triage.py render --check
 ```
+
+## Distill and Close (the file is an inbox, not a knowledge base)
+
+`known-issues.yaml` is an **inbox**. An entry is a reminder that something has not yet
+been turned into a rule, a check, or a test — it is not the place knowledge lives. Left
+alone, the file becomes an always-loaded novel: every session pays to read it, no session
+acts on it, and the entries that matter are camouflaged by the ones that never will.
+
+An issue is closed by **distilling** it, which means naming where the knowledge now lives:
+
+| Outcome | What "distilled" means | Then |
+|---|---|---|
+| It became a rule | A line in `AGENTS.md`/`GUARDRAILS.md` or the relevant skill now prevents it — cite the `file:section` in the resolution note | set `status: resolved` |
+| It became a check | A gate, test, or `--selftest` arm now fails on it, and that arm is *proven able to fail* (V5) — cite the command | set `status: resolved` |
+| It became work | It is a real deliverable → route through `bucket`/`triage` into a MEU or plan | keep `open`; it now carries a plan id |
+| It was never real | Reproduction attempt failed, or the condition is gone | `candidate` → `dismiss <ID>`; anything else → set `status: dismissed` with the reason |
+
+There is no `set-status` subcommand: for a non-candidate issue, edit its `status` (and
+resolution note) in `known-issues.yaml`, then `render` — the YAML is the SSOT and the
+markdown is generated. `dismiss` only accepts an issue whose status is `candidate` and
+refuses anything else, so it is not a shortcut for closing an open issue.
+
+**A resolution note that only says "fixed" is not a distillation.** Name the artifact that
+now carries the knowledge; if you cannot name one, the issue is not closed — the symptom
+just stopped being visible.
+
+`verify` (stale >30 days) is the trigger, not a nag: a stale entry means nobody has
+decided which of the four rows above it belongs to. Do that at session end, when
+`render` already runs — and keep the rendered `known-issues.md` under its <100-line
+target, which is the observable that tells you distillation is actually happening.
+
+**Session start reads the rendered digest, not the YAML.** If an entry needs to be read
+every session to keep the work correct, that is the strongest possible signal it should
+have been a rule in an always-loaded file instead — distill it and close it.
 
 ## Architecture
 

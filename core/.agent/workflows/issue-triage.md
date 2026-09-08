@@ -16,7 +16,7 @@ Read these files in order:
 
 1. `AGENTS.md`
 2. `.agent/context/known-issues.yaml` (**SSOT** — managed by `tools/issue_triage.py`)
-3. `.agent/context/known-issues-archive.md` (scan only — verify nothing was prematurely archived)
+3. `.agent/context/known-issues-archive.md` (legacy pre-SSOT history; scan only — verify nothing was prematurely archived there before the YAML SSOT existed)
 4. `.agent/context/meu-status.yaml` (SSOT — see `.agent/skills/meu-status/SKILL.md`)
 5. `docs/build-plan/build-priority-matrix.md`
 6. `.agent/context/current-focus.md`

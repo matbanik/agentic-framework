@@ -77,6 +77,32 @@ and never pipe long-running output through filters. The exact syntax depends on 
 Do not run the Step 2b installer until this row is set — placeholder tokens and wrong redirect
 syntax are the most common first-run failures.
 
+> [!IMPORTANT]
+> **Check whether the repo or the receipts dir is on a cloud-sync filesystem** — Google Drive,
+> iCloud Drive, OneDrive, Dropbox — *before* choosing the receipts path (A4c). Resolve the
+> real absolute path rather than trusting the shortcut you type; a synced folder mounted under
+> a friendly alias is easy to miss, and a repo whose git root lives on Drive is a normal
+> arrangement, not an exotic one.
+>
+> ```bash
+> # // turbo
+> cd /path/to/repo && pwd -P                 # the real path, symlinks resolved
+> ```
+>
+> A sync daemon is a second writer that does not know about your agent. Receipts read back
+> before it settles come out truncated or empty — which a gate reads as "the command produced
+> no output" rather than as an unread file — and sync conflict copies (`foo (1).py`,
+> `foo-conflicted.md`) show up as untracked additions that `git add -A` will commit.
+>
+> **Keep receipts on local disk, outside the repo, outside any synced tree.** If the repo
+> itself is synced, that is workable; the receipts directory being synced is not.
+>
+> Note that the `/tmp/{{PROJECT_NAME}}/` example above satisfies all three conditions and is
+> **wiped on reboot**. That is fine when receipts only need to outlive the command, and wrong
+> when a review spans days or an audit happens afterwards — see F3b. If you need durability,
+> pick a real local directory (`~/.cache/{{PROJECT_NAME}}/receipts/` or similar) and prune it
+> on purpose rather than relying on the OS to do it for you.
+
 > **Agent filenames carry `{{PROJECT_NAME}}`.** After Step 2b (`instantiate.py`), rename
 > `{{PROJECT_NAME}}-builder.md` / `{{PROJECT_NAME}}-verifier.md` so the *filename stem* matches
 > the instantiated `name:` frontmatter (e.g. `acme-builder.md`). Cursor/Claude register subtypes
@@ -141,7 +167,8 @@ Open `.agent/docs/harness-profiles.md`.
 ## Step 4 — Instantiate the registry, then configure the reviewer chain
 
 Copy the package-root `.agent/` (a sibling of `core/`, `scripts/`, and `README.md`)
-to the live home you choose — a **drive-root** `.agent/` shared by several repos, or
+to the live home you choose — a **shared home** `.agent/` (any local durable path,
+named by `AGENT_MODEL_REGISTRY_HOME`) used by several repos, or
 a **workspace-root** `.agent/` if this project owns the catalog. Fill `catalog` and
 `bindings` with the snapshots *your* harnesses accept, then compile and run the
 checker.

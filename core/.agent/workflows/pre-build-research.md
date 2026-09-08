@@ -127,12 +127,19 @@ Transform the extracted patterns into a prompt instruction set that the AI (via 
 {How to verify the output is correct}
 ```
 
-**Example for Trade Import:**
+**A filled-in example.** The domain below is the originating repo's (broker trade
+import), kept concrete on purpose: the point of the artifact is that vague reference
+examples produce vague normalizers, and a generic "widget importer" would not show
+that. Read it for the *shape* — task, several real input/output pairs from real
+sources, target schema, edge cases harvested from those sources, and checkable
+validation rules — then write yours against your own domain.
+
 ```markdown
 # AI Instruction Set: Trade Import Normalization
 
 ## Task
-Given a CSV/JSON file from any broker, normalize each trade into {{PROJECT_NAME_TITLE}}'s TradeRecord schema.
+Given a CSV/JSON file from any broker, normalize each trade into the project's
+TradeRecord schema.
 
 ## Reference Examples
 ### Example 1: Interactive Brokers (from ib_insync)

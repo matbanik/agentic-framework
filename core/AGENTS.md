@@ -28,23 +28,29 @@ Reversible actions (editing files, running tests, writing drafts/handoffs/reflec
 **PowerShell's six-stream output model can saturate an unredirected terminal.** Invoke
 `.agent/skills/terminal-preflight/SKILL.md` before the first shell command in execution,
 and use [`.agent/docs/output-evidence-policy.md`](.agent/docs/output-evidence-policy.md)
-as the single RTK routing and exact-evidence authority.
+as the single authority for output routing and exact evidence. Its receipt pattern and
+exact-evidence bypass list apply to every adopter; its RTK classification applies only
+if RTK is installed.
 
 #### Pre-flight Checklist (satisfy ALL before every shell command)
 
-- [ ] Redirect every process stream to `{{RECEIPTS_DIR}}/`: PowerShell `*> file`;
-  bash/posix `> file 2>&1`. Always use forward slashes in cross-shell paths.
-- [ ] Never pipe a long-running process to a filter. Read the receipt only after the
-  process finishes; `command_status` checks liveness only and never reads output.
-- [ ] Prefix with RTK. Use a verified native RTK subcommand for compact views and
-  `rtk proxy` for unsupported commands or any exact-evidence bypass class.
-- [ ] Capture `$LASTEXITCODE` immediately after the process, before `Get-Content` or any
-  other command, and exit with the captured code.
-- [ ] Match redirect syntax to the resolved `native_shell`. For child scripts needing
-  modern cmdlets such as `Get-FileHash`, invoke PowerShell 7 with `pwsh`; treat
-  `powershell.exe` as a legacy compatibility surface. On macOS/Linux see
-  [`.agent/docs/macos-setup.md`](.agent/docs/macos-setup.md) for `pwsh` install,
-  Seatbelt `writable_roots`, and known Tahoe blockers before the first review dispatch.
+Read it in [`output-evidence-policy.md`](.agent/docs/output-evidence-policy.md): §Receipt
+pattern (four beats — redirect every stream to `{{RECEIPTS_DIR}}/`, save the status
+*immediately*, read the receipt, propagate), §Exact-evidence bypass (which results make
+the unfiltered receipt canonical), and §Commands that may skip the receipt.
+
+This section used to restate all of it. That was a copy that drifted: the bypass list
+grew a class the copy never got, and the skip rule ended up spelled one way here and the
+opposite way in `terminal-preflight/SKILL.md`. A checklist you can satisfy from the
+summary is a checklist that stops sending you to the authority, so there is no summary —
+follow the link before the first shell command of an execution phase.
+
+The one thing that is **not** in that file because it is a host fact, not a routing rule:
+match redirect syntax to the resolved `native_shell`, and for child scripts needing modern
+cmdlets such as `Get-FileHash`, invoke PowerShell 7 with `pwsh` — treat `powershell.exe`
+as a legacy compatibility surface. On macOS/Linux see
+[`.agent/docs/macos-setup.md`](.agent/docs/macos-setup.md) for `pwsh` install, Seatbelt
+`writable_roots`, and known Tahoe blockers before the first review dispatch.
 
 ```powershell
 rtk proxy uv run pytest tests/ -x --tb=short -v *> {{RECEIPTS_DIR}}/pytest.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/pytest.txt | Select-Object -Last 40; exit $code
@@ -91,14 +97,32 @@ Validation/dev/scaffold commands, including the MEU and full phase gates, use th
 
 ## Architecture
 
-Hybrid monorepo — see `.agent/docs/architecture.md` for the target-state architecture. Current scaffold status is below.
-
-See [.agent/docs/architecture.md](.agent/docs/architecture.md) for the layer/package scaffold table and the dependency rule (Domain → Application → Infrastructure; never import infra from core).
+> **Adopter section — fill this in during instantiate.** The framework makes no claim
+> about your layout. Replace this block with one or two sentences naming your
+> architecture, and point at whatever doc holds the layer/package table and the
+> dependency rule. `.agent/docs/architecture.md` is the conventional home for it and is
+> **not shipped** (see `MANIFEST.md` §Deliberately EXCLUDED) — create it if you want it,
+> or cite the doc you already have.
+>
+> Example (the originating repo's): *"Hybrid monorepo; layers are
+> Domain → Application → Infrastructure, and infrastructure is never imported from
+> core."* Yours will differ.
 
 ## Project Context
 
-> [!IMPORTANT]
-> **{{PROJECT_NAME_TITLE}} does NOT execute trades — it plans and evaluates.** The software imports trade results from execution platforms (Interactive Brokers, etc.), analyzes performance, and generates trade plans. It never places, modifies, or cancels orders. All references to "trade confirmation" or "execution safety" apply to data-destructive operations (e.g., deleting trade records), NOT financial execution.
+> **Adopter section — fill this in during instantiate.** State the one thing about your
+> product that an agent would otherwise get wrong, especially any **boundary the software
+> does not cross**. The point is to disambiguate a scary-sounding word in your domain from
+> the narrower thing your code actually does, so "irreversible" and "destructive" resolve
+> to the right operations in the Human Approval Gate.
+>
+> Example (the originating repo's): *"It does NOT execute trades — it imports results from
+> execution platforms, analyzes them, and generates plans. It never places, modifies, or
+> cancels orders. So 'execution safety' here means data-destructive operations such as
+> deleting records, NOT financial execution."*
+>
+> Write your own equivalent. If nothing in your domain is ambiguous this way, delete the
+> section rather than leaving the example in place.
 
 ## Communication Policy
 
@@ -129,7 +153,7 @@ See [.agent/docs/architecture.md](.agent/docs/architecture.md) for the layer/pac
 >
 > Writing closeout artifacts from memory is a **quality violation** equivalent to shipping code without tests. Context fatigue at session end is the primary risk — these steps are the countermeasure.
 - **Context file hygiene (session end):**
-  - If you resolved a known issue during this session, move its full entry from `known-issues.md` to `known-issues-archive.md` and leave only a 1-line summary row in the "Archived" table.
+  - **`known-issues.yaml` is the SSOT; `known-issues.md` is generated.** If you resolved a known issue, update its status in the YAML via `tools/issue_triage.py` and then `render` to regenerate the markdown (`.agent/skills/issue-triage/SKILL.md`). **Never hand-edit `known-issues.md`** — the next `render` discards your edit, and `render --check` will report the drift. `known-issues-archive.md` is a **legacy** file kept only for pre-SSOT history; do not move entries into it.
   - In `current-focus.md`, replace "Current Priority" and "Next Steps" with the session's actual outcome. Delete any completed (`✅`) items. Never append to a historical "Recently Completed" section — that pattern is retired.
   - Target: `known-issues.md` < 100 lines, `current-focus.md` < 30 lines. If either exceeds its limit, prune before saving.
 - **Handoff continuity:** For the same `docs/execution/plans/{YYYY-MM-DD}-{project-slug}/` target, keep plan review in one rolling `-plan-critical-review.md` file and project implementation critique/recheck in one rolling `-implementation-critical-review.md` file. Append updates to the same file instead of creating new `-recheck`, `-final`, or `-approved` variants.
@@ -221,7 +245,18 @@ Every MEU that touches external input must include in its plan and FIC:
 - See `.agent/docs/testing-strategy.md` for test pyramid and fixtures.
 
 > [!CAUTION]
-> **Runtime UI behavior — GUI *or* TUI — is verified by its real-binary harness, never by eyeballing or `browser_subagent`** (the browser tool cannot launch the Electron app *or* a terminal app). **Write an E2E test** that asserts the correct behavior: GUI → Playwright against real Electron (`ui/tests/e2e/`, `/e2e-testing` + `.agent/skills/e2e-testing/SKILL.md`); TUI → the real-binary PTY harness (`tui/internal/tuitest/`, `.agent/skills/tui-e2e/SKILL.md`). If the E2E cannot launch in the agent/reviewer sandbox (Electron needs a display; TUI needs ConPTY/PTY syscalls), mark the run `[B]` with a CI follow-up (see §Testing Requirements → [.agent/docs/testing-strategy.md](.agent/docs/testing-strategy.md) §E2E Wave Activation / §TUI E2E Wave Activation) — the test must still be written and wired.
+> **Runtime UI behavior is verified by a harness that drives the real binary, never by
+> eyeballing and never by a browser tool that cannot launch your app.** **Write an E2E
+> test** that asserts the behavior, against the real artifact your users run — not a
+> mocked or headless stand-in that skips the layer under test. If that harness cannot
+> launch inside the agent/reviewer sandbox (a desktop app needs a display; a terminal app
+> needs ConPTY/PTY syscalls), mark the run `[B]` with a CI follow-up — **the test must
+> still be written and wired.** A `[B]` is a deferred *run*, never a deferred test.
+>
+> Name your harness per surface in [.agent/docs/testing-strategy.md](.agent/docs/testing-strategy.md)
+> (§E2E Wave Activation) and cite it here once chosen. The originating repo used Playwright
+> against real Electron for its GUI and a real-binary PTY harness for its TUI; the portable
+> rule is the *real binary*, not those tools.
 
 ### FIC-Based TDD Workflow (Mandatory)
 
@@ -272,7 +307,7 @@ When implementing a Manageable Execution Unit (MEU):
 >
 > **Dispatching the reviewer is a blocking tool call, not the end of your turn.** The orchestrator runs the review CLI, waits for the verdict file, and continues. The whole closeout is ONE continuous pass: **H1** (implementation → MEU gate → registry/BUILD_PLAN/OpenAPI updates → **handoff**) → **review loop** (auto-dispatch `/execution-critical-review`, loop corrections to `approved`) → **H2** (reflection, metrics, commit-message prep). H2 records the review outcome, so it is written *after* `approved` — that ordering is not a reason to pause. The H1→review→H2 boundaries (and the bold phase-divider rows in `task.md`) mark *ordering*, NOT *turn boundaries* — they are never stop points or check-in points. Do not dispatch the review before the handoff exists.
 >
-> **The ONLY sanctioned turn-enders are:** (1) **DONE**; (2) **review round cap reached** (plan-review = 3, execution-review = 6) — a HARD STOP requiring human direction; (3) **all CLI reviewer rungs rate-limited/unavailable** (Codex → Gemini surface → headless Claude — never self-review); (4) the **~50% context-window checkpoint** — finish the current MEU's handoff, then **compact and CONTINUE** (`context_compaction` per `.agent/docs/harness-profiles.md`). The handoff on disk *is* the durable state, so compaction is safe here and a hand-back is unnecessary — this guards against "context rot" without burning a session boundary. It is a genuine turn-ender **only** when your harness has no `context_compaction` capability, in which case save state and hand back; (5) a **human-decision gate**. Anything else is an INVALID pause — most often a politeness off-ramp the RLHF prior leaks at a phase boundary: ❌ "Want me to continue with the closeout, or handle it in a separate session?", ❌ "Implementation complete — shall I proceed to the review/reflection?", ❌ "This looks like a good stopping point." If you catch yourself composing one of these, that urge is the bug, not a safe default.
+> **The ONLY sanctioned turn-enders are:** (1) **DONE**; (2) **review round cap reached** (plan-review = 3, execution-review = 6) — a HARD STOP requiring human direction; (3) **all cross-vendor CLI reviewer rungs rate-limited/unavailable** — escalate to a **human**; a same-vendor self-review rung is PROHIBITED, not a last resort; (4) the **~50% context-window checkpoint** — finish the current MEU's handoff, then **compact and CONTINUE** (`context_compaction` per `.agent/docs/harness-profiles.md`). The handoff on disk *is* the durable state, so compaction is safe here and a hand-back is unnecessary — this guards against "context rot" without burning a session boundary. It is a genuine turn-ender **only** when your harness has no `context_compaction` capability, in which case save state and hand back; (5) a **human-decision gate**. Anything else is an INVALID pause — most often a politeness off-ramp the RLHF prior leaks at a phase boundary: ❌ "Want me to continue with the closeout, or handle it in a separate session?", ❌ "Implementation complete — shall I proceed to the review/reflection?", ❌ "This looks like a good stopping point." If you catch yourself composing one of these, that urge is the bug, not a safe default.
 >
 > **After any checkpoint or truncation, re-read `task.md` BEFORE any other action** (`completion-preflight/SKILL.md` §Post-Truncation Recovery). Unchecked `[ ]` rows mean you are mid-workflow — continue the task table sequentially until a sanctioned turn-ender; do not stop after resolving just the first issue.
 
@@ -285,7 +320,7 @@ All handoff artifacts, review artifacts, and evidence bundles must follow the co
 1. **Test Output Compression** — Only output failing test names, assertion messages, and relevant stack frames. Summarize passing tests as `{N} passed`. Never include full verbose output of passing tests.
 2. **Delta-Only Code Sections** — Use unified diff blocks (` ```diff `) instead of full file contents in Changed Files sections. Do not inline full source code.
 3. **Cache Boundary** — Do not place dynamic content (timestamps, test results, quality gate numbers) above the `<!-- CACHE BOUNDARY -->` marker in handoff templates.
-4. **Verbosity Tiers** — Respect the `verbosity` field in handoff YAML and `requested_verbosity` in review YAML. Default is `standard` (~2,000 tokens). Note: the Opus 4.8 tokenizer (the 4.7-introduced tokenizer family) may inflate this to ~2,400–2,700 tokens — accept inflation or re-tune.
+4. **Verbosity Tiers** — Respect the `verbosity` field in handoff YAML and `requested_verbosity` in review YAML. Default is `standard` (~2,000 tokens). Note: a tokenizer change under you may inflate this to ~2,400–2,700 tokens for the same content — accept the inflation or re-tune the tier, but do not treat the token figure as a fixed property of the template.
 5. **Context lifecycle (JIT retrieval + compaction)** — Prefer JIT retrieval (re-read files when needed) over keeping large tool results in context; clear tool outputs that won't be referenced again. **Compact the transcript proactively at durable-state boundaries** — after each MEU handoff lands on disk, and at the ~50% checkpoint (then *continue*, per §Execution Contract turn-ender #4) — using your harness's `context_compaction` capability (`.agent/docs/harness-profiles.md`). Never compact with unsaved durable state, and never let auto-compaction-at-the-limit be the plan (the summary is already degraded by then). Best of all: **delegate** bulk work to the Builder tier and review to the external reviewer — a subagent's transcript never enters your context at all. Full rules: [`.agent/docs/context-compression.md`](.agent/docs/context-compression.md) §Context Compaction.
 
 ## Pre-Handoff Self-Review (Mandatory)
@@ -365,8 +400,11 @@ See `.agent/docs/code-quality.md` for full examples and forbidden patterns.
 > [!IMPORTANT]
 > **Never pipe long-running commands through filters in PowerShell.** Piping `vitest`, `pytest`, `npm run`, or any process that exits after producing output into `| Select-String`, `| findstr`, or `| Where-Object` causes the pipeline to hang indefinitely — the outer process keeps stdin open waiting for more data even after the child process exits.
 
-**Also avoid:**
-- The UI development process may exit 1 when `concurrently` terminates after the Electron window closes; that condition alone is not a build failure.
+**Also avoid:** treating a dev-server/watcher's shutdown exit code as a build failure. A
+supervisor that wraps several watch processes commonly exits non-zero when the app window
+or the last child closes; that condition alone is not a failure. Record the exact
+known-benign condition for your stack here, so an agent does not chase it — and keep it
+narrow, because a blanket "ignore exit 1" would hide real failures.
 
 ## Commits
 
@@ -398,6 +436,6 @@ Doc index (architecture, domain-model, testing-strategy, code-quality, emerging-
 At every session end, emit one fenced `yaml` block matching `.agent/schemas/reflection.v1.yaml` as section 7 of the reflection (`view_file` the schema first). Rules: `cited` only if actually consulted; `influence` 0–3 honest; ≤ 5 `decisive_rules`; log wrong/useless rules under `conflicts`; do not flatter. Full meta-prompt in [.agent/docs/artifact-naming.md](.agent/docs/artifact-naming.md).
 
 
-## RTK (Token-Optimized Commands)
+## Output Routing (Token-Optimized Commands)
 
-Classify every shell command through [.agent/docs/output-evidence-policy.md](.agent/docs/output-evidence-policy.md): use verified native RTK filters for compact views and `rtk proxy` for unsupported or exact-evidence commands. In chains, classify each segment and preserve the first failing exit code. The argv reference is in [.agent/docs/commands.md](.agent/docs/commands.md).
+Classify every shell command's route through [.agent/docs/output-evidence-policy.md](.agent/docs/output-evidence-policy.md). In chains, classify each segment and preserve the first failing exit code. **If a token-optimizer (RTK) is installed:** verified native filters for compact views, `rtk proxy` for unsupported or exact-evidence commands; the argv reference is in [.agent/docs/commands.md](.agent/docs/commands.md). **With no such tool:** every command is the `proxy` class — direct, redirected, unfiltered receipt canonical. The exact-evidence bypass list is not tool-conditional.

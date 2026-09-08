@@ -24,8 +24,24 @@ description: Agent-safe git operations with SSH commit signing. Handles commit, 
 > pwsh -File .agent/skills/git-workflow/scripts/agent-commit.ps1 -Message "feat: description"
 > ```
 >
+> ```bash
+> # // turbo
+> bash .agent/skills/git-workflow/scripts/agent-commit.sh --message "feat: description"
+> ```
+>
 > The script validates signing config, stages, commits, pushes, and verifies — all in one command.
 > If you skip the script, you WILL cause a hang.
+
+**Which one:** `.ps1` where `pwsh` is available (Windows, or macOS/Linux with PowerShell
+installed); `.sh` otherwise. They implement the same contract and the same two modes.
+Pick one per repo and stay with it — the two are equivalent, not complementary, and
+alternating between them is how a signing-config difference goes unnoticed.
+
+> [!IMPORTANT]
+> The flag styles are **not** interchangeable. `.ps1` takes `-Message`; `.sh` takes
+> `--message`. The shell script rejects any unrecognized argument with exit 2 rather
+> than falling back to defaults, so a PowerShell invocation pasted into it fails loudly
+> instead of committing with the wrong settings.
 
 **Agent invocation rules:**
 - Set `WaitMsBeforeAsync` to **30000** (push can take 10-20s on large changesets)
@@ -56,6 +72,61 @@ pwsh -File .agent/skills/git-workflow/scripts/agent-commit.ps1 -Message "wip: sa
 pwsh -File .agent/skills/git-workflow/scripts/agent-commit.ps1 -Message "wip: save progress" -SkipTests -NoPush
 ```
 
+```bash
+S=.agent/skills/git-workflow/scripts/agent-commit.sh
+
+# Basic commit + push to main
+# // turbo
+bash "$S" --message "feat: add new feature"
+
+# With body text
+# // turbo
+bash "$S" --message "feat: add feature" --body "Detailed description here"
+
+# Push to a different branch
+# // turbo
+bash "$S" --message "fix: correct bug" --branch dev
+
+# Commit without pushing
+# // turbo
+bash "$S" --message "wip: save progress" --no-push
+
+# Skip tests for WIP commits
+# // turbo
+bash "$S" --message "wip: save progress" --skip-tests --no-push
+```
+
+### Portability: How the Two Scripts Differ
+
+They agree on every safety gate. They differ in two places, both deliberate:
+
+| | `.ps1` | `.sh` |
+|---|---|---|
+| Lint + test gate | Hardcodes `uv run ruff check packages/ tests/` and `uv run pytest tests/unit/`; a repo laid out differently gets a confusing tool error | Runs each gate only if its tooling is present, and prints `SKIPPED` naming what was missing — never `passed` |
+| HTTPS remote | Warns, then pushes (and may hang on a credential prompt) | Exports `GIT_TERMINAL_PROMPT=0`, so the push fails immediately instead of hanging |
+
+A skipped gate is not a passed gate. If you see `SKIPPED` and you wanted the gate to
+run, set `AGENT_COMMIT_TEST_CMD` to your own command — it replaces step 4 wholesale and
+a non-zero exit blocks the commit:
+
+```bash
+AGENT_COMMIT_TEST_CMD="npm run lint && npm test" \
+  bash .agent/skills/git-workflow/scripts/agent-commit.sh --message "feat: x"
+```
+
+Two more environment knobs:
+
+- **`AGENT_GIT_PROXY`** — an argv prefix every git call in exact-scope mode is routed
+  through, for repos behind a guarded proxy (e.g. `AGENT_GIT_PROXY="rtk proxy"`). Unset
+  is the normal case and means plain `git`.
+- The script targets **bash 3.2**, the version Apple ships. No `mapfile`, no associative
+  arrays, no `${var,,}`. Test changes against 3.2 semantics, not just bash 5.
+
+**Exit codes** (`.sh`): `0` success — including "nothing to commit"; `1` a gate refused;
+`2` bad invocation; `3` a required host tool was absent, so a check *could not run*.
+`3` is separate from `1` on purpose — "the gate said no" and "the gate never ran" are
+different facts, and merging them is how a repo comes to believe an unrun check passed.
+
 ### Exact-Scope Signed Commit Mode
 
 Use this mode for an approved packet in a dirty worktree or guarded clone. All
@@ -74,6 +145,23 @@ rtk proxy pwsh -NoProfile -File .agent/skills/git-workflow/scripts/agent-commit.
   -NoPush *> {{RECEIPTS_DIR}}/exact-scope-commit.txt
 ```
 
+```bash
+AGENT_GIT_PROXY="rtk proxy" \
+bash .agent/skills/git-workflow/scripts/agent-commit.sh \
+  --repository-path    <guarded-repository> \
+  --scope-manifest     <approved-manifest> \
+  --expected-base      <approved-parent-sha> \
+  --expected-tree      <approved-tree-sha> \
+  --content-descriptor <approved-content-descriptor.json> \
+  --message-file       <approved-message.txt> \
+  --output-state       <checkpoint-state.json> \
+  --no-push > {{RECEIPTS_DIR}}/exact-scope-commit.txt 2>&1
+```
+
+The shell version needs `python3` or `jq` to read the content descriptor and write
+the state file. If neither is on PATH it exits **3** rather than skipping the drift
+checks — a descriptor that cannot be read is not a descriptor that agrees.
+
 This mode loads the approved base into a temporary index, stages only manifest
 paths, rejects base/tree/message/signing-fingerprint drift, creates an
 SSH-signed commit, verifies its signature and parent/tree, and records the
@@ -86,10 +174,10 @@ invoked before the packet's direct human approval has been validated.
 1. ✅ Validates SSH signing config (fails fast if GPG would hang)
 2. ✅ Checks remote URL format (warns on HTTPS)
 3. ✅ Legacy mode stages all changes (`git add -A`); exact-scope mode stages only the approved manifest in an isolated index
-4. ✅ Runs Ruff lint + unit tests (aborts on failure) — skip with `-SkipTests`
+4. ✅ Runs Ruff lint + unit tests (aborts on failure) — skip with `-SkipTests` / `--skip-tests`
 4c. ✅ Regenerates `openapi.committed.json` if stale (prevents CI drift failures)
 5. ✅ Commits with `-m` flag (never opens editor)
-6. ✅ Pushes to origin (unless `-Push $false`)
+6. ✅ Pushes to origin (unless `-NoPush` / `--no-push`)
 7. ✅ Verifies with `git log --oneline -1`
 
 ### Pre-Commit Mandatory Step: Session Digest
@@ -145,7 +233,7 @@ invoked before the packet's direct human approval has been validated.
 ## Provenance
 
 - Conversation ID: `{conversation-id}`
-- Transcript: `C:\Users\Mat\.gemini\antigravity-ide\brain\{conversation-id}\.system_generated\logs\transcript.jsonl`
+- Transcript: `%USERPROFILE%\.gemini\antigravity-ide\brain\{conversation-id}\.system_generated\logs\transcript.jsonl`
 ```
 
 **Rules:**

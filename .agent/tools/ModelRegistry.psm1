@@ -93,15 +93,18 @@ function Get-AsArray {
 
 function Get-RegistryCandidate {
     <#
-        The S2 locate order: AGENT_MODEL_REGISTRY, then P:\.agent, then the user
-        profile. Returned as a list so the order is inspectable.
+        The S2 locate order: AGENT_MODEL_REGISTRY, then AGENT_MODEL_REGISTRY_HOME
+        (the shared / "drive-root" home, configured by env rather than a baked drive
+        letter), then the user profile. Returned as a list so the order is inspectable.
     #>
     [CmdletBinding()]
     param()
 
     $candidates = [System.Collections.Generic.List[string]]::new()
     if ($env:AGENT_MODEL_REGISTRY) { $candidates.Add($env:AGENT_MODEL_REGISTRY) }
-    $candidates.Add('P:/.agent/model-registry.json')
+    if ($env:AGENT_MODEL_REGISTRY_HOME) {
+        $candidates.Add((Join-Path $env:AGENT_MODEL_REGISTRY_HOME 'model-registry.json'))
+    }
     if ($env:USERPROFILE) {
         $candidates.Add((Join-Path $env:USERPROFILE '.agent/model-registry.json'))
     }

@@ -63,7 +63,7 @@ run manifest to `.agent/context/skill-optimizer/staging/`. If val/test are below
 
 ## Step 1 — Harvest & reflect (optimizer LLM)
 
-Dispatch the **optimizer** — **Claude Sonnet 5 @ medium** (mechanical class;
+Dispatch the **optimizer** — **`builder` @ medium** (mechanical class;
 `model-delegation.md`) — over the **train** split + the target doc. Ask it to emit
 **bounded `add/delete/replace` edits** (each with a rationale and a support count).
 Validate/dedup/clip to the budget with `propose.dedup_and_clip` (≤4 — the "textual
@@ -73,8 +73,8 @@ learning rate"). Drop any edit suppressed by the rejected-edit **buffer**
 ## Step 2 — Gate (cross-vendor judge, held-out)
 
 Produce the candidate via `propose.produce_candidate` (applies edits to a COPY).
-Dispatch the **judge** — **GPT-5.6 Sol @ high**, a DIFFERENT model family than the
-optimizer (Claude Opus 5 fallback only if it does NOT collide with the optimizer
+Dispatch the **judge** — **`independent_reviewer` @ high**, a DIFFERENT model family than the
+optimizer (`coordinator` fallback only if it does NOT collide with the optimizer
 family; else `block_for_human`). Score **candidate-vs-baseline pairwise, both orders**,
 over the **val** set, then the untouched **test** slice, via `gate.run_gate`:
 - **accept** iff candidate wins val by the ε margin AND does not regress test;

@@ -203,6 +203,19 @@ uv run python tools/aggregate_reflections.py `
   *> {{RECEIPTS_DIR}}/agg-cadence.txt; Get-Content {{RECEIPTS_DIR}}/agg-cadence.txt
 ```
 
+> [!IMPORTANT]
+> **`aggregate_reflections.py` is NOT shipped** with this package (`core/MANIFEST.md`
+> §Deliberately EXCLUDED) — it reads a reflection corpus whose section-id vocabulary is
+> the adopter's own, so a stub would emit real-looking numbers about nothing. Nothing in
+> the review, closeout, or dispatch path depends on it; only this cadence step does.
+>
+> Until you write it: Steps 1–5 above still run in full, and this step is **skipped with
+> a recorded basis** ("aggregator not implemented"), not silently. Do not substitute a
+> hand-written roll-up presented as a report — the whole point of the cadence gate is
+> that the numbers are reproducible from the corpus. What you must NOT do is drop the
+> action-log discipline below: a decision made from the qualitative review still gets a
+> disposition row.
+
 The dated report (`.agent/reports/coverage_{YYYYMMDD_HHMMSS}.md`) contains:
 - **Corpus** — discovered / parsed / skipped counts (with reasoned skips)
 - **Top sections by citation rate** + **Pruning candidates** (P0 never auto-pruned)
@@ -229,6 +242,20 @@ uv run python tools/append_action_log.py `
   --link-notes "{/plan-corrections link or rationale}" `
   *> {{RECEIPTS_DIR}}/action-log.txt; Get-Content {{RECEIPTS_DIR}}/action-log.txt
 ```
+
+> [!NOTE]
+> **`append_action_log.py` is NOT shipped** (`core/MANIFEST.md` §Deliberately EXCLUDED).
+> Its absence costs a line of typing, not a control: append the row by hand, creating
+> `.agent/reports/action-log.md` with this header on first use —
+>
+> ```markdown
+> | Date | Report | Recommendation | Section | Disposition | Link / notes |
+> |---|---|---|---|---|---|
+> | 2026-01-15 | coverage_20260115_090000.md | PRUNING_CANDIDATE | agents-execution-contract | deferred | thin sample, re-check next cadence |
+> ```
+>
+> The columns are exactly the flags above, in that order. The requirement is the row,
+> not the tool.
 
 A cadence run is not complete until every surfaced recommendation has a disposition row in
 `.agent/reports/action-log.md`.

@@ -1,0 +1,12 @@
+# Shell scripts must check out with LF on every platform.
+#
+# Scoped to *.sh deliberately, not `* text=auto`: a blanket rule would renormalize every
+# tracked file and bury real changes in a whitespace diff.
+#
+# Without this, a Windows clone with the default `core.autocrlf=true` writes CRLF into
+# preflight.sh, agent-commit.sh and Invoke-CodexDispatch.sh. Git's own storage is already
+# LF, so this is invisible in the repository and on macOS/Linux -- it only breaks in the
+# adopter's working copy, where bash reads the trailing CR as part of the command and
+# reports `$'\r': command not found` on the shebang line. The .sh wrapper is the canonical
+# dispatch path on macOS/Linux, so that is a whole platform's entry point.
+*.sh text eol=lf

@@ -1,15 +1,54 @@
 # macOS Setup for Agentic Dispatch
 
-> [!WARNING]
-> **UNVERIFIED on hardware.** This document was authored from primary sources and
-> issue trackers during planning/execution of the agentic-framework package
-> refresh (2026-08-04 / 2026-08-05). It has **not** been run end-to-end on a
-> physical macOS Tahoe machine in this project. Treat every claim as
-> research-backed guidance pending a live smoke (see §Smoke checklist). Flip
-> this banner only after a real hardware run produces receipt files.
+> [!NOTE]
+> **Verified on one class of host; contingencies retained.** Originally authored from
+> primary sources (2026-08-04/05) and marked UNVERIFIED. A second adopting repo then ran
+> dispatch on real hardware from 2026-08-05 through 2026-09-01 and settled the open
+> questions below. **Verified host class:** arm64, macOS 26.6 (Tahoe, build **25G72**),
+> Codex CLI 0.146.0, `pwsh` 7.5.4 present.
+>
+> Sections still marked **CONTINGENCY** were *not* reproduced as blockers on that host.
+> They are kept because they are cheap to keep and expensive to rediscover — not because
+> you should expect to hit them. "Unverified" was previously doing double duty as
+> "we don't know" and "assume the worst"; those are now separated.
 
 This guide is the macOS companion to `AGENTS.md` §PRIORITY 0 and
 `cli-dispatch/SKILL.md` §Cross-Platform Dispatch. Windows adopters can ignore it.
+
+---
+
+## 0. Read this first — four facts that change what you run
+
+1. **Use `Invoke-CodexDispatch.sh`, not the `.ps1`, even if `pwsh` is installed.**
+   `pwsh` being available is a convenience, not the dispatch path. See §0.1.
+2. **`codex exec` must not inherit an open stdin.** Redirect it (`< prompt.txt` or
+   `< /dev/null`) or it blocks forever on *"Reading additional input from stdin…"*.
+   The packaged `Invoke-CodexDispatch.sh` already does this; **hand-typed** `codex exec`
+   invocations and other CLIs driven the same way (`grok -p`, etc.) do not.
+3. **Receipts must not live in a cloud-sync working copy** (Google Drive, iCloud,
+   OneDrive) — see §5. And `/tmp` is wiped on reboot, so it is not a durable mirror.
+4. **`codex --version` returning in <1s means you are fine.** The `#23802` hang in §9b
+   did not reproduce on build 25G72.
+
+### 0.1 Why `.sh` is canonical on macOS
+
+The `.ps1` twin is not a behavioral twin here. On macOS, `/tmp` and `/etc` are symlinks
+whose targets are **relative** (`private/tmp`), and `Split-Path -Parent '/tmp'` returns
+the empty string. The unguarded `Get-PhysicalPath` therefore failed to resolve any
+`/tmp` path and reported the failure as something unrelated — typically *"PromptFile does
+not exist"* for a file that was plainly there.
+
+That defect is **fixed** in the packaged wrapper (empty parent → filesystem root, plus a
+fail-closed throw on empty resolution), and the fix is pinned by
+`tools/tests/Test-GetPhysicalPath.ps1`. Run it before trusting the `.ps1` on macOS:
+
+```bash
+pwsh -NoProfile -File tools/tests/Test-GetPhysicalPath.ps1 > {{RECEIPTS_DIR}}/gpp.txt 2>&1; code=$?; cat {{RECEIPTS_DIR}}/gpp.txt; exit $code
+```
+
+Expect `RESULT: ... 0 failure(s)` with **no** skipped macOS arm. `.sh` remains the
+recommended default regardless: it is the leg that gets exercised daily on macOS, so it
+is the leg whose bugs get found.
 
 ---
 
@@ -117,9 +156,27 @@ mkdir -p "$RECEIPTS_DIR"
 ```
 
 `workspace-write` covers the workspace cwd and `/tmp`. On macOS, `$TMPDIR` is a
-**per-user** path under `/var/folders/...`, **not** `/tmp`. If receipts live under
-`$HOME/.cache/...` (recommended), that path **must** be listed in
-`writable_roots` or Seatbelt will deny the P0 receipt write.
+**per-user** path under `/var/folders/...`, **not** `/tmp`.
+
+> [!IMPORTANT]
+> **Never put receipts inside a cloud-sync working copy.** If your git root is on Google
+> Drive, iCloud Drive, or OneDrive, receipts written there get uploaded, may be rewritten
+> or locked mid-write by the sync daemon, and turn evidence files into shared documents.
+> This is not hypothetical: a second adopting repo runs with a Google Drive git root, and
+> its receipts live off-volume for exactly this reason. `ADOPTION-QUESTIONS.md` A4b/F3
+> asks the question at setup time — answer it before your first dispatch.
+>
+> **And `/tmp` is not durable:** macOS wipes it on reboot. If a receipt must survive to
+> be cited later, name a durable mirror (e.g. `$HOME/.cache/{{PROJECT_NAME}}/receipts`)
+> and treat `/tmp` as scratch. A "perishable" and a "cloud-synced" location are both
+> wrong, for opposite reasons — pick a local, durable, non-synced path.
+
+**CONTINGENCY (not reproduced on the verified host).** If receipts live under
+`$HOME/.cache/...` *and* a dispatch runs inside an enforcing Seatbelt sandbox, that path
+must be listed in `writable_roots` or the P0 receipt write is denied. On the verified
+host, writing to a local receipts dir from the harness's own shell needed **no**
+`writable_roots` configuration — the requirement bites Codex-sandboxed subprocesses, not
+your shell. Keep the setting in §7 as insurance.
 
 Verify with Codex `/status` (interactive) or the sandbox probe writing a file
 into `$RECEIPTS_DIR`.
@@ -206,7 +263,14 @@ platforms for PowerShell 7.
 | `taskkill /T /F /PID $pid` | `Stop-Process -Id $pid -Force` (pwsh) or `pkill -TERM -P $pid` | `pkill -TERM -P $pid` / `kill -- -$pgid` |
 | `Get-FileHash -Algorithm SHA256` | `Get-FileHash` (pwsh) or `shasum -a 256` | `shasum -a 256` |
 | `cmd.exe /c …` | `/bin/sh -c '…'` | `/bin/sh -c '…'` |
-| `Invoke-CodexDispatch.ps1` | `pwsh -File tools/Invoke-CodexDispatch.ps1 …` | `tools/Invoke-CodexDispatch.sh --Mode …` |
+| `Invoke-CodexDispatch.ps1` | `pwsh -File tools/Invoke-CodexDispatch.ps1 …` — works, but **not** the recommended default (§0.1) | `tools/Invoke-CodexDispatch.sh --Mode …` ← **canonical on macOS/Linux** |
+| `agent-commit.ps1 -Message …` | `pwsh -File .agent/skills/git-workflow/scripts/agent-commit.ps1 -Message …` | `bash .agent/skills/git-workflow/scripts/agent-commit.sh --message …` ← **canonical on macOS/Linux** |
+
+The commit script's two legs are not flag-compatible: `.ps1` takes `-Message`, `.sh` takes
+`--message`, and the `.sh` refuses any unrecognized flag with exit 2 rather than committing
+with defaults. It also skips a lint/test gate whose tooling is absent (printing `SKIPPED`,
+never `passed`) — see `git-workflow/SKILL.md` §Portability for the full comparison and for
+`AGENT_COMMIT_TEST_CMD`.
 
 Sources:
 - https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-macos
@@ -217,12 +281,17 @@ Sources:
 
 ## 9. ⚠️ Blockers
 
-### 9a. Homebrew PowerShell **cask** Gatekeeper deadline — **2026-09-01**
+### 9a. Homebrew PowerShell **cask** Gatekeeper deadline — **PAST (was 2026-09-01)**
 
-Homebrew is disabling casks that fail macOS Gatekeeper checks on
-**2026-09-01**. The `powershell` / `powershell@preview` **casks** carry that
-deprecation. Prefer the **formula** (`brew install powershell`) or a
-Microsoft-signed `.pkg`. If you manually download a `.pkg`:
+> **This deadline has passed.** Homebrew disabled casks failing macOS Gatekeeper checks
+> on 2026-09-01. Kept as an installed-state diagnosis: if `pwsh` on your host came from
+> the old **cask**, it may now be broken or unupgradable. The remedy is the same as it
+> always was — reinstall from the **formula** or a Microsoft-signed `.pkg`. This is not a
+> deadline to beat; it is a thing that already happened to hosts that did not act.
+
+The `powershell` / `powershell@preview` **casks** carried that deprecation. Prefer the
+**formula** (`brew install powershell`) or a Microsoft-signed `.pkg`. If you manually
+download a `.pkg`:
 
 ```bash
 xattr -rd com.apple.quarantine /path/to/powershell.pkg
@@ -233,7 +302,13 @@ Sources:
 - https://github.com/Homebrew/brew/issues/20755 (Gatekeeper cask disable policy)
 - https://github.com/Homebrew/homebrew-cask/pull/251326 (`powershell` cask → formula migration)
 
-### 9b. openai/codex **#23802** — `_dyld_start` hang on Tahoe 26.4.1
+### 9b. openai/codex **#23802** — `_dyld_start` hang on Tahoe 26.4.1 — **CONTINGENCY**
+
+> **Did not reproduce on the verified host.** On arm64 macOS 26.6 (Tahoe, build
+> **25G72**) with Codex CLI 0.146.0, `codex --version` returns in well under a second.
+> `#23802` was reported against build **25E253**. Treat this section as a *diagnosis
+> path if you observe the symptom*, not as a step to perform. The fast check is below:
+> if `codex --version` answers promptly, skip the rest of §9b.
 
 **Symptom:** any `codex` subcommand (including `--version` / `--help`) hangs
 forever. `sample` shows 100% of samples in `_dyld_start`; **zero bytes** to
@@ -286,12 +361,27 @@ Run in order. Stop on the first failure and fix before continuing.
 6. Add that path to `writable_roots` under `[sandbox_workspace_write]` in `$CODEX_HOME/review.config.toml` (same file as §7 — not a nested `[profiles.review.*]` table).
 7. `codex sandbox macos --log-denials -- sh -c "echo ok > \"$RECEIPTS_DIR/sandbox-probe.txt\""`.
 8. Confirm `sandbox-probe.txt` exists.
-9. From the adopter repo root, run a real wrapper smoke (**pick one**):
+9. From the adopter repo root: `bash tools/preflight.sh`. This re-checks steps 2, 3 and 5
+   as one command and adds what a manual pass tends to miss — that `rg` is a binary rather
+   than a shell function from your profile, that `pyyaml` and `jsonschema` are importable by
+   the *same* interpreter the wrapper will call, that the registry home resolves and which
+   rung it resolved through, and whether `$RECEIPTS_DIR` sits inside an iCloud or Dropbox
+   working copy. `pwsh` absent is a **warning** here, not a failure: `.sh` is canonical on
+   macOS (§0.1). Exit `1` names the failing checks; exit `3` means the check itself could
+   not run and is not a pass.
+10. From the adopter repo root, run a real wrapper smoke (**pick one**):
+
+`-NonReviewDispatch` is correct here and only here: a hardware smoke is not a review
+round, so it must not consume one. `-Mode ReviewReadOnly` sets the *sandbox posture*
+and says nothing about loop membership — do not read the mode name as permission to
+carry this flag into an actual review. A real review round passes `-LoopId` instead;
+see the cli-dispatch skill for the exit-code table (`9` = the ledger refused).
 
 ```powershell
 # Option A — pwsh
 pwsh -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
   -Mode ReviewReadOnly `
+  -NonReviewDispatch `
   -ReasoningEffort medium `
   -OutputSchema .agent/schemas/review-verdict.schema.json `
   -PromptFile "$env:RECEIPTS_DIR/dispatch/smoke-prompt.txt" `
@@ -306,6 +396,7 @@ exit $code
 chmod +x tools/Invoke-CodexDispatch.sh
 tools/Invoke-CodexDispatch.sh \
   --Mode ReviewReadOnly \
+  --NonReviewDispatch \
   --ReasoningEffort medium \
   --OutputSchema .agent/schemas/review-verdict.schema.json \
   --PromptFile "$RECEIPTS_DIR/dispatch/smoke-prompt.txt" \
@@ -315,7 +406,11 @@ tail -n 40 "$RECEIPTS_DIR/dispatch/smoke-run.txt"
 exit $code
 ```
 
-10. Keep the smoke receipts; they are the hardware-validation evidence that
+If either invocation exits `1` with `loop_id_required`, the flag above was dropped;
+if it exits `3`, the gate could not be evaluated (no `python3`/`python`, or
+`tools/review_ledger.py` missing) — that is not a pass, and not a smoke you can keep.
+
+11. Keep the smoke receipts; they are the hardware-validation evidence that
     clears the UNVERIFIED banner at the top of this file.
 
 ---

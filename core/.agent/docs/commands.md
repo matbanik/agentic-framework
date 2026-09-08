@@ -14,6 +14,10 @@
 > argv through the canonical receipt policy before execution.
 
 ```bash
+# Environment (run once per session, before the first redirect or dispatch)
+bash tools/preflight.sh                # 8 prerequisite checks; exit 1 names the failures
+bash tools/preflight.sh --phase build  # skip the codex/pwsh checks when no review is planned
+
 # Validation (current scaffold: Python-only)
 uv run python tools/validate_codebase.py --scope meu  # MEU gate during active implementation
 uv run python tools/validate_codebase.py              # Full phase gate after all phase MEUs complete

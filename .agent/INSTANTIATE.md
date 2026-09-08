@@ -2,7 +2,7 @@
 
 This directory is a **template** of a model-capability registry home. It is a
 sibling of `core/`, `scripts/`, and `README.md` in this package, analogous to a
-drive-root `.agent/` on a machine that already has a live registry. It ships
+shared `.agent/` home on a machine that already has a live registry. It ships
 **classes, not live snapshots**. Copying this folder into a project does not
 give you bindings — you write those yourself, against the slugs your harnesses
 actually accept.
@@ -15,8 +15,28 @@ registry home and do not delete it.
 The resolver locates the compiled registry in this order (S2):
 
 1. `AGENT_MODEL_REGISTRY` — a path to the compiled JSON **file**
-2. `P:/.agent/model-registry.json` (drive-root convention)
-3. `%USERPROFILE%/.agent/model-registry.json` (machines without `P:\`)
+2. `$AGENT_MODEL_REGISTRY_HOME/model-registry.json` — the **shared home**, for a
+   catalog serving several repos on one machine
+3. `%USERPROFILE%/.agent/model-registry.json` (POSIX: `$HOME/.agent/…`)
+
+Rung 2 is an env var and not a baked path on purpose. A shared home is a
+*local layout decision* — `P:\.agent` on one Windows box, `/opt/.agent` or
+`~/Sync/.agent` elsewhere — so a literal would be wrong for every adopter but
+the one who wrote it, and silently wrong on macOS/Linux, where nothing named
+`P:` exists. Set it once per machine:
+
+```powershell
+# Windows, persistent for the user
+[Environment]::SetEnvironmentVariable('AGENT_MODEL_REGISTRY_HOME', 'P:\.agent', 'User')
+```
+
+```bash
+# macOS / Linux, in ~/.zshrc or ~/.bashrc
+export AGENT_MODEL_REGISTRY_HOME="$HOME/.agent-registry"
+```
+
+Leaving it unset is a valid choice: the order then falls straight through to
+rung 3, which is what a single-machine, single-repo adopter wants.
 
 `AGENT_MODEL_REGISTRY` must name the file, not the directory holding it. A
 directory passes the existence test, so the resolver returns it and the read
@@ -26,8 +46,9 @@ different lookup and does not extend to loading a registry.)
 
 Pick **one** live home:
 
-- **Drive-root** — `P:/.agent/` (or the equivalent on your drive) when several
-  repos on the same machine should share one catalog and one bump.
+- **Shared home** — whatever path you point `AGENT_MODEL_REGISTRY_HOME` at, when
+  several repos on the same machine should share one catalog and one bump. Pick a
+  local, durable path outside any repo and outside any cloud-sync working copy.
 - **workspace-root** — `<project>/.agent/` only if this project owns the
   catalog. Project overlays still live at `<project>/.agent/model-registry.local.yaml`
   even when the global home is on the drive.

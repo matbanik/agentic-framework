@@ -27,7 +27,7 @@ This is a **PLANNING-phase-only** workflow. It produces draft artifacts (MEU reg
 1. **Dependency-first** — never group an MEU ahead of its prerequisites; foundation → roof.
 2. **One project = one session** — each session is one continuous build pass; do not chain unrelated streams.
 3. **Logical continuity** — shared files/context belong in the same session (maximize context reuse).
-4. **Right-sized** — calibrate each session against the per-session token ceiling using **named past sessions**, not hardcoded constants (the Opus-4.8 tokenizer inflates ~20%).
+4. **Right-sized** — calibrate each session against the per-session token ceiling using **named past sessions**, not hardcoded constants (a coordinator-tier tokenizer can inflate a naive character estimate by ~20%, so measure, do not assume).
 5. **Single-plan-per-phase by default** — most phases map to one `/create-plan` run; multi-session fan-out is the **documented exception** the proposal must declare explicitly.
 
 ## Prerequisites

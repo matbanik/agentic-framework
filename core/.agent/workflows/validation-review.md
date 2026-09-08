@@ -1,5 +1,5 @@
 ---
-description: Validation and adversarial review workflow for GPT-5.6 Sol Codex — verify tests, review code, generate evidence bundle.
+description: Validation and adversarial review workflow for the Codex `independent_reviewer` — verify tests, review code, generate evidence bundle.
 ---
 
 # Validation Review Workflow (Codex Agent)
@@ -18,7 +18,7 @@ Use this workflow when validating a completed MEU. Codex is the **validation age
 > [!CAUTION]
 > **Actor model.** This workflow has two actors:
 > - **Orchestrator** (the implementing agent / primary driver — see `.agent/docs/harness-profiles.md`) — executes **Step 0 only**: constructs the prompt, dispatches to Codex CLI, reads output, incorporates findings.
-> - **Codex CLI** (GPT-5.6 Sol, external agent) — executes **Steps 1–7**: runs tests, performs adversarial review, issues verdict.
+> - **Codex CLI** (`independent_reviewer`, external agent) — executes **Steps 1–7**: runs tests, performs adversarial review, issues verdict.
 >
 > **Self-review prohibition.** If you wrote the code being reviewed, you are the orchestrator — STOP at Step 0. Do NOT execute Steps 1–7 yourself. See `AGENTS.md` §Execution Contract.
 
@@ -32,16 +32,53 @@ Use this workflow when validating a completed MEU. Codex is the **validation age
 1. Load `.agent/skills/cli-dispatch/SKILL.md` for dispatch mechanics
 2. Clear stale output: `Remove-Item {{RECEIPTS_DIR}}/dispatch/validation -Recurse -ErrorAction SilentlyContinue`
 3. Create dispatch dir: `New-Item -ItemType Directory -Force -Path {{RECEIPTS_DIR}}/dispatch`
+4. **Open the review loop.** Once per body of work, not once per round — `begin` is
+   idempotent-by-refusal, so a second call on an open loop tells you the loop already
+   exists rather than resetting its round count:
+   ```powershell
+   $LOOP_ID = "validation-{project-slug}-{YYYY-MM-DD}"
+   python tools/review_ledger.py begin `
+     --loop-id $LOOP_ID `
+     --review-mode execution `
+     --producer "<the agent that wrote the code>"
+   ```
+   `--producer` is what makes the self-review prohibition above enforceable rather than
+   advisory: `record` refuses a verdict whose author equals the producer.
 
 **Dispatch command:** (effort per `cli-dispatch/SKILL.md` §Reviewer Effort Policy — `medium` for routine review, `high` for hard/risk-path; `max`/`xhigh` only for tagged deep sub-reviews)
 ```powershell
 powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
   -Mode ReviewReadOnly `
+  -LoopId $LOOP_ID `
+  -Kind execution `
   -ReasoningEffort medium `
+  -OutputSchema .agent/schemas/review-verdict.schema.v2.json `
   -DispatchId validation `
   -Force `
   -PromptText "<VALIDATION_PROMPT>"
 ```
+
+`-OutputSchema` is not optional once the loop is bound: `record` validates the verdict
+against that schema and refuses a free-text one, so a dispatch without it produces a
+round the ledger cannot count.
+
+`-LoopId` is mandatory here (the alternative, `-NonReviewDispatch`, is a bypass and is
+recorded as one in `status.json`). The wrapper evaluates the ledger *before* it resolves
+a model, so a closed loop refuses cheaply:
+
+| Exit | Meaning |
+|---|---|
+| `0` | A round is permitted — dispatch proceeded |
+| `1` | Neither `-LoopId` nor `-NonReviewDispatch`, both, a malformed id, or a `-Kind` that contradicts the loop — fix the invocation |
+| `9` | **The ledger refused this round.** A decision, not an error — apply the relief its message names, or escalate to a human |
+| `3` | The gate could not be evaluated — never read `3` as a pass |
+
+`-Kind execution` matches the `--review-mode execution` this loop was opened with, and the
+wrapper checks it against the ledger rather than trusting it — a `kind_mismatch` here means
+the dispatch is aimed at a different loop, whose budget is the one about to be spent. It
+also raises this dispatch's timeout to the 45-minute execution floor: `-ReasoningEffort
+medium` alone derives 15 minutes, which a review that has to read a whole change plus its
+receipts spends before writing a verdict, and the round is charged either way.
 
 **Prompt must include:**
 - Handoff path: `.agent/context/handoffs/{YYYY-MM-DD}-{project-slug}-handoff.md`
@@ -51,11 +88,37 @@ powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
 - Output format: the Evidence Bundle template from Step 7
 
 **After Codex returns:**
-1. Read `{{RECEIPTS_DIR}}/dispatch/validation/final.md`
+1. Read `{{RECEIPTS_DIR}}/dispatch/validation/final.json` — with `-OutputSchema` set the
+   wrapper writes `final.json`, not `final.md`; looking for the wrong name reads as an
+   empty dispatch
 2. Verify it is non-empty (empty = dispatch failure, retry or escalate)
 3. Append the Codex output to the handoff as a `## Codex Validation Report` section
 4. Add **Review Provenance** block (see Step 7)
-5. If verdict is `changes_required`, fix findings and re-dispatch
+5. **Record the round before acting on it.** The ledger counts rounds that were
+   *recorded*, so a verdict acted on but never recorded is a round the budget never
+   sees — which is how a bounded loop quietly becomes an unbounded one:
+   ```powershell
+   python tools/review_ledger.py record --loop-id $LOOP_ID `
+     --verdict-file {{RECEIPTS_DIR}}/dispatch/validation/final.json
+   ```
+   The verdict file must validate against `.agent/schemas/review-verdict.schema.v2.json`.
+   `record` refuses on a schema violation, on a self-review, and on a round the budget
+   or a mechanism stop already blocked — and it checks *before* writing, so a refused
+   round does not consume budget.
+6. If the verdict is `changes_required`, fix the findings and re-dispatch — the gate on
+   the next dispatch decides whether that is still permitted. Do **not** re-dispatch past
+   an exit `9`; each stop has its own relief and they are not interchangeable:
+
+   | Stop | Relief |
+   |---|---|
+   | `budget` — round budget exhausted | `grant --owner <named human> --rationale "<≥20 chars>"` buys **one** round |
+   | `mechanism` — the same mechanism class keeps failing | `relieve --mechanism <class> --owner <named human> --rationale …`; a repeat mechanism failure means the fix is not in the findings |
+   | `scaffolding` — findings are churning on test scaffolding | Stop reviewing; the work under review is not what is failing |
+   | `instrument` — the instrument digest changed mid-loop | The reviewer's own tooling moved; re-baseline before continuing |
+
+   `grant` **refuses while any non-`budget` stop is active**. That is deliberate: "just
+   grant another round" is the single most likely way this control gets defeated, and a
+   granted round would not have unblocked the loop anyway.
 
 ---
 
@@ -200,12 +263,16 @@ Create or append to the handoff artifact:
 - If MEDIUM or LOW, flag for human review even if verdict is "approved"
 
 ### Review Provenance (REQUIRED — orchestrator fills this)
-- **Reviewer**: Codex CLI / GPT-5.6 Sol
-- **Dispatch command**: `powershell -File tools/Invoke-CodexDispatch.ps1 -Mode ReviewReadOnly -ReasoningEffort {effort} -DispatchId validation -PromptText ...`
-- **Output file**: `{{RECEIPTS_DIR}}/dispatch/validation/final.md`
+- **Reviewer**: Codex CLI (`independent_reviewer`)
+- **Dispatch command**: `powershell -File tools/Invoke-CodexDispatch.ps1 -Mode ReviewReadOnly -LoopId {loop-id} -Kind execution -ReasoningEffort {effort} -DispatchId validation -PromptText ...`
+- **Output file**: `{{RECEIPTS_DIR}}/dispatch/validation/final.json`
 - **Log file**: `{{RECEIPTS_DIR}}/dispatch/validation/events.jsonl.gz` (or `events.jsonl`)
 - **Timestamp**: {YYYY-MM-DD HH:MM TZ}
 - **Output non-empty**: YES / NO (if NO, dispatch failed — do not accept)
+- **Loop / round**: `{loop-id}` round `{n}` of `{budget}` — copy from `review_ledger.py state --loop-id {loop-id}`
+- **Ledger gate**: `permitted` / `bypassed-non-review` — from `status.json`. `bypassed-non-review`
+  on a validation review is a defect in the dispatch, not a provenance detail: the round
+  was never counted.
 
 > A validation report without Review Provenance is invalid. The orchestrator
 > must NOT selectively summarize Codex findings — append verbatim or link
@@ -218,10 +285,15 @@ Validation continuity rule:
 - append a new dated `Codex Validation Report` section on each review cycle
 - do not create separate validation, recheck, or critique files for the same MEU
 
+This is a **control, not tidiness**. The rolling review file's `## Recheck` headings are
+what `validate_closeout_artifacts.py` counts rounds from, so a per-round file resets the
+count to 1 and defeats the cap without anyone deciding to. `review_ledger.py` counts
+recorded rounds independently; if the two disagree, the higher number is the real one.
+
 ## Verdict Definitions
 
 - **approved**: All checks pass, all AV items pass, all FIC criteria verified. MEU is complete.
-- **changes_required**: List specific items that must be fixed. Opus re-enters the TDD workflow to address findings, then re-submits for review. Use this verdict if the MEU depends on unsourced acceptance criteria or silent best-practice assumptions.
+- **changes_required**: List specific items that must be fixed. The implementer re-enters the TDD workflow to address findings, then re-submits for review. Use this verdict if the MEU depends on unsourced acceptance criteria or silent best-practice assumptions.
 
 ## Escalation
 

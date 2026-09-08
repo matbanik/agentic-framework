@@ -1,5 +1,5 @@
 ---
-description: Handoff protocol between Opus (implementation) and Codex (validation) agents for MEU-scoped work.
+description: Handoff protocol between the `coordinator` class (implementation) and the `independent_reviewer` class (validation) for MEU-scoped work.
 ---
 
 # MEU Handoff Protocol
@@ -113,14 +113,14 @@ cross-session continuity. The rolling project review remains
 ```
 ready_for_review  →  approved          (Codex validates, all checks pass)
 ready_for_review  →  changes_required  (Codex finds issues)
-changes_required  →  ready_for_review  (Opus fixes and resubmits)
+changes_required  →  ready_for_review  (coordinator fixes and resubmits)
 blocked           →  ready_for_review  (Blocker resolved)
 approved          →  (terminal)        (MEU complete, update via `tools/meu_status.py update`)
 ```
 
 ## Max Revision Cycles
 
-Maximum 2 revision cycles (Opus→Codex→Opus→Codex) per MEU. After 2 cycles, escalate to human orchestrator with:
+Maximum 2 revision cycles (coordinator→reviewer→coordinator→reviewer) per MEU. After 2 cycles, escalate to human orchestrator with:
 - Summary of disagreement
 - Both agents' positions
 - Recommended resolution

@@ -30,7 +30,7 @@ Determine the MEU's risk tier first. This controls which steps are required:
 
 ### Step 0: Pre-Review Mechanical Self-Check (catch reviewer-bound findings first) — ALL TIERS
 
-Run BEFORE dispatching to the external reviewer. The 2-week audit (2026-06-13) showed most paid review rounds churned on mechanical findings; catch them here instead of spending a paid reviewer round. This is a Sonnet 5 mechanical-class task (see `.agent/docs/model-delegation.md`).
+Run BEFORE dispatching to the external reviewer. The 2-week audit (2026-06-13) showed most paid review rounds churned on mechanical findings; catch them here instead of spending a paid reviewer round. This is a `builder` mechanical-class task (see `.agent/docs/model-delegation.md`).
 
 1. **Single-source-of-truth counts** — any count restated across docs (element counts, test counts, tag counts) must trace to one authoritative source. `rg` the count across all docs and reconcile drift.
 2. **Runnable-validation lint** — every validation command in `task.md`/handoff uses the `*> {{RECEIPTS_DIR}}/...; Get-Content` redirect pattern and a repo-root cwd; no markdown-escaped pipes (`\|`) inside command cells; no prose-only "verify X" placeholders.

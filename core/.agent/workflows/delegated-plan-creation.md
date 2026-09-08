@@ -230,16 +230,36 @@ If either file is missing, the dispatch failed — check the log file and retry.
 
 The orchestrator (the primary driver, per `.agent/docs/harness-profiles.md`) now handles the Codex plan-critical-review loop.
 
-### 5a. Dispatch Codex R1
+### 5a. Open the loop, then dispatch Codex R1
+
+The round cap in 5c is enforced by the ledger, not by the orchestrator remembering to
+count. Open the loop once, before R1:
+
+```powershell
+$LOOP_ID = "planreview-{project-slug}-{YYYY-MM-DD}"
+python tools/review_ledger.py begin `
+  --loop-id $LOOP_ID `
+  --review-mode plan `
+  --producer "<the agent that wrote the plan>"
+```
+
+`--review-mode plan` is what sets the cap of 3 referenced in 5c — the number lives in
+the ledger, so there is one place to change it and no prose copy to drift.
 
 ```powershell
 powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
   -Mode ReviewReadOnly `
+  -LoopId $LOOP_ID `
+  -Kind plan `
   -ReasoningEffort high `
-  -OutputSchema .agent/schemas/review-verdict.schema.json `
+  -OutputSchema .agent/schemas/review-verdict.schema.v2.json `
   -DispatchId "{project-slug}-planreview-r1" `
   -Force `
   -PromptText "Perform /plan-critical-review for {project-slug}. Read .agent/workflows/plan-critical-review.md for the full protocol. Review targets: docs/execution/plans/{YYYY-MM-DD}-{project-slug}/implementation-plan.md and docs/execution/plans/{YYYY-MM-DD}-{project-slug}/task.md."
+
+# Record the round before rendering it. An unrecorded round is one the cap never sees.
+python tools/review_ledger.py record --loop-id $LOOP_ID `
+  --verdict-file {{RECEIPTS_DIR}}/dispatch/{project-slug}-planreview-r1/final.json
 
 # Render the verdict on the orchestrator side
 uv run python tools/render_review_verdict.py `
@@ -247,6 +267,23 @@ uv run python tools/render_review_verdict.py `
   --output .agent/context/handoffs/{project-slug}-plan-critical-review.md `
   --overwrite
 ```
+
+> [!IMPORTANT]
+> **`render_review_verdict.py` is NOT shipped** with this package (`core/MANIFEST.md`
+> §Deliberately EXCLUDED). It is a presentation convenience: it turns the verdict JSON
+> into the rolling review markdown. Nothing *decides* anything from its output —
+> `review_ledger.py record` reads `final.json` directly, and the round cap is enforced
+> at dispatch time.
+>
+> Until you write it, do the render by hand and keep both artifacts:
+> - `final.json` stays the machine-readable verdict (what `record` validates).
+> - `.agent/context/handoffs/{project-slug}-plan-critical-review.md` is still
+>   **required** — it is the review file §5b reads, the one the reviewer appends each
+>   round to, and the target `validate_closeout_artifacts.py --review` checks. Create it
+>   from the REVIEW-TEMPLATE and paste the verdict's `verdict`, `findings`, and
+>   `rationale` into it. Do **not** substitute "read the JSON" for the review file; a
+>   missing review file fails the closeout checks, and `--overwrite` semantics matter
+>   only to the renderer, not to the loop.
 
 > **First review uses `high` effort** — the planner's output hasn't been reviewed yet, so treat it as a first substantive review per §Reviewer Effort Policy.
 
@@ -267,20 +304,35 @@ Get-Content .agent/context/handoffs/{project-slug}-plan-critical-review.md
 ```powershell
 powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
   -Mode ReviewReadOnly `
+  -LoopId $LOOP_ID `
+  -Kind plan `
   -ReasoningEffort medium `
-  -OutputSchema .agent/schemas/review-verdict.schema.json `
+  -OutputSchema .agent/schemas/review-verdict.schema.v2.json `
   -DispatchId "{project-slug}-planreview-r{N}" `
   -Force `
   -PromptText "Perform /plan-critical-review ROUND {N} recheck for {project-slug}. Review targets: docs/execution/plans/{YYYY-MM-DD}-{project-slug}/implementation-plan.md and docs/execution/plans/{YYYY-MM-DD}-{project-slug}/task.md. Apply template checklist checks and confirm if prior findings have been fixed."
 
+python tools/review_ledger.py record --loop-id $LOOP_ID `
+  --verdict-file {{RECEIPTS_DIR}}/dispatch/{project-slug}-planreview-r{N}/final.json
+
 # Render and append/overwrite the verdict on the orchestrator side
+# (not shipped -- see the §5a note; by hand, append round {N}'s verdict to the same
+#  rolling review file rather than creating a per-round one)
 uv run python tools/render_review_verdict.py `
   --input {{RECEIPTS_DIR}}/dispatch/{project-slug}-planreview-r{N}/final.json `
   --output .agent/context/handoffs/{project-slug}-plan-critical-review.md `
   --overwrite
 ```
 
-4. Repeat until `approved` or round cap (3)
+4. Repeat until `approved`, or until the dispatch exits `9` — the ledger's cap for
+   `--review-mode plan` is 3 rounds, and it is enforced at dispatch time rather than by
+   the orchestrator tracking `{N}` itself. Do not answer a `9` by re-running with
+   `-NonReviewDispatch`; that is recorded in `status.json` as
+   `ledger_gate: bypassed-non-review` and leaves the round uncounted. Read the stop kind
+   in the refusal message and apply its own relief (`grant` for `budget`, `relieve` for
+   `mechanism`), or escalate to a human. Round number comes from
+   `review_ledger.py state --loop-id $LOOP_ID`, which is authoritative — `{N}` in the
+   `-DispatchId` above is a label, not the count.
 
 **If `approved`:**
 → Report the verdict, then branch on `plan_to_exec_gate` (`.agent/docs/harness-profiles.md`): if `human` (Claude Code / Cursor / headless / UNKNOWN — see `GUARDRAILS.md` SIGN 1, `create-plan.md` §5c), end the turn and wait for the user's explicit "start execution"/"proceed"; if `reviewer-auto` (only the legacy Antigravity *driver* profile, dormant), auto-continue straight to execution.
@@ -296,9 +348,9 @@ If 3 rounds without approval, present TL;DR and wait for human direction.
 Present to the user:
 
 ```
-Plan approved by Codex GPT-5.6 Sol in {N} rounds.
+Plan approved by Codex `independent_reviewer` in {N} rounds.
 
-Planner: {Fable 5 | Opus 5} @ {effort} — {turns} turns
+Planner: {architecture_single_shot | coordinator} @ {effort} — {turns} turns
 Review: {N} rounds (R1: {findings}, R2: {findings}, ...)
 
 Plan files:
@@ -317,12 +369,16 @@ Per the canonical gate rule (`.agent/docs/harness-profiles.md`, `GUARDRAILS.md` 
 
 ## Cost Reference
 
+One measured run, kept as an order-of-magnitude anchor rather than a price list. Read the
+rows as "a planner tier costs tens of dollars and a review round costs single digits" —
+the ratio is the durable part; the absolute numbers move with every price change.
+
 | Configuration | Empirical Cost | Turns | Notes |
 |---------------|---------------|-------|-------|
-| Fable 5 @ high, 2 MEUs (D1+D7) | $26.67 | 26 | Hit $25 cap before R2 |
+| `architecture_single_shot` @ high, 2 MEUs (D1+D7) | $26.67 | 26 | Hit $25 cap before R2 |
 | Codex R1 @ high (first review) | ~$2-4 | — | Subscription |
 | Codex R2-R3 @ medium (follow-up) | ~$0.80-1.50 | — | Subscription |
-| **Total (Fable + 3 Codex rounds)** | **~30 to 35 USD** | | |
+| **Total (planner + 3 Codex rounds)** | **~30 to 35 USD** | | |
 
 ---
 

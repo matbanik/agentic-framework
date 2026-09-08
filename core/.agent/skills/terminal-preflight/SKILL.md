@@ -14,6 +14,35 @@ description: Mandatory pre-flight checklist for terminal commands. Enforces the 
 Use [`.agent/docs/output-evidence-policy.md`](../../docs/output-evidence-policy.md) as
 the single authority for RTK native/proxy classification and exact-evidence bypasses.
 
+## Environment Pre-Flight — once per session, not once per command
+
+The checklist below is **per command**. The environment it assumes is **per session**, and
+it is proven by one command rather than assumed:
+
+```bash
+bash tools/preflight.sh              # every check
+bash tools/preflight.sh --phase build   # skip the dispatch checks when no review is planned
+```
+
+Run it once, at the point where you first need a shell — before the first redirect, and
+before any dispatch. Do **not** re-run it per command; it is a session-start gate, and its
+cost is only justified once.
+
+- Exit `0` — proceed. Warnings are printed and named; read them, they do not block.
+- Exit `1` — a prerequisite is missing, and the `REFUSE:` line names which checks. Fix them
+  before running anything whose output you intend to trust.
+- Exit `3` — the check could not run. **Never read `3` as a pass.**
+
+What it proves matters more than the fact that it passed: that `RECEIPTS_DIR` is set,
+absolute, outside the repo and writable (every redirect below writes there, and a
+`{{RECEIPTS_DIR}}` that was never instantiated creates a literal `{{...}}` directory that
+the next tool will not read); and that `rg` is a real binary that was just shown to match a
+fixture, not a shell function. That second one is the reason this section exists: an `rg`
+defined as a shell function in your interactive profile does not exist in the
+non-interactive subshell every tool here uses, so it exits `127` with no output — and a
+sweep whose contract is "no matches means clean" reports clean. An `rg` may be exempt from
+the redirect pattern (§When to Skip); it is never exempt from being real.
+
 ## Pre-Flight Checklist
 
 Satisfy ALL before every `run_command`:
@@ -26,7 +55,12 @@ Satisfy ALL before every `run_command`:
   unsupported commands and exact evidence
 - [ ] **Exit check**: save `$LASTEXITCODE` before reading any receipt and propagate it
 
-> These items are the single source of truth — they match `AGENTS.md §PRIORITY 0` exactly.
+> This list is an operational restatement for the moment before a command runs; it is
+> **not** an authority. Where it and
+> [`output-evidence-policy.md`](../../docs/output-evidence-policy.md) differ, that file
+> wins and this one is the defect. (It has already happened once: this skill claimed to be
+> "the single source of truth" while carrying a blanket `rg` exemption the policy's
+> exact-evidence bypass forbids.)
 
 ## SOP: Standard Operating Procedure
 
@@ -105,9 +139,8 @@ uv run pyright packages/ > <INVALID-BACKSLASH-TEMP-PATH> 2>&1
 
 ## When to Skip
 
-This skill may be skipped ONLY for:
-- `rg` searches (lightweight, no buffer risk)
-- `Get-Content` / `Test-Path` (read-only, instant)
-- `(Get-Content <file>).Count` (single-value output)
-
-All other commands — especially pytest, vitest, pyright, ruff, npm, git — MUST use the redirect pattern.
+See [`output-evidence-policy.md`](../../docs/output-evidence-policy.md) §Commands that may
+skip the receipt. Two conditions must both hold, and the second one is the one this list
+used to be missing: **the result must not be evidence for any exact-evidence bypass
+class.** A bounded read you look at yourself may skip; an `rg` whose zero matches you
+intend to cite may not, however lightweight it is.

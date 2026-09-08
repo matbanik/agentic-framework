@@ -194,7 +194,7 @@ This is the highest-priority procedure after truncation. Execute it BEFORE addre
 
 ```
 # ❌ Update only the agent workspace task.md
-write_to_file: C:\Users\Mat\.gemini\antigravity\brain\{id}\task.md  # WRONG source
+write_to_file: %USERPROFILE%\.gemini\antigravity\brain\{id}\task.md  # WRONG source
 
 # ❌ Treat "all tests green" as completion
 "2299 passed, 0 failed → report to user"  # WRONG — tests green is a milestone, not a stopping point

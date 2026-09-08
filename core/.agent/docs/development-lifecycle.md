@@ -265,13 +265,13 @@ docs/build-plan/
 
 ## Phase 5: Plan Validation (External Reviewer Loop)
 
-**Purpose:** Independent AI review of the plan for accuracy, consistency, and completeness before any code is written. The reviewer role is role-generic, not vendor-fixed — the independent-reviewer chain (Codex GPT-5.6-sol primary → Gemini 3.5 surface-only → headless `claude -p` last resort) is defined in `.agent/docs/model-routing.md`; "Codex" below names the current primary reviewer.
+**Purpose:** Independent AI review of the plan for accuracy, consistency, and completeness before any code is written. The reviewer role is role-generic, not vendor-fixed — the independent-reviewer chain (cross-vendor primary → surface-only secondary → **human**; no same-vendor rung) is defined in `.agent/docs/model-routing.md`; "Codex" below names the current primary reviewer.
 
 **Human involvement:** 🟡 Review is auto-dispatched by the workflow (`create-plan.md` §5), not human-triggered. Doc-only corrections applied via [plan-corrections.md](https://{{REPO_URL}}/blob/main/.agent/workflows/plan-corrections.md) auto-proceed (reversible, no separate approval gate); the re-dispatched review is what re-validates the fix. Human intervenes only for the round-cap/rate-limit HARD STOPs, a reviewer human-decision-required question, or — once `approved` — the `plan_to_exec_gate == human` go-ahead (`.agent/docs/harness-profiles.md`, `GUARDRAILS.md` SIGN 1).
 
 ### Process
 
-1. **Agent dispatches** plan to the external reviewer (Codex GPT-5.6-sol primary; see `.agent/docs/model-routing.md`) via [cli-dispatch/SKILL.md](https://{{REPO_URL}}/blob/main/.agent/skills/cli-dispatch/SKILL.md)
+1. **Agent dispatches** plan to the external reviewer (Codex primary; see `.agent/docs/model-routing.md`) via [cli-dispatch/SKILL.md](https://{{REPO_URL}}/blob/main/.agent/skills/cli-dispatch/SKILL.md)
 2. **Codex reviews** against checklist (PR-1 through PR-6, DR-1 through DR-8)
 3. **If findings:** agent applies `/plan-corrections` → [plan-corrections.md](https://{{REPO_URL}}/blob/main/.agent/workflows/plan-corrections.md)
 4. **Re-submit** for review
@@ -284,16 +284,16 @@ docs/build-plan/
 
 | Rule | Value | Source |
 |------|-------|--------|
-| Plan convergence cap | 3 non-approved rounds → T2 escalation | Human-approved + external-reviewer (Codex GPT-5.6-sol) advisory |
-| First review depth | Always `xhigh` reasoning effort | Human-approved + external-reviewer (Codex GPT-5.6-sol) advisory |
-| Follow-up depth | <200 LOC `medium`, 200-400 `high`, >400 `xhigh` | Human-approved + external-reviewer (Codex GPT-5.6-sol) advisory |
-| Governance files | Always `xhigh` regardless of LOC | Human-approved + external-reviewer (Codex GPT-5.6-sol) advisory |
+| Plan convergence cap | 3 non-approved rounds → T2 escalation | Human-approved + external-reviewer (Codex `independent_reviewer`) advisory |
+| First review depth | Always `xhigh` reasoning effort | Human-approved + external-reviewer (Codex `independent_reviewer`) advisory |
+| Follow-up depth | <200 LOC `medium`, 200-400 `high`, >400 `xhigh` | Human-approved + external-reviewer (Codex `independent_reviewer`) advisory |
+| Governance files | Always `xhigh` regardless of LOC | Human-approved + external-reviewer (Codex `independent_reviewer`) advisory |
 | `low` effort | Never used — minimum is `medium` | Human-approved |
 
 ### Rate Limit Fallback
 
 When a reviewer CLI hits a rate limit, the [Rate-Limit Fallback Protocol](https://{{REPO_URL}}/blob/main/.agent/skills/cli-dispatch/SKILL.md) walks the independent-reviewer chain **in order first**, and only escalates to human/web submission when **all rungs** are exhausted:
-1. Try the next reviewer rung (Codex GPT-5.6-sol → Gemini surface → headless Claude last-resort; canonical in `.agent/docs/model-routing.md`)
+1. Try the next reviewer rung (cross-vendor primary → surface-only secondary → **human**; canonical in `.agent/docs/model-routing.md`)
 2. If **all rungs** are rate-limited/unavailable: save prompt to `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`, adapt for web submission (inline context, markdown)
 3. Human submits to web interface manually (a HARD STOP at a human gate — never self-review)
 4. Paste response back; agent continues
@@ -369,7 +369,7 @@ When a reviewer CLI hits a rate limit, the [Rate-Limit Fallback Protocol](https:
 
 ### Process
 
-1. **Agent dispatches** handoff to the external reviewer (Codex GPT-5.6-sol primary; see `.agent/docs/model-routing.md`) via `/execution-critical-review`
+1. **Agent dispatches** handoff to the external reviewer (Codex primary; see `.agent/docs/model-routing.md`) via `/execution-critical-review`
 2. **Codex reviews** implementation against FIC acceptance criteria
 3. **If findings:** agent applies `/execution-corrections`
 4. **Re-submit** for review
@@ -562,7 +562,7 @@ flowchart LR
 |------|---------|--------------|
 | `current-focus.md` | What's being worked on now | Session start/end |
 | `known-issues.md` | Active known issues | When issues found/resolved |
-| `known-issues-archive.md` | Resolved issues archive | When issues resolved |
+| `known-issues-archive.md` | *Legacy* pre-SSOT archive | Never — resolved issues stay in `known-issues.yaml` |
 | `meu-registry.md` | All MEU statuses | After each MEU completes |
 | `handoffs/` | Per-project handoff files | After implementation |
 | `decision_log.jsonl` | Structured decision log | When T2/T3 decisions made |
@@ -580,7 +580,7 @@ flowchart LR
 |------|---------|
 | [`AGENTS.md`](https://{{REPO_URL}}/blob/main/AGENTS.md) | Master agent instructions |
 | [`.agent/docs/emerging-standards.md`](https://{{REPO_URL}}/blob/main/.agent/docs/emerging-standards.md) | Evolving code standards |
-| [`.agent/docs/model-delegation.md`](model-delegation.md) | Mechanical (Sonnet 5) vs correctness (Opus 5) work-class routing — see `.agent/docs/model-routing.md` for the current canonical routing matrix |
+| [`.agent/docs/model-delegation.md`](model-delegation.md) | Mechanical (`builder`) vs correctness (`coordinator`) work-class routing — see `.agent/docs/model-routing.md` for the current canonical routing matrix |
 | [`.agent/roles/`](https://{{REPO_URL}}/blob/main/.agent/roles) | Role specifications (orchestrator, coder, tester, reviewer, researcher, guardrail) |
 | [`.agent/schemas/`](https://{{REPO_URL}}/blob/main/.agent/schemas) | JSON schemas for structured outputs |
 
@@ -682,7 +682,7 @@ Active → (triage) → MEU-NEW → (plan) → (implement) → (validate) → Re
 ```
 
 - **Active issues** live in `known-issues.md` (target: <100 lines)
-- **Resolved issues** are moved to [known-issues-archive.md](https://{{REPO_URL}}/blob/main/.agent/context/known-issues-archive.md) with a 1-line summary row
+- **Resolved issues** are marked resolved in `known-issues.yaml` via `tools/issue_triage.py`, then `render` regenerates the markdown. Nothing is moved by hand.
 - **Resolution verification**: during triage, each issue is verified against the codebase (grep for fixes, check test coverage, check MEU completion status)
 
 #### Key Files
@@ -763,11 +763,11 @@ Session discovers pattern → Log in emerging-standards.md → Future /create-pl
 
 ---
 
-### Multi-Model Adoption → Delegation + Instruction Parity (Sonnet 5)
+### Multi-Model Adoption → Delegation + Instruction Parity (`builder`)
 
 > `.agent/docs/model-routing.md` is now the canonical routing source (routed stack — 3 model tiers + external reviewer + 2 execution modes; independent-reviewer chain; nesting rules). This section summarizes the reasoning that produced it and must not contradict it — where the two disagree on a current model name, model-routing.md wins.
 
-**Purpose:** Bring a second, cheaper model (currently **Sonnet 5**) into execution *safely* — first by routing the right work to it, then by hardening the instruction set so any model produces equivalent output. This is a two-beat sequence, not one change.
+**Purpose:** Bring a second, cheaper model (the **`builder`** class) into execution *safely* — first by routing the right work to it, then by hardening the instruction set so any model produces equivalent output. This is a two-beat sequence, not one change.
 
 **Human involvement:** 🟢 Autonomous classification + enforcement; 🔴 policy changes and the AGENTS.md/standards edits are human-approved.
 
@@ -777,14 +777,14 @@ A 2-week audit (21 reflections, 31 reviews, 18 measured sessions) found **116 pa
 
 | Class | Model + Effort | Examples |
 |-------|----------------|----------|
-| **Mechanical** (delegate to **Sonnet 5** — builder tier, low/medium effort — cheaper, and effort research shows higher effort *over*thinks well-specified work) | `mechanical-edit` subagent with the builder-tier model (`.agent/docs/model-routing.md`) | GUI style migrations, count/token reconciliation, doc-only status sweeps, test-fixture construction, closeout-artifact drafting from template, the pre-review mechanical self-check pass |
-| **Correctness** (keep on **Opus 5** — coordinator tier, high/xhigh effort) | Opus 5 main loop + frontier reviewer | Planning + FIC + spec-sufficiency, domain/service correctness MEUs (broker adapters, dedup, identifier resolver, import routes, UoW lifecycle), implementor self-verification, the adversarial reviewer |
+| **Mechanical** (delegate to the **`builder`** class — low/medium effort — cheaper, and effort research shows higher effort *over*thinks well-specified work) | `mechanical-edit` subagent with the builder-tier model (`.agent/docs/model-routing.md`) | GUI style migrations, count/token reconciliation, doc-only status sweeps, test-fixture construction, closeout-artifact drafting from template, the pre-review mechanical self-check pass |
+| **Correctness** (keep on the **`coordinator`** class — high/xhigh effort) | `coordinator` main loop + frontier reviewer | Planning + FIC + spec-sufficiency, domain/service correctness MEUs (anything where a wrong answer is silently wrong: money, identity, dedup/merge, external-system adapters, transaction boundaries, authorization), implementor self-verification, the adversarial reviewer |
 
-The Opus 5 main loop stays the orchestrator; frontier model + frontier effort is reserved for the correctness class and the adversarial reviewer. Policy: [`model-delegation.md`](model-delegation.md), superseded for current model names by [`model-routing.md`](model-routing.md).
+The `coordinator` main loop stays the orchestrator; frontier model + frontier effort is reserved for the correctness class and the adversarial reviewer. Policy: [`model-delegation.md`](model-delegation.md), superseded for current model names by [`model-routing.md`](model-routing.md).
 
-#### Beat 2 — Multi-Model Execution Parity (`2026-06-16`, MEU-243 review — historical: the review below refers to the builder-tier model as it was named at the time, Sonnet 4.6; the tier is now filled by Sonnet 5)
+#### Beat 2 — Multi-Model Execution Parity (`2026-06-16`, MEU-243 review — historical: the review below refers to the builder-tier model as it was named at the time, Sonnet 4.6; the tier is now filled by `builder`)
 
-Delegating to the builder-tier model is only safe if the instruction set is **model-agnostic and deterministically enforced** — otherwise a cheaper model produces subtly different output that burns the review rounds delegation was meant to save. Reviewing Sonnet 4.6's first delegated work (MEU-243) exposed exactly this: a silent test guard (`if (!dataRow) return`), a `test.skip()`, and a `fireEvent`-vs-`userEvent` style deviation. The response followed the "deterministic over instructional, single source of truth, model-agnostic" principles:
+Delegating to the builder-tier model is only safe if the instruction set is **model-agnostic and deterministically enforced** — otherwise a cheaper model produces subtly different output that burns the review rounds delegation was meant to save. Reviewing the builder tier's first delegated work (MEU-243) exposed exactly this: a silent test guard (`if (!dataRow) return`), a `test.skip()`, and a `fireEvent`-vs-`userEvent` style deviation. The response followed the "deterministic over instructional, single source of truth, model-agnostic" principles:
 
 | Layer | Change | Effect |
 |-------|--------|--------|
@@ -830,8 +830,8 @@ harvest (reflections + handoffs) → propose (bounded edits) → gate (cross-ven
 | Stage | What happens | Guardrail |
 |-------|--------------|-----------|
 | **Harvest** | Build a corpus from past handoffs + reflections; deterministic train/val/test split | `N_min` sample floor → `block_for_human` if too few digests |
-| **Propose** | Optimizer (**Sonnet 5 @ medium** — builder tier / mechanical class, `.agent/docs/model-routing.md`) emits ≤4 bounded `add/delete/replace` edits with rationale + support count | Wholesale rewrites forbidden (context collapse — ACE arXiv:2510.04618); edits applied to a *copy*, never the target |
-| **Gate** | Judge (**Codex GPT-5.6-sol @ high**, a *different* model family) scores candidate-vs-baseline pairwise both orders over val, then untouched test | Accept iff candidate wins val by ε **and** test mean Δ ≥ 0; cross-vendor required or `block_for_human` |
+| **Propose** | Optimizer (**`builder` @ medium** — mechanical class, `.agent/docs/model-routing.md`) emits ≤4 bounded `add/delete/replace` edits with rationale + support count | Wholesale rewrites forbidden (context collapse — ACE arXiv:2510.04618); edits applied to a *copy*, never the target |
+| **Gate** | Judge (**Codex `independent_reviewer` @ high**, a *different* model family) scores candidate-vs-baseline pairwise both orders over val, then untouched test | Accept iff candidate wins val by ε **and** test mean Δ ≥ 0; cross-vendor required or `block_for_human` |
 | **Buffer** | Gate-rejected edits hashed into `rejected-edits.jsonl` (expirable, human-overridable negative memory) | Not re-proposed → avoids self-reinforcing error |
 | **Stage** | Accepted edits written ONLY into a `<!-- LEARNED:START -->…<!-- LEARNED:END -->` block in a staging copy + report | `GUARDRAILS.md` always `blocked_for_human`; `AGENTS.md` needs `--allow-safety-doc` + a deletion-budget offset |
 
@@ -917,9 +917,9 @@ Examples of non-standard projects:
 2. 📋 BUILD PLAN  → docs/build-plan/       → Human authors
 3. 📦 MEU SETUP   → meu-registry.md        → Agent proposes, human reviews
 4. 📝 PLAN        → docs/execution/plans/  → Agent writes → auto-dispatched to review
-5. 🔍 PLAN REVIEW → External Reviewer (Codex GPT-5.6-sol) → ≤3 rounds, agent loops; exec gated by plan_to_exec_gate (🔴 human when `human`; auto when `reviewer-auto`)
+5. 🔍 PLAN REVIEW → External Reviewer (Codex `independent_reviewer`) → ≤3 rounds, agent loops; exec gated by plan_to_exec_gate (🔴 human when `human`; auto when `reviewer-auto`)
 6. ⚙️ IMPLEMENT   → packages/, tests/      → Agent TDD, autonomous
-7. 🔍 IMPL REVIEW → External Reviewer (Codex GPT-5.6-sol) → ≤6 rounds, agent loops
+7. 🔍 IMPL REVIEW → External Reviewer (Codex `independent_reviewer`) → ≤6 rounds, agent loops
 8. 📝 CLOSEOUT    → reflections/, handoffs/ → Agent, autonomous
 9. 💾 SUMMARIZE  → EXECUTION_TLDR.md       → Agent generates, 🔴 HUMAN REVIEWS
    💾 COMMIT     → git                    → 🔴 HUMAN DECIDES

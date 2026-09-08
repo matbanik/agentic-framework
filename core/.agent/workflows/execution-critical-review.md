@@ -163,6 +163,29 @@ Read:
 
 Use fast, reproducible command checks. Prefer `rg`.
 
+### Receipts Authoritative (do not re-run the suite to confirm a receipt)
+
+> [!IMPORTANT]
+> **A receipt that is present, complete, and matches the claim is the evidence. Do not
+> re-run the full test suite to corroborate it.** The builder already paid for that run;
+> repeating it inside the review buys no new information, and it is the single largest
+> consumer of the review's timeout — a reviewer that spends 20 minutes re-running `tests/`
+> and then times out has produced no verdict while still spending the round.
+
+This is not permission to review on trust. Run a **targeted** command, and say in the
+verdict's `checklist_results` which one and why, when the receipt is:
+
+| Receipt state | What to do |
+|---|---|
+| Absent | Run the check yourself. A claim with no receipt is unverified, and "the builder says so" is not a `pass` row. |
+| Truncated, or has no exit code | Re-run **that one command**, not the suite. |
+| Self-contradictory (`0 failed` under a non-zero exit, a count that does not add up) | Re-run that one command; the contradiction itself is a finding. |
+| For a command that is not the one the claim needs (a filtered subset presented as the whole suite, `--exitfirst`, a skipped file) | Finding. Name the gap; run the missing part if it is cheap. |
+| Present, complete, consistent | **Read it. Do not re-run it.** Cite the receipt path in the checklist row. |
+
+For GUI/E2E specifically: prefer a post-edit Playwright receipt over re-launching Electron
+inside the reviewer — see the timeout note in `.agent/skills/cli-dispatch/SKILL.md`.
+
 ### Required Sweep Types
 
 1. **Runtime / contract verification** — Does the delivered code satisfy the claimed API, UI, persistence, and round-trip behavior?
@@ -322,9 +345,17 @@ or meta-validation findings alone — at any count — produce `approved` with c
 notes, not `changes_required`.
 
 When approving with correction notes, record the surviving clerical/observation items in
-the verdict `summary` (and the review handoff prose), NOT in the structured `findings`
-array — the verdict schema requires an empty findings array for `approved`. Never choose
-`changes_required` merely to have a place to list non-blocking notes.
+the structured `findings` array with `blocking: false` — **do not** move them into
+`summary` prose to make the array empty. `review-verdict.schema.v2.json` requires only
+that no *blocking* finding survives an `approved` verdict; v1's "empty findings to
+approve" rule is gone, because it forced reviewers to either suppress real observations
+or withhold an approval the work had earned. A real observation belongs in `findings`
+where it has an `id`, a `file_line`, and a `status` the next round can close.
+
+Conversely, never choose `changes_required` merely to have a place to list non-blocking
+notes: the schema refuses a `changes_required` verdict that names no blocking finding,
+so that manoeuvre now fails validation in `review_ledger.py record` rather than
+consuming a round.
 
 ---
 
@@ -332,7 +363,21 @@ array — the verdict schema requires an empty findings array for `approved`. Ne
 
 Write to: `.agent/context/handoffs/{plan-folder-name}-implementation-critical-review.md`
 
-If that file already exists, append a new dated review update section.
+If that file already exists, append a new dated review update section — as a
+`## Recheck ({YYYY-MM-DD})` heading, matching `REVIEW-TEMPLATE.md`.
+
+> [!CAUTION]
+> **One rolling file per body of work. The heading is the round counter.**
+> `validate_closeout_artifacts.py` counts rounds as `1 + the number of "## Recheck"
+> headings in this one file`, and that count is what it compares against the cap. So:
+> - A **new file per round** (`…-review-r2.md`, `…-recheck.md`, `…-review-final.md`)
+>   resets the count to 1 and defeats the cap without anyone deciding to. This is the
+>   most available way to get an unbounded loop, and it looks like tidy file naming.
+> - A recheck appended under a heading that is not `## Recheck` is not counted either.
+> - `review_ledger.py` counts independently, from recorded rounds. The two counters are
+>   deliberately separate: the ledger binds the dispatch, the file binds the artifact. If
+>   they disagree, the **higher** number is the true round count — a disagreement means a
+>   round went unrecorded or a file went unappended, and neither is a reason to keep going.
 
 The workflow is incomplete until the canonical review handoff exists and is readable.
 

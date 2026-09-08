@@ -5,8 +5,11 @@
 
 ## For External Contributors
 
-Read **[docs/AGENTS.md](docs/AGENTS.md)** — the public contributor guide
-with build commands, test commands, dependency rules, and architectural constraints.
+Read **[AGENTS.md](AGENTS.md)** — the operating model, at the repository root.
+
+If you keep a separate public contributor guide with build commands, dependency rules and
+architectural constraints, link it here. `docs/AGENTS.md` is a conventional home for one
+and is **not shipped** by this framework — create it yourself if you want it.
 
 ## For Internal AI Agents (Development Team)
 

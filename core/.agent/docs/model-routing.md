@@ -83,10 +83,11 @@ registry catalog, together with its vendor, price band, effort ceiling, and cave
 
 The implementing agent must never author its own `approved` verdict
 (`AGENTS.md` §Execution Contract). "Independent" means **separate context + did not
-author this code**, with **vendor diversity preferred**. The `independent_reviewer`
-class declares `vendor_distinct_from: author`, so the dispatch wrapper requires the
-authoring agent's vendor (`-AuthorVendor` / `--author-vendor`) and refuses to guess
-it — assuming it would either fake diversity or reject a valid reviewer.
+author this code + a different vendor than the author**. Vendor distinctness is a
+**requirement, not a preference**: the `independent_reviewer` class declares
+`vendor_distinct_from: author`, so the dispatch wrapper requires the authoring agent's
+vendor (`-AuthorVendor` / `--author-vendor`) and refuses to guess it — assuming it would
+either fake diversity or reject a valid reviewer.
 
 The chain, in order:
 
@@ -98,11 +99,17 @@ The chain, in order:
 2. **`surface_orchestrator`** — secondary reviewer, **surface-level work only** (per
    that class's declared caveats). Do **not** route troubleshooting or deep-infra
    review to it.
-3. **`isolated_worker` on `claude-p`, zero shared context** — last-resort fallback
-   **only** when the primary is unavailable/rate-limited **and** the work is deep
-   enough that surface review is inappropriate. Flag it explicitly as *same-vendor*
-   review (weaker diversity) in the verdict. Never fall back to same-session
-   self-review.
+3. **A human.** There is no third machine rung. When rungs 1–2 are unavailable or
+   rate-limited, escalate to the human-handoff path in `cli-dispatch/SKILL.md` §0.
+
+> **Same-vendor review is PROHIBITED (2026-09-07).** The former rung 3 — an
+> `isolated_worker` on the coordinator's own vendor with zero shared context, "flagged as
+> same-vendor" — is **removed**, not deprioritized. Two reasons it had to go rather than
+> stay as a labelled-weaker option: a rung that exists gets taken under deadline, and the
+> flag lands in a verdict nobody re-reads; and "zero shared context" answers the *context*
+> half of independence while quietly conceding the *vendor* half, which is the half that
+> catches a whole model family's shared blind spots. Escalating to a human is a real
+> terminal state; a self-review round is an artifact that says `approved` without one.
 
 The class's declared `fallbacks` are the rate-limit rungs within rung 1. They are
 reported by the resolver but never auto-selected, so a receipt always says which
@@ -171,7 +178,7 @@ Fallback — do **not** self-review.
 | Reading logs, auditing many files, mechanical find-replace across a repo | `builder` |
 | Running a row's validation command and reporting counts, touching nothing | `verifier` |
 | Classifying/triaging a big list, pure routing | `router` |
-| Reviewing a plan or a diff (independent) | `independent_reviewer` → `surface_orchestrator` (surface) → `isolated_worker` on `claude-p` (last resort) |
+| Reviewing a plan or a diff (independent) | `independent_reviewer` → `surface_orchestrator` (surface) → **a human**; see §Independent-reviewer chain — this row is a summary of it, never a variant |
 | Simple surface work you want orchestrated cheaply | `surface_orchestrator` |
 | Many independent tasks in parallel / overnight | `isolated_worker`, one per worktree; prefer in-harness Cursor `Task`, else the Cursor Agent CLI |
 | Very large single-shot architecture reasoning | `architecture_single_shot` |

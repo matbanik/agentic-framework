@@ -1,7 +1,22 @@
 # Claude CLI as Codex Fallback — Lessons Learned
 
-> [!NOTE]
-> **HISTORICAL ARCHIVE:** This document is preserved for historical context regarding early CLI limitations and fallback manual steps. Modern wrapper architecture in `Invoke-CodexDispatch.ps1` natively encapsulates and validates these differences.
+> [!CAUTION]
+> **THE PRACTICE DOCUMENTED HERE IS NOW PROHIBITED.** Using the coordinator's own vendor
+> as a reviewer rung — "same-vendor self-review" — is not a permitted fallback at any
+> effort level. This file is retained only for its **CLI-mechanics** lessons (flag
+> differences, prompt-file handling, exit-code shapes), which are what the wrapper
+> encapsulates. Do **not** read it as a live fallback chain.
+>
+> **What replaced it:** when every *cross-vendor* rung is rate-limited or unavailable,
+> the escalation is a **human gate** (`cli-dispatch/SKILL.md` §0 human-handoff path),
+> not a self-review round. A second adopting repo reached the same conclusion
+> independently and made it a standing prohibition.
+>
+> **Why the archive was not enough.** This banner previously said only that the wrapper
+> "encapsulates these differences" — which reads as *the mechanism was fixed*, and left
+> the practice looking merely awkward rather than forbidden. Agents kept finding the
+> rung in the chain and taking it. A file that documents how to do a prohibited thing
+> needs the prohibition in the banner, not in a sibling doc.
 
 **Date:** 2026-06-07
 **Context:** MEU-118a critical review loop, Rounds 5+

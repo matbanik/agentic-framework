@@ -42,6 +42,33 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$DispatchId,
 
+    # The review loop this dispatch belongs to. Exactly one of -LoopId or
+    # -NonReviewDispatch is required: a review dispatch with no loop is an
+    # unbounded loop, and "the caller forgot" and "this is not a review" produce
+    # identical behaviour unless the caller is made to say which (V4/V31).
+    [Parameter(Mandatory = $false)]
+    [string]$LoopId,
+
+    # This dispatch is not an independent review, so no round is being consumed.
+    # Recorded in status.json so the choice is auditable after the fact rather
+    # than being an invisible bypass.
+    [Parameter(Mandatory = $false)]
+    [switch]$NonReviewDispatch,
+
+    # Consult the ledger and exit without dispatching. For a caller that wants to
+    # know whether a round is permitted before paying for one.
+    [Parameter(Mandatory = $false)]
+    [switch]$GateOnly,
+
+    # Which kind of review this is. Optional, and an *assertion* rather than a source:
+    # with -LoopId the wrapper takes the kind from the mode the ledger recorded at
+    # `begin`, and a -Kind that disagrees is exit 1. The vocabulary is review_ledger.py's
+    # ROUND_BUDGETS keys, not a second list of names, so the wrapper cannot recognise a
+    # kind the ledger would reject or apply a plan budget to an execution review (V42).
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('plan', 'execution', 'discovery', 'handoff', 'multi-handoff')]
+    [string]$Kind,
+
     [Parameter(Mandatory = $false)]
     [string]$OutputDir = '{{RECEIPTS_DIR}}/dispatch',
 
@@ -122,6 +149,49 @@ function Get-Sha256File {
     }
 }
 
+function Get-PythonExe {
+    <#
+    .SYNOPSIS
+        The interpreter this package's Python helpers are run with, or $null if there is none.
+    .DESCRIPTION
+        Prefers the project venv when a repo root is known, so the helpers see the same
+        dependencies the rest of the toolchain does, then falls back to `python3` and
+        `python` on PATH.
+
+        Resolved in ONE place. This file previously resolved Python three separate ways --
+        the ledger check walked PATH for python3-then-python, the schema post-validation
+        looked only for the venv and otherwise assumed a bare `python` existed, and a third
+        call site assumed the same. On a machine where `python` is absent but `python3` is
+        present (the default on most Linux distributions and on Homebrew macOS) the ledger
+        gate ran and the validator did not, so a verdict could be recorded having never
+        been checked against its schema. Returning $null rather than a hopeful default is
+        the point: a caller must decide what an absent interpreter means for it, and both
+        callers here decide it means fail-closed.
+    #>
+    param([Parameter(Mandatory = $false)][string]$RepoRoot = "")
+    if (-not [string]::IsNullOrEmpty($RepoRoot)) {
+        $venvPython = Join-Path $RepoRoot ".venv/Scripts/python.exe"
+        if (Test-Path -LiteralPath $venvPython) { return $venvPython }
+    }
+    foreach ($candidate in @('python3', 'python')) {
+        $found = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($found) { return $found.Source }
+    }
+    return $null
+}
+
+# The structured-output schema adaptation used to live here as three PowerShell functions
+# (Remove-SchemaKeyword, Set-SchemaStrictRequired, Remove-NullProperty) with a second,
+# much shorter implementation inside Invoke-CodexDispatch.sh. Duplicated logic drifts: the
+# copy in this file learned to recurse, to widen optionals and to strip the resulting nulls
+# back out, and the POSIX copy went on popping `allOf` from the root of the document and
+# nothing else -- so every schema-constrained review on macOS or Linux died on a 400 naming
+# a keyword nested under `properties.findings.items`, a defect invisible on the machine
+# where this copy was correct. There is now one implementation, tools/adapt_output_schema.py,
+# which both wrappers call and which carries the explanation of what the adaptation is, why
+# each keyword is or is not in the rejected list, and its own selftest. Do not reintroduce a
+# local copy: the second implementation is the defect, not the first one's shortcomings.
+
 function Get-DefaultDispatchTimeoutSec {
     param([string]$Effort)
     switch ($Effort) {
@@ -130,6 +200,21 @@ function Get-DefaultDispatchTimeoutSec {
         'xhigh' { return 2700 }
         'max' { return 3600 }
         default { return 900 }
+    }
+}
+
+function Get-KindTimeoutFloorSec {
+    param([string]$Kind)
+    # A floor, not a default: the effort tier says how hard the model thinks, which is a
+    # different question from how much material it has to read. An execution review reads
+    # the whole change plus its receipts and is the largest of the kinds, so a `medium`
+    # execution review inherits 900s and dies mid-verdict -- and the round is spent
+    # either way, because the ledger counts a dispatch that was permitted.
+    # 0 means "this kind has nothing to say about the timeout"; the effort default stands.
+    switch ($Kind) {
+        'execution' { return 2700 }
+        'multi-handoff' { return 2700 }
+        default { return 0 }
     }
 }
 
@@ -273,10 +358,27 @@ function Get-PhysicalPath {
                 $currentTarget = $firstTarget -replace '^\\\?\?\\', ''
                 $currentTarget = $currentTarget -replace '^\\\\\?\\', ''
                 if (-not [System.IO.Path]::IsPathRooted($currentTarget)) {
+                    # Split-Path -Parent returns the EMPTY STRING for a first-level path such as
+                    # '/tmp', not '/'. On macOS, /tmp and /etc are reparse points whose targets are
+                    # RELATIVE ('private/tmp', 'private/etc'), so this branch is the common case
+                    # there, and Join-Path with an empty -Path throws a parameter-binding error.
+                    # Symptom when this was unguarded: the wrapper reported "PromptFile does not
+                    # exist" for a file that was plainly there. Treat an empty parent as the
+                    # filesystem root explicitly.
                     $linkParent = Split-Path -Parent $resolved
+                    if ([string]::IsNullOrWhiteSpace($linkParent)) {
+                        $linkParent = [System.IO.Path]::DirectorySeparatorChar.ToString()
+                    }
                     $currentTarget = Join-Path $linkParent $currentTarget
                 }
                 $resolved = Get-PhysicalPath $currentTarget $seen
+                # Resolving an identity to nothing must fail closed (verification-principles V31).
+                # A non-empty target that resolves to '' would silently truncate the rest of the
+                # path, and every downstream containment check would then compare against a path
+                # that is not the target — a sandbox check that passes for the wrong reason.
+                if ([string]::IsNullOrWhiteSpace($resolved)) {
+                    throw "Reparse point '$name' resolved to an empty path (target '$currentTarget')"
+                }
             }
         }
     }
@@ -291,6 +393,121 @@ if ([string]::IsNullOrEmpty($PromptText) -and [string]::IsNullOrEmpty($PromptFil
 if (-not [string]::IsNullOrEmpty($PromptText) -and -not [string]::IsNullOrEmpty($PromptFile)) {
     [Console]::Error.WriteLine("Cannot specify both -PromptText and -PromptFile.")
     exit 1
+}
+
+# Review-loop bound (see tools/review_ledger.py and
+# .agent/docs/verification-principles.md V41/V43).
+#
+# This runs BEFORE the version preflight and long exec on purpose: the cheapest
+# moment to refuse a round is before it costs anything. It is placed after
+# DispatchId so a refusal can be correlated with the caller's own logs.
+$loopIdWasGiven = -not [string]::IsNullOrWhiteSpace($LoopId)
+if ($loopIdWasGiven -and $NonReviewDispatch) {
+    [Console]::Error.WriteLine("Specify -LoopId or -NonReviewDispatch, not both. A dispatch is either bound to a review loop or declared not to be one.")
+    exit 1
+}
+if (-not $loopIdWasGiven -and -not $NonReviewDispatch) {
+    [Console]::Error.WriteLine("loop_id_required: pass -LoopId <id> to bind this dispatch to a review loop, or -NonReviewDispatch if it is not an independent review. There is no default: an unbound review dispatch is an unbounded review loop, and a forgotten flag would be indistinguishable from a deliberate one.")
+    exit 1
+}
+if ($loopIdWasGiven -and $LoopId -notmatch '^[a-z0-9][a-z0-9._-]{0,127}$') {
+    [Console]::Error.WriteLine("Invalid LoopId format. Must match ^[a-z0-9][a-z0-9._-]{0,127}$ — the same pattern review_ledger.py and review-verdict.schema.v2.json enforce, so an id accepted here is accepted there.")
+    exit 1
+}
+$kindWasGiven = -not [string]::IsNullOrWhiteSpace($Kind)
+if ($kindWasGiven -and $NonReviewDispatch) {
+    [Console]::Error.WriteLine("kind_not_applicable: -Kind names the kind of *review* this is, and -NonReviewDispatch says this is not a review. Drop one. Ignoring the flag instead would leave a receipt claiming a review kind for a dispatch that consumed no round.")
+    exit 1
+}
+
+$ledgerGateResult = 'not-applicable'
+$ledgerMode = $null
+if ($loopIdWasGiven) {
+    $ledgerScript = Join-Path $PSScriptRoot 'review_ledger.py'
+    if (-not (Test-Path -LiteralPath $ledgerScript -PathType Leaf)) {
+        [Console]::Error.WriteLine("ledger_unavailable: -LoopId was given but review_ledger.py is not present at $ledgerScript, so the round budget could not be checked. This is exit 3, not a pass: 'could not check' is not 'checked and permitted' (V5/V31). Restore the tool, or pass -NonReviewDispatch if this dispatch is genuinely not a review.")
+        exit 3
+    }
+    # No repo root yet at this point in the script, so this is the PATH lookup only.
+    $pythonExe = Get-PythonExe
+    if (-not $pythonExe) {
+        [Console]::Error.WriteLine("ledger_unavailable: neither python3 nor python is on PATH, so review_ledger.py could not run and the round budget was not checked. Exit 3, not a pass. Install Python 3, or pass -NonReviewDispatch.")
+        exit 3
+    }
+
+    $ledgerOutput = & $pythonExe $ledgerScript evaluate --loop-id $LoopId 2>&1
+    $ledgerExit = $LASTEXITCODE
+    $ledgerText = ($ledgerOutput | Out-String).TrimEnd()
+
+    switch ($ledgerExit) {
+        0 {
+            $ledgerGateResult = 'permitted'
+            Write-Host "[ledger] $ledgerText"
+            if ($ledgerText -match 'mode=([a-z0-9][a-z0-9-]*)') { $ledgerMode = $Matches[1] }
+            if (-not $ledgerMode) {
+                # 3, not a shrug: the mode is where the dispatch kind comes from, and the
+                # kind is what raises the timeout floor. Guessing 'plan' here would hand an
+                # execution review the 15-minute default — the exact silent failure the
+                # floor exists to prevent — and nothing in the receipt would say so.
+                [Console]::Error.WriteLine("ledger_mode_unavailable: review_ledger.py permitted the round but its output did not name the loop's mode (expected 'mode=<plan|execution|discovery|handoff|multi-handoff>' on the OK line). The wrapper and the ledger ship as a pair; a ledger old enough to omit it is a mismatched pair, not a pass. Update tools/review_ledger.py.")
+                exit 3
+            }
+        }
+        1 {
+            # A decision, not a crash. Exit 9 keeps it distinguishable from a
+            # dispatch that failed (3) and from bad arguments (1): "the loop is
+            # over" and "the tool broke" call for opposite responses.
+            [Console]::Error.WriteLine($ledgerText)
+            [Console]::Error.WriteLine("[ledger] refused loop '$LoopId'. Not dispatching. Escalate to a human, or apply the specific relief the message names — do not re-run with -NonReviewDispatch to get past this.")
+            exit 9
+        }
+        default {
+            [Console]::Error.WriteLine($ledgerText)
+            [Console]::Error.WriteLine("[ledger] could not evaluate loop '$LoopId' (review_ledger.py exit $ledgerExit). Failing closed.")
+            exit 3
+        }
+    }
+} else {
+    $ledgerGateResult = 'bypassed-non-review'
+    Write-Host "[ledger] -NonReviewDispatch: no round consumed, no loop bound."
+}
+
+# Dispatch kind and the timeout floor it implies.
+#
+# Resolved here, before -GateOnly returns, for two reasons: the floor is then visible
+# without paying for a dispatch, and a caller can be told its -Kind disagrees with the
+# ledger for free. Kept ahead of the version preflight for the same reason the gate is.
+if ($loopIdWasGiven) {
+    $dispatchKind = $ledgerMode
+    if ($kindWasGiven -and $Kind -ne $dispatchKind) {
+        [Console]::Error.WriteLine("kind_mismatch: -Kind '$Kind' but loop '$LoopId' was opened with mode '$dispatchKind'. The ledger wins, and the disagreement is exit 1 rather than a silent correction: it usually means this dispatch is aimed at the wrong loop, and that loop's budget is the one being spent.")
+        exit 1
+    }
+} else {
+    $dispatchKind = 'non-review'
+}
+
+$timeoutWasGiven = $PSBoundParameters.ContainsKey('TimeoutSec') -and $TimeoutSec -gt 0
+$kindFloorSec = Get-KindTimeoutFloorSec -Kind $dispatchKind
+$timeoutFloorApplied = $false
+if (-not $timeoutWasGiven) {
+    $TimeoutSec = Get-DefaultDispatchTimeoutSec -Effort $ReasoningEffort
+    if ($kindFloorSec -gt $TimeoutSec) {
+        Write-Host "[kind] $dispatchKind review: raising the derived -TimeoutSec from $TimeoutSec to the ${kindFloorSec}s floor for this kind."
+        $TimeoutSec = $kindFloorSec
+        $timeoutFloorApplied = $true
+    }
+} elseif ($kindFloorSec -gt $TimeoutSec) {
+    # An explicit -TimeoutSec is the caller's decision and is honoured; there are small
+    # execution reviews. But it is said out loud, because a truncated verdict looks
+    # identical to a reviewer that found nothing.
+    Write-Host "[kind] $dispatchKind review with explicit -TimeoutSec $TimeoutSec, below the ${kindFloorSec}s floor for this kind. Honouring the caller. A no-terminal timeout here still spends the round."
+}
+Write-Host "[kind] dispatch kind '$dispatchKind', timeout ${TimeoutSec}s."
+
+if ($GateOnly) {
+    Write-Host "[ledger] -GateOnly: gate result '$ledgerGateResult'. Exiting without dispatching."
+    exit 0
 }
 
 # Validate Model
@@ -319,7 +536,13 @@ if ($env:AGENT_MODEL_REGISTRY) {
         $moduleCandidates.Add((Join-Path $overrideHome 'tools/ModelRegistry.psm1'))
     }
 }
-$moduleCandidates.Add('P:/.agent/tools/ModelRegistry.psm1')
+# Shared / "drive-root" home: one registry serving several projects on a machine.
+# Configured by env, never a baked drive letter -- a literal like 'P:/.agent' is one
+# machine's layout, is meaningless on macOS/Linux, and on another Windows box with a P:
+# drive it would silently read someone else's registry. See .agent/INSTANTIATE.md S2.
+if ($env:AGENT_MODEL_REGISTRY_HOME) {
+    $moduleCandidates.Add((Join-Path $env:AGENT_MODEL_REGISTRY_HOME 'tools/ModelRegistry.psm1'))
+}
 if ($env:USERPROFILE) {
     $moduleCandidates.Add((Join-Path $env:USERPROFILE '.agent/tools/ModelRegistry.psm1'))
 }
@@ -473,6 +696,7 @@ if (-not [string]::IsNullOrEmpty($DispatchId)) {
     $randomSuffix = Get-Random -Minimum 1000 -Maximum 9999
     $DispatchId = "dispatch-" + (Get-Date -Format 'yyyyMMddHHmmss') + "-$randomSuffix"
 }
+
 
 # Validate OutputDir
 if ([System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($OutputDir)) {
@@ -689,17 +913,29 @@ if ($Mode -ne 'FullAccess') {
 $finalOutputFileName = if (-not [string]::IsNullOrEmpty($OutputSchema)) { "final.json" } else { "final.md" }
 $finalOutputPath = "$runDir/$finalOutputFileName"
 
+# Resolved against this wrapper's own directory, not the working directory: the working
+# directory is the tree under review, which for a read-only review is not the tree this
+# tool was installed into.
+$schemaAdapter = Join-Path $PSScriptRoot "adapt_output_schema.py"
+$schemaAdaptError = $null
 if (-not [string]::IsNullOrEmpty($OutputSchema)) {
     $apiSchemaPath = $canonicalSchema
-    try {
-        $schemaJson = Get-Content $canonicalSchema -Raw | ConvertFrom-Json
-        if ($schemaJson.PSObject.Properties['allOf']) {
-            $schemaJson.PSObject.Properties.Remove('allOf')
+    if (-not (Test-Path -LiteralPath $schemaAdapter)) {
+        $schemaAdaptError = "schema adapter not found at $schemaAdapter, so the shipped schema was sent unadapted"
+    } else {
+        $adaptOutput = (& (Get-PythonExe -RepoRoot $canonicalRepoRoot) $schemaAdapter adapt $canonicalSchema "$runDir/api-schema.json" 2>&1) -join " "
+        if ($LASTEXITCODE -eq 0) {
+            $apiSchemaPath = "$runDir/api-schema.json"
+        } else {
+            $schemaAdaptError = "schema adaptation failed: $($adaptOutput.Trim())"
         }
-        $apiSchemaPath = "$runDir/api-schema.json"
-        $schemaJson | ConvertTo-Json -Depth 100 | Set-Content -Path $apiSchemaPath -Force
-    } catch {
-        $apiSchemaPath = $canonicalSchema
+    }
+    if ($null -ne $schemaAdaptError) {
+        # Dispatch with the unmodified schema and SAY SO. The endpoint will reject it with
+        # a 400, which is loud and recoverable. What must not happen is a silent fallback:
+        # the previous `catch { $apiSchemaPath = $canonicalSchema }` swallowed the reason,
+        # so the 400 that followed read as the model's fault rather than this step's.
+        [Console]::Error.WriteLine("WARNING: $schemaAdaptError")
     }
     $argsList += @("--output-schema", $apiSchemaPath)
     $argsList += @("-o", $finalOutputPath)
@@ -762,11 +998,9 @@ Write-TextNoBom "$runDir/cmd_line.txt" $cmdLine
 
 $proc = [System.Diagnostics.Process]::Start($psi)
 
-# Poll for terminal event or process exit or timeout.
-# High-effort reviews often exceed 15 minutes; default scales with ReasoningEffort.
-if ($TimeoutSec -le 0) {
-    $TimeoutSec = Get-DefaultDispatchTimeoutSec -Effort $ReasoningEffort
-}
+# Poll for terminal event or process exit or timeout. $TimeoutSec was resolved next to
+# the ledger gate (effort default, then the kind floor) so -GateOnly can report it and a
+# review cannot reach this point still holding a 0.
 $elapsedSec = 0
 $hasTerminalEvent = $false
 $sawTerminalBeforeTimeout = $false
@@ -879,29 +1113,74 @@ if (Test-Path $eventsFile) {
 
 # (Token/usage parsing retired 2026-07-21 — token tracking eliminated.)
 
+# Undo the nullable widening the API schema needed (see adapt_output_schema.py) before
+# anything validates this file against the unmodified shipped schema. The pre-strip
+# document is kept as final.raw.json rather than overwritten: a governance package must
+# not rewrite a reviewer's output with no auditable copy of what it actually said.
+$nullStripError = $null
+if (-not [string]::IsNullOrEmpty($OutputSchema) -and (Test-Path $finalOutputPath)) {
+    $stripPython = Get-PythonExe -RepoRoot $canonicalRepoRoot
+    if (-not (Test-Path -LiteralPath $schemaAdapter)) {
+        $nullStripError = "null-strip skipped: adapter not found at $schemaAdapter"
+    } elseif (-not $stripPython) {
+        $nullStripError = "null-strip skipped: no python3/python interpreter found"
+    } else {
+        $stripOutput = (& $stripPython $schemaAdapter strip-nulls $finalOutputPath --raw-copy "$runDir/final.raw.json" 2>&1) -join " "
+        if ($LASTEXITCODE -ne 0) {
+            # Do not fail the dispatch on this: the model's output is on disk either way,
+            # and the post-validation below is the thing that decides whether it is usable.
+            # Record what happened so a downstream refusal is traceable to this step.
+            $nullStripError = "null-strip of $finalOutputFileName failed: $($stripOutput.Trim())"
+        }
+    }
+}
+
 # Perform structured schema post-validation if OutputSchema is provided
 $schemaValidationError = $null
 if (-not [string]::IsNullOrEmpty($OutputSchema) -and (Test-Path $finalOutputPath)) {
     try {
-        $pythonExe = "python"
-        $venvPython = Join-Path $canonicalRepoRoot ".venv/Scripts/python.exe"
-        if (Test-Path $venvPython) {
-            $pythonExe = $venvPython
-        }
+        $pythonExe = Get-PythonExe -RepoRoot $canonicalRepoRoot
 
-        $validatorScript = Join-Path $canonicalRepoRoot "tools/validate_json_schema.py"
-        $validationOutput = (& $pythonExe $validatorScript $finalOutputPath $canonicalSchema 2>&1) -join "`n"
-        $validationExitCode = $LASTEXITCODE
+        # Resolved against the wrapper's own directory, not the working directory. The
+        # working directory is the tree under review, which need not be -- and for a
+        # read-only review usually is not -- the tree this tool was installed into.
+        $validatorScript = Join-Path $PSScriptRoot "validate_json_schema.py"
+        if (-not $pythonExe) {
+            # Named explicitly rather than left to `& $null` throwing into the catch below:
+            # "no interpreter" and "the validator crashed" are different problems with
+            # different fixes, and one message for both sends the reader to the wrong one.
+            $schemaValidationError = "no python3/python interpreter found, so $finalOutputFileName was NOT validated. This is the absence of a check, not a failed one."
+            $exitValue = 3
+            $errorSummary = "FAIL-CLOSED: $schemaValidationError"
+        } elseif (-not (Test-Path -LiteralPath $validatorScript)) {
+            # 3, not 1: the document was never checked. Reporting an unrun check as a
+            # validation failure is how a clean output gets blamed for a missing file --
+            # the original message was `python: can't open file '.../validate_json_schema.py'`
+            # under the heading "JSON Schema validation failed".
+            $schemaValidationError = "validator not found at $validatorScript, so $finalOutputFileName was NOT validated. This is the absence of a check, not a failed one."
+            $exitValue = 3
+            $errorSummary = "FAIL-CLOSED: $schemaValidationError"
+        } else {
+            $validationOutput = (& $pythonExe $validatorScript $finalOutputPath $canonicalSchema 2>&1) -join "`n"
+            $validationExitCode = $LASTEXITCODE
 
-        if ($validationExitCode -ne 0) {
-            $schemaValidationError = $validationOutput.Trim()
-            $exitValue = 1
-            $errorSummary = "JSON Schema validation failed: $schemaValidationError"
+            if ($validationExitCode -ne 0) {
+                $schemaValidationError = $validationOutput.Trim()
+                # Propagate the validator's own 3 rather than flattening it to 1: it means
+                # jsonschema is not installed, which is an environment problem to fix, not
+                # a verdict to reject.
+                $exitValue = if ($validationExitCode -eq 3) { 3 } else { 1 }
+                $errorSummary = if ($validationExitCode -eq 3) {
+                    "JSON Schema validation could not run: $schemaValidationError"
+                } else {
+                    "JSON Schema validation failed: $schemaValidationError"
+                }
+            }
         }
     } catch {
         $schemaValidationError = "Failed to run Python schema validation: $_"
-        $exitValue = 1
-        $errorSummary = "JSON Schema validation failed: $schemaValidationError"
+        $exitValue = 3
+        $errorSummary = "JSON Schema validation could not run: $schemaValidationError"
     }
 }
 
@@ -1003,6 +1282,16 @@ $statusManifest = [ordered]@{
     overlay_path = $overlayPath
     resolution = $modelResolution
     effort_clamped = $effortClamped
+    # The review-loop bound, recorded so a bypass leaves a trace. `bypassed-non-review`
+    # in a receipt whose prompt was plainly a review is the audit signal.
+    loop_id = if ([string]::IsNullOrWhiteSpace($LoopId)) { $null } else { $LoopId }
+    ledger_gate = $ledgerGateResult
+    # The kind the ledger recorded for this loop, not the flag the caller typed, plus
+    # whether it moved the timeout. A truncated execution review whose receipt says
+    # `timeout_floor_applied: false` is a wrapper/ledger pairing problem; one that says
+    # true is a genuinely long review.
+    dispatch_kind = $dispatchKind
+    timeout_floor_applied = [bool]$timeoutFloorApplied
     mode = $Mode
     sandbox = $sandboxLevel
     reasoning_effort = $ReasoningEffort
@@ -1025,6 +1314,13 @@ $statusManifest = [ordered]@{
     terminal_event_count = $terminalEventCount
     terminal_event_type = $terminalEventType
     error_summary = $errorSummary
+    # Null-strip outcome. Recorded even on success (as $null) so its absence from an old
+    # status.json is distinguishable from "it ran and had nothing to say".
+    null_strip_error = $nullStripError
+    null_strip_raw_kept = (Test-Path -LiteralPath "$runDir/final.raw.json")
+    # Non-null means the schema handed to the endpoint was NOT the adapted one, which is
+    # the difference between a 400 this wrapper caused and one the model's answer caused.
+    schema_adapt_error = $schemaAdaptError
     benchmark_isolation = [bool]$BenchmarkIsolation
     benchmark_context_receipt = if ($BenchmarkIsolation) { $benchmarkContextCanonical } else { $null }
     benchmark_context_sha256 = if ($BenchmarkIsolation) { $BenchmarkContextSha256 } else { $null }

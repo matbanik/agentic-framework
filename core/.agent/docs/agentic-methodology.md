@@ -28,7 +28,7 @@
 
 ## 1. Executive Summary
 
-{{PROJECT_NAME_TITLE}} is a trading portfolio analysis platform built using a **human-supervised, dual-agent orchestration model**. Two roles — the **primary driver** (currently Claude, Opus 5/Sonnet 5 per tier — see `.agent/docs/harness-profiles.md`) and the **external reviewer** (currently Codex GPT-5.6-sol primary; full chain in `.agent/docs/model-routing.md`) — perform complementary roles under structured workflows, with a human orchestrator maintaining oversight at every critical gate.
+{{PROJECT_NAME_TITLE}} is built using a **human-supervised, dual-agent orchestration model**. Two roles — the **primary driver** (`coordinator` and `builder`; see `.agent/docs/harness-profiles.md`) and the **external reviewer** (`independent_reviewer`; full chain in `.agent/docs/model-routing.md`) — perform complementary roles under structured workflows, with a human orchestrator maintaining oversight at every critical gate. The method does not depend on what the project *is*; it depends on the work being decomposable into units a reviewer can adversarially check.
 
 The methodology has delivered **200+ Manageable Execution Units (MEUs)** across 11 phases — from domain entities through REST API, MCP server, Electron GUI, pipeline engine, and market data expansion — with a disciplined TDD-first approach that prevents the common failure modes of AI-generated code.
 
@@ -195,7 +195,7 @@ The `AGENTS.md` file (the master instruction file for all AI agents) codifies ha
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │  PLANNING — Primary Driver (per harness profile;                   │
-│  currently Claude Opus 5 — see harness-profiles.md)              │
+│  resolves `coordinator` — see harness-profiles.md)                 │
 │  → Reads context files, scopes project, generates plan             │
 │  → Post-review gate branches on plan_to_exec_gate                  │
 │    (harness-profiles.md / model-routing.md / GUARDRAILS SIGN 1):   │
@@ -204,41 +204,41 @@ The `AGENTS.md` file (the master instruction file for all AI agents) codifies ha
 └──────────────┬─────────────────────────────────────────────────────┘
                ▼
 ┌────────────────────────────────────────────────────────────┐
-│  PLAN VALIDATION — External Reviewer                        │
-│  (currently Codex GPT-5.6-sol — see model-routing.md)       │
+│  PLAN VALIDATION — External Reviewer                       │
+│  (Codex, `independent_reviewer` — see model-routing.md)    │
 │  → Adversarial review of unstarted plan                    │
 │  → Checks contract completeness, source traceability       │
 │  → Verdict: approved or changes_required                   │
 └──────────────┬─────────────────────────────────────────────┘
                ▼
 ┌────────────────────────────────────────────────────────────┐
-│  EXECUTION — Primary Driver (per harness profile;           │
-│  currently Claude Opus 5 / Sonnet 5 — see harness-profiles.md) │
-│  → TDD cycle per MEU (FIC → Red → Green → Quality)        │
+│  EXECUTION — Primary Driver (per harness profile;          │
+│  resolves `coordinator` + `builder`)                       │
+│  → TDD cycle per MEU (FIC → Red → Green → Quality)         │
 │  → Creates handoff artifact with evidence bundle           │
 └──────────────┬─────────────────────────────────────────────┘
                ▼
 ┌────────────────────────────────────────────────────────────┐
-│  EXECUTION VALIDATION — External Reviewer                   │
-│  (currently Codex GPT-5.6-sol — see model-routing.md)       │
+│  EXECUTION VALIDATION — External Reviewer                  │
+│  (Codex, `independent_reviewer` — see model-routing.md)    │
 │  → Runs full test suite, adversarial checklist (AV-1..9)   │
 │  → Checks: failing-then-passing proof, no bypass hacks,    │
-│    changed paths exercised, no placeholders, source-backed  │
+│    changed paths exercised, no placeholders, source-backed │
 │  → Verdict: approved or changes_required                   │
 └──────────────┬─────────────────────────────────────────────┘
                ▼
 ┌────────────────────────────────────────────────────────────┐
-│  REFLECTION — Primary Driver (per harness profile)           │
-│  → Friction/quality/workflow logs                           │
+│  REFLECTION — Primary Driver (per harness profile)         │
+│  → Friction/quality/workflow logs                          │
 │  → Pattern extraction → design rules for next session      │
 └────────────────────────────────────────────────────────────┘
 ```
 
 ### Step-by-Step Flow
 
-The full nine-phase sequence — every step, its slash command, the convergence caps, and the human-intervention points — lives in the operational source of truth, [`development-lifecycle.md`](development-lifecycle.md). In brief, the cycle is **plan → plan-review → execute (TDD) → execution-review → closeout → commit**, with the primary driver (currently Claude, coordinator/builder tiers per `.agent/docs/model-routing.md`) on planning/execution and the external reviewer (currently Codex GPT-5.6-sol) on adversarial review.
+The full nine-phase sequence — every step, its slash command, the convergence caps, and the human-intervention points — lives in the operational source of truth, [`development-lifecycle.md`](development-lifecycle.md). In brief, the cycle is **plan → plan-review → execute (TDD) → execution-review → closeout → commit**, with the primary driver (the `coordinator` and `builder` classes, per `.agent/docs/model-routing.md`) on planning/execution and the external reviewer (`independent_reviewer`) on adversarial review.
 
-> **Model-economics refinement (June 2026) — a two-beat sequence.** Not every step belongs on the frontier model, and adopting a cheaper one safely takes two moves. **Beat 1 — delegation:** a 2-week audit found mechanical findings (count reconciliation, boundary validation, token swaps) drove most of the 116 paid review rounds, so those are now **delegated to the builder tier (currently Sonnet 5)** at low/medium effort while the coordinator tier (Opus 4.8) + frontier effort stays on the *correctness* class. **Beat 2 — parity:** reviewing the builder tier's first delegated work (MEU-243, with the tier then filled by Sonnet 4.6) exposed style/methodology drift (a silent test guard, a `test.skip`, `fireEvent` vs `userEvent`), so the instruction set was made **model-agnostic and deterministically enforced** — eslint now *blocks* `test.skip`/`.only` (standards **G36**/**G37**), and AGENTS.md rules dropped their `(Opus 4.8)` qualifier. The lesson: delegation only pays off once the shared rules no longer assume *which* model is reading them. See `.agent/docs/model-routing.md` (canonical current routing), `model-delegation.md`, and the lifecycle doc's *Multi-Model Adoption → Delegation + Instruction Parity (Sonnet 5)*.
+> **Model-economics refinement (June 2026) — a two-beat sequence.** Not every step belongs on the frontier model, and adopting a cheaper one safely takes two moves. **Beat 1 — delegation:** a 2-week audit found mechanical findings (count reconciliation, boundary validation, token swaps) drove most of the 116 paid review rounds, so those are now **delegated to the builder tier (`builder`)** at low/medium effort while the coordinator tier + frontier effort stays on the *correctness* class. **Beat 2 — parity:** reviewing the builder tier's first delegated work (MEU-243, with the tier then filled by Sonnet 4.6) exposed style/methodology drift (a silent test guard, a `test.skip`, `fireEvent` vs `userEvent`), so the instruction set was made **model-agnostic and deterministically enforced** — eslint now *blocks* `test.skip`/`.only` (standards **G36**/**G37**), and AGENTS.md rules dropped their `(Opus 4.8)` qualifier. The lesson: delegation only pays off once the shared rules no longer assume *which* model is reading them. See `.agent/docs/model-routing.md` (canonical current routing), `model-delegation.md`, and the lifecycle doc's *Multi-Model Adoption → Delegation + Instruction Parity (`builder`)*.
 
 ---
 
@@ -271,7 +271,7 @@ Each reflection cycle makes the next faster. Early MEUs required 4-11 review pas
 
 For most of the project, folding stable reflection lessons back into the *permanent* instruction docs (AGENTS.md, skills, emerging standards) was a manual rewrite — easy to do carelessly, and prone to two failure modes: **context collapse** (a wholesale rewrite loses hard-won nuance) and **unsourced drift** (a vague "best practice" sneaks in without evidence).
 
-The `/skill-optimize` loop (June 2026) makes this rigorous. Inspired by SkillOpt's "treat instructions like a trainable weight" idea but recreated natively and **on-demand**, it harvests past reflections + handoffs as a corpus, proposes only **bounded edits** (≤4 add/delete/replace ops — a deliberate "textual learning rate"), and gates each candidate through a **cross-vendor LLM judge** (builder-tier optimizer, currently Sonnet 5, vs external-reviewer judge, currently Codex GPT-5.6-sol — see `.agent/docs/model-routing.md`) scored against a **held-out** slice of digests. Why these constraints matter:
+The `/skill-optimize` loop (June 2026) makes this rigorous. Inspired by SkillOpt's "treat instructions like a trainable weight" idea but recreated natively and **on-demand**, it harvests past reflections + handoffs as a corpus, proposes only **bounded edits** (≤4 add/delete/replace ops — a deliberate "textual learning rate"), and gates each candidate through a **cross-vendor LLM judge** (`builder` optimizer vs `independent_reviewer` judge — see `.agent/docs/model-routing.md`) scored against a **held-out** slice of digests. Why these constraints matter:
 
 - **Bounded edits** prevent the context collapse that wholesale rewrites cause.
 - **Held-out, cross-vendor judging** prevents an agent from grading its own homework — the same diversity principle behind the dual-agent review model (§5).
@@ -289,7 +289,7 @@ The mechanics live in the lifecycle doc's *Reflection Harvest → Instruction Ev
 The framework maintains a living issue tracker in two paired files:
 
 - **`known-issues.md`** — Active issues requiring attention (target: < 100 lines)
-- **`known-issues-archive.md`** — Resolved issues preserved for historical reference
+- **`known-issues-archive.md`** — *Legacy.* Pre-SSOT resolved-issue history. Retained read-only; resolved issues now stay in `known-issues.yaml` and are rendered into `known-issues.md`.
 
 Unlike traditional GitHub Issues or Jira tickets, this system is **optimized for AI agent consumption** — every issue lives in a Markdown file that agents read at session start, ensuring they are aware of all known limitations, workarounds, and upstream blockers before writing any code.
 
@@ -315,7 +315,7 @@ Issues are classified into three sections by lifecycle stage:
 |---------|----------|-------------|
 | **Active Issues** | Bugs and limitations with no workaround | Must be addressed by new MEUs |
 | **Mitigated / Workaround Applied** | Problems with temporary solutions | Monitor; plan permanent fix when prioritized |
-| **Archived** | Summary table linking to `known-issues-archive.md` | Reference only; no action needed |
+| **Archived** | Rendered summary table from `known-issues.yaml` (resolved entries) | Reference only; no action needed |
 
 ### Real-World Issue Examples
 
@@ -418,7 +418,7 @@ The agent uses a dedicated script that validates SSH signing config, checks remo
 
 ## 9. Why Full Automation Between Agents Fails
 
-A fully automated Opus↔Codex loop without human oversight **wastes tokens, time, and produces rework** for five reasons:
+A fully automated coordinator↔reviewer loop without human oversight **wastes tokens, time, and produces rework** for five reasons:
 
 1. **Misalignment Amplification** — Both agents share similar reasoning biases; human review catches category errors that agent-to-agent review misses.
 2. **Infinite Revision Loops** — Without a human circuit breaker, agents enter cycles where each "fix" introduces new findings. The 2-cycle maximum exists because this was observed in practice.
@@ -460,8 +460,8 @@ Workflows reference **roles** (orchestrator, coder, tester, reviewer), not speci
 
 | Role | Current Assignment | Could Be |
 |------|-------------------|----------|
-| Planner/Executor (primary driver) | Claude Opus 5 / Sonnet 5 per tier | Any model with extended thinking |
-| Validator/Reviewer (external reviewer) | Codex GPT-5.6-sol (primary); Gemini 3.5 (surface-only); headless `claude -p` (last resort) | Any model with code execution |
+| Planner/Executor (primary driver) | the `coordinator` / `builder` classes per tier | Any model with extended thinking |
+| Validator/Reviewer (external reviewer) | `independent_reviewer` (primary, cross-vendor); `surface_orchestrator` (surface-only); then a **human** — no same-vendor rung | Any model with code execution, from a different vendor than the author |
 | Researcher | Multiple (Gemini, ChatGPT, Claude) | Any model with web search |
 
 Reflection-based calibration captures what changes when models upgrade, feeding adjustments back into AGENTS.md.
@@ -506,7 +506,7 @@ Token efficiency is built into every workflow:
 | `.agent/roles/researcher.md` | Researcher role definition | [View](https://{{REPO_URL}}/blob/main/.agent/roles/researcher.md) |
 | `.agent/skills/git-workflow/SKILL.md` | Agent-safe git operations | [View](https://{{REPO_URL}}/blob/main/.agent/skills/git-workflow/SKILL.md) |
 | `.agent/docs/development-lifecycle.md` | **Operational source of truth** — phase-by-phase *how* | [View](https://{{REPO_URL}}/blob/main/.agent/docs/development-lifecycle.md) |
-| `.agent/docs/model-delegation.md` | Sonnet 5 (mechanical) vs Opus 5 (correctness) work-class routing | [View](https://{{REPO_URL}}/blob/main/.agent/docs/model-delegation.md) |
+| `.agent/docs/model-delegation.md` | `builder` (mechanical) vs `coordinator` (correctness) work-class routing | [View](https://{{REPO_URL}}/blob/main/.agent/docs/model-delegation.md) |
 | `.agent/docs/harness-profiles.md` | Harness capability flags (role, plan_to_exec_gate, injects_auto_approval, tool-name substitution) | [View](https://{{REPO_URL}}/blob/main/.agent/docs/harness-profiles.md) |
 | `.agent/docs/model-routing.md` | Canonical model/CLI routing matrix — which model fills each role | [View](https://{{REPO_URL}}/blob/main/.agent/docs/model-routing.md) |
 | `.agent/workflows/skill-optimize.md` | `/skill-optimize` — evolve instruction docs from reflection evidence | [View](https://{{REPO_URL}}/blob/main/.agent/workflows/skill-optimize.md) |

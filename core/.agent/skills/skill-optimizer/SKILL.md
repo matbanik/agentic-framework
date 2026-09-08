@@ -33,7 +33,7 @@ collapse — ACE arXiv:2510.04618).
 
 ## Validation gate (cross-vendor, held-out)
 
-- Judge model family **must differ** from the optimizer family (Sonnet 5 → GPT-5.6-sol).
+- Judge model family **must differ** from the optimizer family (`builder` -> `independent_reviewer`).
   A fallback that would collide (Claude judge + Claude optimizer) → `blocked_for_human`.
 - **Pairwise, both orders, averaged** (cancels position bias — arXiv:2406.07791).
 - **accept iff** candidate wins val by ε (default ⌈0.6·N_val⌉) **AND** test mean Δ ≥ 0.

@@ -5,7 +5,8 @@ This file is a template pointer, not the implementation. The live
 ``check_model_slugs.py`` embeds catalog examples in its module docstring that
 must not ride a delete-and-recopy package. After you instantiate a registry
 home, either keep this wrapper so it forwards along the S2 locate order
-(``AGENT_MODEL_REGISTRY``, then ``P:/.agent``, then ``%USERPROFILE%/.agent``)
+(``AGENT_MODEL_REGISTRY``, then ``AGENT_MODEL_REGISTRY_HOME``, then
+``%USERPROFILE%/.agent``)
 or replace it with the real tool copied from a working registry.
 
 If this file *is* the tool sitting in the located home, it refuses rather
@@ -28,7 +29,13 @@ def registry_homes() -> list[Path]:
         homes.append(
             path.parent if path.suffix.lower() in {".json", ".yaml", ".yml"} else path
         )
-    homes.append(Path("P:/.agent"))
+    # Shared / "drive-root" home: a single registry serving several projects on one
+    # machine. Configured by env, never a baked drive letter -- a literal like
+    # ``P:/.agent`` is one machine's layout and is meaningless on macOS/Linux, where
+    # this package is equally supported. See ``.agent/INSTANTIATE.md`` S2.
+    shared = os.environ.get("AGENT_MODEL_REGISTRY_HOME")
+    if shared:
+        homes.append(Path(shared))
     user = os.environ.get("USERPROFILE") or os.environ.get("HOME")
     if user:
         homes.append(Path(user) / ".agent")
@@ -44,9 +51,14 @@ def locate_tool(name: str) -> Path:
         if candidate.resolve() == here:
             continue
         return candidate
+    searched = ", ".join(str(h) for h in registry_homes()) or "(none)"
+    # A fail-closed message that does not name the fix gets "fixed" by disabling
+    # the gate. Say what was searched and which env var adds a home.
     sys.stderr.write(
-        "registry_not_found: no live "
-        f"{name} in the S2 locate order. See INSTANTIATE.md.\n"
+        f"registry_not_found: no live {name} in the S2 locate order. "
+        f"Searched: {searched}. Set AGENT_MODEL_REGISTRY to the compiled JSON "
+        "file, or AGENT_MODEL_REGISTRY_HOME to the shared registry home. "
+        "See INSTANTIATE.md section 1.\n"
     )
     sys.exit(1)
 

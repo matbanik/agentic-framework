@@ -1,12 +1,12 @@
 ---
-description: TDD-first implementation workflow for Opus 4.7 — write tests, implement, handoff to Codex for validation.
+description: TDD-first implementation workflow for the `coordinator` class — write tests, implement, handoff to Codex for validation.
 ---
 
-# TDD Implementation Workflow (Opus Agent)
+# TDD Implementation Workflow (`coordinator` class)
 
 > Tool names like `view_file`/`run_command` are capability placeholders — map to your harness's `read_tool`/`shell_tool` per `.agent/docs/harness-profiles.md`.
 
-Use this workflow when implementing a Manageable Execution Unit (MEU). Opus is the **implementation agent** — writes tests first, implements to pass, and creates the handoff artifact for Codex validation.
+Use this workflow when implementing a Manageable Execution Unit (MEU). The `coordinator` class is the **implementation agent** — writes tests first, implements to pass, and creates the handoff artifact for Codex validation.
 
 ## Prerequisites
 

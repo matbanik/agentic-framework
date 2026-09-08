@@ -66,6 +66,17 @@ Values may also be passed as flags (`--project-name`, `--project-root`, `--recei
 `--repo-url`, `--project-name-title`, `--project-name-upper`); flags override the config file.
 `TITLE`/`UPPER` are derived from the slug automatically when omitted.
 
+> **What `--verify` cannot tell you.** It answers one question — does any `{{TOKEN}}`
+> remain? — and a token replaced with a value that is *illegal where it lands* leaves
+> none. `{{PROJECT_NAME_UPPER}}` is substituted into identifiers such as
+> `$env:{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR`, so the slug `my-project` once produced
+> `$env:MY-PROJECT_AUTHOR_VENDOR`: PowerShell reads the hyphen as subtraction, the whole
+> dispatch wrapper stops parsing, and `--verify` says OK. `UPPER` is therefore sanitized
+> to a legal `[A-Za-z_][A-Za-z0-9_]*` identifier, and an explicit
+> `--project-name-upper` that is not one is **refused** rather than quietly repaired —
+> a silent rewrite would leave your own notes naming env vars the tools do not export.
+> `python scripts/instantiate.py --selftest` (9 arms) is the gate for this.
+
 > **Windows path tip:** prefer forward slashes in the config file. Backslash paths are
 > preserved verbatim by the parser (it does no escape processing), but forward slashes are
 > valid on Windows and sidestep any editor/shell that might mangle a lone `\a`, `\t`, etc.

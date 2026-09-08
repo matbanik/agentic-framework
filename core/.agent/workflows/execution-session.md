@@ -57,7 +57,7 @@ The orchestrating agent will:
 3. Scope the next project from pending build-plan MEUs
 4. Resolve under-specified requirements via local canonical docs + targeted web research before finalizing the FIC
 5. Generate `implementation-plan.md` and `task.md` in the project folder
-6. Auto-dispatch `/plan-critical-review` via the independent-reviewer chain (Codex GPT-5.6-sol → Gemini surface → headless Claude last-resort; `.agent/docs/model-routing.md`)
+6. Auto-dispatch `/plan-critical-review` via the independent-reviewer chain (cross-vendor primary → surface-only secondary → **human**; `.agent/docs/model-routing.md`)
 7. Loop corrections until APPROVED (or HARD STOP at 3-round cap)
 8. On `approved`: continue to Step 4 per your harness's `plan_to_exec_gate` flag (`.agent/docs/harness-profiles.md`) — `reviewer-auto` continues immediately; `plan_to_exec_gate: human` (the primary-driver default) ends the turn and waits for the user's explicit next chat message before Step 4 (`create-plan.md` §5c, `GUARDRAILS.md` SIGN 1)
 
@@ -77,7 +77,7 @@ Follow the plan **exactly**. The prompt contains:
 - **Session Goal** — what success looks like
 - **Phase A** — any scaffold or infrastructure setup
 - **Phase B** — MEU TDD work (FIC → Red → Green → Quality → Handoff)
-- **Phase C** — Auto-dispatched external-reviewer validation (Codex GPT-5.6-sol primary; chain in `.agent/docs/model-routing.md`)
+- **Phase C** — Auto-dispatched external-reviewer validation (Codex primary; chain in `.agent/docs/model-routing.md`)
 - **Guardrails** — hard scope limits
 
 Before each row, validate its `depends_on` IDs against completed task rows. Execute its
@@ -171,11 +171,9 @@ Before declaring any MEU "ready for review" or writing completion claims in the 
 
 Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/execution-critical-review`:
 
-**Reviewer Agent Priority** (canonical chain in [`.agent/docs/model-routing.md`](../docs/model-routing.md) §Independent-reviewer chain):
-1. **Codex CLI (GPT-5.6-sol)** — Primary (`-c model_reasoning_effort=medium` routine; `high` for risk paths / contract surfaces / concurrency / security — see `cli-dispatch/SKILL.md` §Reviewer Effort Policy)
-2. **Gemini 3.5** — Secondary, **surface-level reviews only** (never deep-infra/troubleshooting)
-3. **headless `claude -p` (Opus 5, fresh isolated context)** — Last resort when Codex rate-limited AND the change is too deep for Gemini (`--effort high --permission-mode bypassPermissions`; flag verdict as same-vendor; `max` only for tagged deep sub-reviews)
-4. **All rungs rate-limited/unavailable** — HARD STOP (never self-review)
+**Reviewer:** the chain is defined in exactly one place — [`.agent/docs/model-routing.md`](../docs/model-routing.md) §Independent-reviewer chain — and is **not** restated here. A restatement is a second authority: this list previously carried a third machine rung (a headless same-vendor reviewer "flagged as same-vendor") for weeks after `model-routing.md` removed it and `GUARDRAILS.md` prohibited it, so an execution review that read only this file was routed into a self-review the other two files forbade. Read the chain there; the only rung-related fact that belongs to *this* workflow is the round cap below.
+
+When every machine rung is rate-limited or unavailable, this loop does not fall through to another model. It takes the human-handoff path in [`cli-dispatch/SKILL.md`](../skills/cli-dispatch/SKILL.md) §0: write the review prompt for manual external submission and stop at a human gate. Never self-review, and never substitute a reviewer on the author's own vendor.
 
 **Correction Loop:**
 - If `changes_required`: read findings, apply code/test corrections, re-run quality gates, re-dispatch
@@ -308,7 +306,7 @@ The compressed variant still requires invoking the timestamp skill and copying i
 └───────────┬─────────────────────────────────────────┘
             ▼
 ┌─────────────────────────────────────────────────────┐
-│  EXECUTION Mode (per MEU)                            │
+│  EXECUTION Mode (per MEU)                           │
 │  → TDD cycle → handoff → registry update            │
 │  → auto-dispatches /execution-critical-review       │
 │  → loops corrections until APPROVED                 │

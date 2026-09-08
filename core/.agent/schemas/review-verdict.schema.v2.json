@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewVerdict v2",
+  "description": "Independent-review verdict. v2 adds the three fields a bounded review loop needs in order to stop for the right reason: `blocking` (separated from severity), `subject` (deliverable vs tooling vs the review's own scaffolding, per verification-principles V43), and `finding_kind` + `mechanism` (so recurrence is counted by mechanism rather than by tally, per V25/V30/V41). It also loosens v1's rule that an approval must carry zero findings: an approval may now carry non-blocking findings, which is the whole point of separating the two. A v1 document does not validate against this schema — `schema_version` is a const — and a loop registered at v2 must refuse a v1 submission rather than coercing it.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "review-verdict.v2"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "review_mode": {
+      "type": "string",
+      "enum": ["plan", "handoff", "multi-handoff", "execution", "discovery"]
+    },
+    "loop_id": {
+      "description": "Identifies the review loop this verdict belongs to. Required because a recurrence threshold cannot live in prose (V41): the ledger keys its persisted counts on this value, and a verdict that does not say which loop it belongs to cannot be matched against previous rounds.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "round": {
+      "description": "1-based round number within loop_id. The ledger, not the reviewer, is authoritative if these disagree.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "target_plan": {
+      "type": "string"
+    },
+    "agent": {
+      "description": "The reviewing agent. Must not be the agent that produced the work under review; the ledger enforces this, and the schema records it so the violation is auditable after the fact.",
+      "type": "string"
+    },
+    "requested_verbosity": {
+      "type": "string",
+      "enum": ["summary", "standard", "detailed"]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approved", "changes_required"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$"
+          },
+          "severity": {
+            "description": "How bad it is if it is real. Deliberately NOT the same axis as `blocking`: v1 conflated them, so a Critical-but-out-of-scope observation and a Medium-that-must-be-fixed-first were indistinguishable.",
+            "type": "string",
+            "enum": ["Critical", "High", "Medium", "Low"]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["High", "Medium", "Low"]
+          },
+          "blocking": {
+            "description": "True = the verdict cannot be `approved` while this stands. A finding may be Critical and non-blocking (real, but out of this loop's scope) or Medium and blocking (small, but it defeats a control). Only blocking findings gate approval and only blocking findings count toward the mechanism-class stop.",
+            "type": "boolean"
+          },
+          "subject": {
+            "description": "What the finding is about. `review-scaffolding` covers the review apparatus itself — the prompt wording, the ledger schema, receipt naming, the gate script's error strings. Those findings are usually real and are still not the work (V43), so a bounded loop caps them separately and treats a late-round scaffolding finding as a signal to end rather than a reason to spend another round.",
+            "type": "string",
+            "enum": ["deliverable", "committable-tooling", "review-scaffolding"]
+          },
+          "finding_kind": {
+            "description": "`behavior` = it computes the wrong answer. `control-defeat` = it makes a gate unable to fail, or lets something bypass one (V4/V5 territory). `clerical` = naming, formatting, a stale comment. Only `control-defeat` accumulates toward the mechanism-class stop, because that is the class whose third instance means the mechanism is the defect (V30).",
+            "type": "string",
+            "enum": ["behavior", "control-defeat", "clerical"]
+          },
+          "mechanism": {
+            "description": "Required for `control-defeat`: a stable kebab-case slug naming HOW the control was defeated, not the individual manoeuvre. Three blocking control-defeat findings sharing one mechanism refuse the next round — so the slug must be reused across rounds for the same underlying weakness. Examples: `unrun-validation-row`, `swallowed-exit-code`, `detector-without-fixture`, `empty-identity-propagated`.",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+          },
+          "finding": { "type": "string" },
+          "file_line": { "type": "string" },
+          "recommendation": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["open", "fixed", "accepted_risk"]
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "confidence",
+          "blocking",
+          "subject",
+          "finding_kind",
+          "finding",
+          "file_line",
+          "recommendation",
+          "status"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": { "finding_kind": { "const": "control-defeat" } },
+              "required": ["finding_kind"]
+            },
+            "then": { "required": ["mechanism"] }
+          }
+        ]
+      }
+    },
+    "checklist_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "check": { "type": "string" },
+          "result": {
+            "type": "string",
+            "enum": ["pass", "fail", "partial", "n/a"]
+          },
+          "command": {
+            "description": "The command that produced this result. Required for pass/fail/partial: a checklist row asserting an outcome with no command behind it is prose, and a gate that cannot be run cannot fail (V4). Omit only for `n/a`.",
+            "type": "string",
+            "minLength": 1
+          },
+          "exit_code": {
+            "description": "The command's exit status. Recorded because exit 0 from a wrapper means the wrapper finished, not that the work happened (V2/V13) — keeping the number makes that distinction reviewable instead of assumed.",
+            "type": "integer"
+          },
+          "evidence": { "type": "string" }
+        },
+        "required": ["check", "result", "evidence"],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": { "result": { "enum": ["pass", "fail", "partial"] } },
+              "required": ["result"]
+            },
+            "then": { "required": ["command"] }
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "date",
+    "review_mode",
+    "loop_id",
+    "round",
+    "target_plan",
+    "agent",
+    "requested_verbosity",
+    "verdict",
+    "summary",
+    "findings",
+    "checklist_results"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "description": "An approval may carry non-blocking findings, but not blocking ones. This is the v1 behaviour change: v1 required `findings: maxItems 0` to approve, which pushed reviewers into either suppressing real observations or withholding an approval the work had earned.",
+      "if": {
+        "properties": { "verdict": { "const": "approved" } },
+        "required": ["verdict"]
+      },
+      "then": {
+        "properties": {
+          "findings": {
+            "items": {
+              "properties": { "blocking": { "const": false } }
+            }
+          },
+          "checklist_results": {
+            "minItems": 1,
+            "items": {
+              "properties": { "result": { "enum": ["pass", "n/a"] } }
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "`changes_required` must name at least one blocking finding. A verdict that refuses without one is unactionable, and in practice it is how a reviewer records reluctance rather than a defect.",
+      "if": {
+        "properties": { "verdict": { "const": "changes_required" } },
+        "required": ["verdict"]
+      },
+      "then": {
+        "properties": {
+          "findings": {
+            "minItems": 1,
+            "contains": {
+              "type": "object",
+              "properties": { "blocking": { "const": true } },
+              "required": ["blocking"]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

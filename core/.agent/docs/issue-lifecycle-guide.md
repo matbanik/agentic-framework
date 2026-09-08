@@ -248,7 +248,7 @@ For each session, the agent:
    - File-level change descriptions
    - Test plan
    - Verification commands
-4. **Dispatches** the plan to an external reviewer (Codex GPT-5.6-sol)
+4. **Dispatches** the plan to an external reviewer (Codex `independent_reviewer`)
 5. If `plan_to_exec_gate == human`, presents the plan to the human for an explicit go-ahead; if `reviewer-auto`, auto-continues once the reviewer returns `approved` (see `.agent/docs/harness-profiles.md`)
 
 ```
@@ -260,7 +260,7 @@ For each session, the agent:
 │  Files: 4 modified, 1 new                        │
 │  Tests: 12 planned                               │
 │                                                  │
-│  → Plan reviewed by Codex GPT-5.6-sol (approved) │
+│  → Plan reviewed: independent_reviewer (approved)│
 │  → human gate: awaiting your go-ahead            │
 └──────────────────────────────────────────────────┘
 ```
@@ -283,7 +283,7 @@ The agent follows strict TDD:
 
 ### Phase D — Automated Review
 
-The agent dispatches its own work to an **independent reviewer** (Codex GPT-5.6-sol):
+The agent dispatches its own work to an **independent reviewer** (Codex `independent_reviewer`):
 
 ```
 /execution-critical-review
@@ -330,7 +330,7 @@ The human reviews the commit and either:
 ```
 .agent/context/known-issues.yaml     ← SSOT (agents read/write this)
 .agent/context/known-issues.md       ← Rendered view (humans read this)
-.agent/context/known-issues-archive.md ← Historical resolved issues
+.agent/context/known-issues-archive.md ← LEGACY pre-SSOT history (read-only)
 ```
 
 ### The YAML is the Single Source of Truth
@@ -419,7 +419,7 @@ dismissed          workaround → mitigated → resolved
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ISSUE LIFECYCLE                               │
+│                    ISSUE LIFECYCLE                              │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  👤 HUMAN REPORTS                                               │
@@ -480,16 +480,16 @@ dismissed          workaround → mitigated → resolved
 │       │                                                         │
 │       ▼                                                         │
 │  🤖 TDD IMPLEMENTATION                                          │
-│  └── /execution-session → tests first → implement → refactor   │
+│  └── /execution-session → tests first → implement → refactor    │
 │       │                                                         │
 │       ▼                                                         │
 │  🤖 AUTOMATED REVIEW                                            │
-│  └── /execution-critical-review (Codex GPT-5.6-sol)            │
+│  └── /execution-critical-review (Codex `independent_reviewer`)  │
 │      Corrections loop until approved                            │
 │       │                                                         │
 │       ▼                                                         │
 │  🤖 ISSUE CLOSURE                                               │
-│  └── known-issues.yaml: status → resolved                      │
+│  └── known-issues.yaml: status → resolved                       │
 │       │                                                         │
 │       ▼                                                         │
 │  👤 HUMAN APPROVES COMMIT                                       │
@@ -549,7 +549,7 @@ bucketing, triage output, session grouping, TDD implementation, and code review.
 |------|---------|------------|
 | `.agent/context/known-issues.yaml` | Issue data (SSOT) | Agents read/write |
 | `.agent/context/known-issues.md` | Rendered view | Humans read |
-| `.agent/context/known-issues-archive.md` | Historical issues | Reference |
+| `.agent/context/known-issues-archive.md` | *Legacy* pre-SSOT history | Reference only; never written |
 | `.agent/context/triage-output.yaml` | Triage handoff (ephemeral) | Pipeline stages |
 | `tools/issue_triage.py` | CLI tool | Agents + humans |
 | `tools/issue_triage/model.py` | Schema + validation | Internal |

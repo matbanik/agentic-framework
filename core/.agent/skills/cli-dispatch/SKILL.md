@@ -120,6 +120,34 @@ Pass the prompt as a **CLI argument** to `-p` / `--print`. Do **not** pipe stdin
 
 For long prompts that risk the Windows 8191 argv limit, write the prompt to a file and pass a short instruction that tells agy to read that file — still via `-p "<short prompt>"`, not via stdin.
 
+### Invoking a CLI directly on macOS/Linux: close stdin
+
+The wrappers already redirect stdin, so this does not apply to them. It applies when you
+run a CLI agent yourself from a shell — a quick one-off, a script, a CI step:
+
+```bash
+# // turbo
+codex exec --json -o "$OUT" - < "$PROMPT_FILE"      # prompt on stdin: fine, stdin ends at EOF
+
+# // turbo
+codex exec --json -o "$OUT" -p "short prompt" < /dev/null   # prompt in argv: close stdin
+```
+
+**Always give a non-interactive CLI either a real stdin that reaches EOF or `< /dev/null`.**
+A CLI launched from an agent's shell inherits that shell's stdin, which never reaches EOF.
+Anything the CLI decides to read — a confirmation, an auth code, a "press enter to
+continue" — blocks forever on a descriptor no one will ever write to. There is no output
+and no error; the dispatch simply never returns and the turn dies on timeout.
+
+This is why the symptom looks like "the model is slow" rather than "the tool wants input",
+and why the fix is a habit rather than a diagnosis: you cannot tell the two apart from the
+outside, so close stdin every time and the failure mode stops existing. The Windows
+equivalent is `< NUL`.
+
+Corollary for background jobs: `&` does **not** close stdin. A backgrounded CLI without an
+explicit redirect blocks the same way, and on some shells is stopped by `SIGTTIN` instead —
+which looks identical from the caller's side.
+
 ---
 
 ## Web Search Integration
@@ -163,6 +191,49 @@ Override with `-TimeoutSec <n>`. On timeout/hang the wrapper kills the **process
 status. If a timeout happened before any terminal event, a short `-PostKillGraceSec`
 (default 90) reparse can salvage a late `turn.completed` + final artifact.
 
+#### Kind floor: the effort tier is not a size estimate
+
+The table above answers "how hard should it think", which is a different question from
+"how much does it have to read". A `medium` **execution** review inherits 900s, reads the
+whole change plus its receipts, and dies mid-verdict — and the round is spent either way,
+because the ledger counted a dispatch it permitted. So the kind carries a floor:
+
+| Dispatch kind | Timeout floor | Effect |
+|---|---:|---|
+| `execution`, `multi-handoff` | 2700 (45m) | Raises a derived timeout below the floor |
+| `plan`, `discovery`, `handoff` | — | Effort default stands |
+
+- The kind is **read from the loop**, not from a flag: the wrapper takes the mode the
+  ledger recorded at `begin`. `-Kind <kind>` is an optional *assertion*, and a `-Kind`
+  that disagrees with the loop is exit 1 (`kind_mismatch`) — that disagreement usually
+  means the dispatch is aimed at the wrong loop, whose budget is the one being spent.
+- `-Kind` with `-NonReviewDispatch` is exit 1 (`kind_not_applicable`).
+- An explicit `-TimeoutSec` below the floor is **honoured** — small execution reviews
+  exist — but the wrapper says so on stdout, because a truncated verdict is
+  indistinguishable from a reviewer that found nothing.
+- The resolved kind and timeout are printed before the gate returns, so
+  `-GateOnly` reports them without paying for a dispatch, and `status.json` records
+  `dispatch_kind` + `timeout_floor_applied`.
+- If the ledger's `evaluate` output does not name a mode, the wrapper exits **3**
+  (`ledger_mode_unavailable`) rather than guessing a kind. The wrapper and
+  `tools/review_ledger.py` ship as a pair; update them together.
+
+### Receipts Authoritative (what the dispatcher owes the reviewer)
+
+An execution review must not re-run the full suite to corroborate a receipt it was already
+given — that is the reviewer-side rule, and it lives in
+[`execution-critical-review.md`](../../workflows/execution-critical-review.md) §Receipts
+Authoritative. The dispatching session's half of it:
+
+1. **Put the receipts in the prompt** — path, command, exit code, and the counts. A
+   reviewer told only "tests pass" has nothing to read and will re-run the suite.
+2. **Leave them readable.** Receipts live under `{{RECEIPTS_DIR}}`, which is what
+   `ReviewReadOnly`/`ReviewWorkspace` list in `writable_roots`; on Windows the sandbox
+   helper commonly blocks reads there anyway, which is the other reason `FullAccess` is
+   the working default for reviews on this platform.
+3. **Do not pre-emptively grant a bigger timeout instead.** If a review needs the suite
+   re-run, the receipt was inadequate; fix the receipt.
+
 For execution reviews with GUI E2E: prefer trusting a post-edit Playwright receipt over
 re-launching Electron inside Codex (see `execution-critical-review.md`).
 
@@ -170,6 +241,7 @@ re-launching Electron inside Codex (see `execution-critical-review.md`).
 
 ```powershell
 powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
+  -LoopId review-core-index-2026-09-07 `
   -Mode FullAccess `
   -FullAccessJustification "Windows Codex review needs shell + {{RECEIPTS_DIR}} P0 receipts; sandbox helper blocks ReviewReadOnly" `
   -ReasoningEffort medium `
@@ -180,12 +252,69 @@ powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
 
 ```powershell
 powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
+  -LoopId review-core-index-2026-09-07 `
+  -Kind execution `
   -Mode FullAccess `
   -FullAccessJustification "Windows Codex review needs shell + {{RECEIPTS_DIR}} P0 receipts; sandbox helper blocks ReviewReadOnly" `
   -ReasoningEffort high `
-  -OutputSchema .agent/schemas/review-verdict.schema.json `
+  -OutputSchema .agent/schemas/review-verdict.schema.v2.json `
   -PromptFile {{RECEIPTS_DIR}}/dispatch/review-prompt.txt
 ```
+
+## The review-loop bound: `-LoopId` or `-NonReviewDispatch`
+
+> [!IMPORTANT]
+> **Both wrappers require exactly one of `-LoopId <id>` / `-NonReviewDispatch`.** There is
+> no default, and omitting both is exit 1 (`loop_id_required`). This is deliberate: a review
+> dispatch with no loop is an unbounded review loop, and if the flag had a default then "the
+> caller forgot" and "this genuinely is not a review" would produce identical behaviour with
+> no way to tell them apart afterwards.
+
+With `-LoopId`, the wrapper runs `tools/review_ledger.py evaluate` **before** resolving a
+model or launching the CLI — the cheapest moment to refuse a round is before it costs
+anything. Open the loop once, then pass the same id every round:
+
+```bash
+export RECEIPTS_DIR=/absolute/path/outside/the/repo   # required; no default (F3/F3b)
+python tools/review_ledger.py begin \
+  --loop-id review-core-index-2026-09-07 \
+  --review-mode execution \
+  --producer builder-agent          # this agent may never author a verdict in this loop
+```
+
+After each dispatch, record the verdict so the next round is counted:
+
+```bash
+python tools/review_ledger.py record \
+  --loop-id review-core-index-2026-09-07 \
+  --verdict-file "$RECEIPTS_DIR/dispatch/<id>/final.json"
+```
+
+`-GateOnly` consults the ledger and exits without dispatching — use it to find out whether a
+round is permitted before spending one.
+
+**Wrapper exit codes for this gate:**
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `0` | A round is permitted (or `-GateOnly` and the gate passed) | Proceed |
+| `1` | Neither flag given, both given, a malformed `-LoopId`, or a `-Kind` that contradicts the loop / accompanies `-NonReviewDispatch` | Fix the invocation. On `kind_mismatch`, check *which loop* you are dispatching against before changing the flag |
+| `9` | **The ledger refused this round.** A decision, not an error | Apply the specific relief its message names, or escalate to a human |
+| `3` | The gate could not be evaluated — no `python3`/`python`, `review_ledger.py` absent, or its output did not name the loop's mode (`ledger_mode_unavailable`) | Fix the tooling; the wrapper and the ledger are one pair. **Never read 3 as a pass**: "could not check" is not "checked and permitted" (V5/V31) |
+
+`9` is kept distinct from `1` and `3` because "the loop is over" and "the tool broke" call for
+opposite responses, and merging them is how a repo comes to believe a refused round was
+merely a flaky failure worth retrying.
+
+**Do not answer a `9` by re-running with `-NonReviewDispatch`.** That flag is recorded in
+`status.json` as `ledger_gate: bypassed-non-review`, so the bypass is auditable — a receipt
+marked that way whose prompt is plainly a review is the signal that a stop was routed around.
+The reliefs that actually apply are named in the refusal text: `grant` for a round budget,
+`relieve` for one mechanism, and for a scaffolding stop, ending the loop.
+
+See [`.agent/docs/verification-principles.md`](../../docs/verification-principles.md) V41
+(the count belongs on disk) and V43 (a loop bounded only by volume converges on its own
+instrumentation) for why the stops are shaped this way.
 
 ### agy — Data Processing / Gemini Flash (stdout capture)
 
@@ -237,10 +366,11 @@ exit $code
 
 ---
 
-## Reviewer Effort Policy (D4, 2026-06-13; refreshed for GPT-5.6 on 2026-07-11)
+## Reviewer Effort Policy (D4, 2026-06-13; effort bands re-measured 2026-07-11
+against the then-current `independent_reviewer` class)
 
 For LLM-as-judge or critical-review tasks, more reasoning is NOT monotonically better—it can inflate confidence and false positives. We enforce the following limits:
-- **Codex GPT-5.6 Sol reviewer:** `medium` for routine/contract-bound review; `high` for hard adversarial passes (risk paths, contract surfaces, concurrency/security, or round-2-after-High).
+- **Codex `independent_reviewer`:** `medium` for routine/contract-bound review; `high` for hard adversarial passes (risk paths, contract surfaces, concurrency/security, or round-2-after-High).
 - **Claude fallback reviewer:** `--effort high` (NOT `max`).
 - **Reserve `max`/`xhigh`** for explicitly-tagged **verifiable deep sub-reviews only** (security exploitability, concurrency/races, architecture/dependency-rule). Never the default verdict effort.
 - **Pin Model and Effort explicitly** in every wrapper dispatch so reviewer behavior does not drift with global configuration.
@@ -264,14 +394,23 @@ When Codex CLI is rate-limited or unavailable:
 ### 2. Provider Substitution Matrix
 | Primary | Task Type | Substitute | Quality Trade-off |
 |---------|-----------|------------|-------------------|
-| Codex GPT-5.6 Sol | Validation review (surface-level) | **agy / Gemini** (surface only) or Gemini web | **First fallback for surface work.** Cross-vendor; NOT for deep-infra/troubleshooting reviews. |
-| Codex GPT-5.6 Sol | Validation review (deep/infra) | **Claude CLI (Opus 5)** | Last resort. Run with `--effort high`. Same-vendor risk if coordinator is Claude. |
-| Codex GPT-5.6 Sol | Validation review | GPT-5.6 Sol (web, manual) | Same model family; no file access, requires manual copy-paste of results. |
+| Codex `independent_reviewer` | Validation review (surface-level) | **agy / Gemini** (surface only) or Gemini web | **First fallback for surface work.** Cross-vendor; NOT for deep-infra/troubleshooting reviews. |
+| Codex `independent_reviewer` | Validation review (deep/infra) | **A different-vendor CLI you have configured** | Cross-vendor is the requirement. Run at high effort. |
+| Codex `independent_reviewer` | Validation review | Same model family via web (manual) | Same family; no file access, requires manual copy-paste of results. Still cross-*context*, so it beats self-review. |
+| Any | Validation review | ~~The coordinator's own vendor~~ | **PROHIBITED.** Not a rung. See §Same-vendor self-review below. |
 
+#### Same-vendor self-review is PROHIBITED
+
+The reviewer must not be the vendor that authored the work. There is no "last resort"
+rung where the coordinator reviews itself at higher effort — that is not a weaker review,
+it is a **different kind of thing** wearing a review's name, and it launders an
+unreviewed artifact into one marked `approved`. When every cross-vendor rung is
+unavailable, the escalation is the **human handoff path in §0**, which is a real terminal
+state. Effort flags do not buy independence.
 
 ### 3. Fallback Steps
-1. **Advance to the next eligible reviewer rung:** Codex -> Gemini/agy (surface only) -> Claude CLI (last-resort, `--effort high`).
-2. **If Claude is also rate-limited or all rungs are exhausted:** Save the prompt to a file at `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`.
+1. **Advance to the next eligible cross-vendor reviewer rung** (surface-only rungs stay surface-only).
+2. **If all cross-vendor rungs are exhausted:** Save the prompt to a file at `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`.
 3. **Present to user (HARD STOP):** Inform them all rungs are rate-limited and offer manually submitting to a web interface or setting a timer to retry.
 4. **Collect results:** User pastes the web response into `{{RECEIPTS_DIR}}/dispatch/<provider>-web-response.md`.
 
@@ -303,9 +442,10 @@ Do not call bare `codex exec` for reviews — use one of the wrappers.
 ```bash
 # From the adopter repo root, under pwsh:
 pwsh -NoProfile -File tools/Invoke-CodexDispatch.ps1 \
+  -LoopId "$LOOP_ID" \
   -Mode ReviewReadOnly \
   -ReasoningEffort medium \
-  -OutputSchema .agent/schemas/review-verdict.schema.json \
+  -OutputSchema .agent/schemas/review-verdict.schema.v2.json \
   -PromptFile "$RECEIPTS_DIR/dispatch/review-prompt.txt" \
   > "$RECEIPTS_DIR/dispatch/review-run.txt" 2>&1
 code=$?
@@ -318,15 +458,21 @@ exit $code
 ```bash
 chmod +x tools/Invoke-CodexDispatch.sh
 tools/Invoke-CodexDispatch.sh \
+  --LoopId "$LOOP_ID" \
   --Mode ReviewReadOnly \
   --ReasoningEffort medium \
-  --OutputSchema .agent/schemas/review-verdict.schema.json \
+  --OutputSchema .agent/schemas/review-verdict.schema.v2.json \
   --PromptFile "$RECEIPTS_DIR/dispatch/review-prompt.txt" \
   > "$RECEIPTS_DIR/dispatch/review-run.txt" 2>&1
 code=$?
 tail -n 40 "$RECEIPTS_DIR/dispatch/review-run.txt"
 exit $code
 ```
+
+> [!NOTE]
+> `$code` here can be `9` — the ledger refused the round. Treat that as a terminal decision,
+> not a retryable failure; see the exit-code table above. A retry loop that treats every
+> non-zero code the same will hammer a closed loop forever.
 
 Before the first real review on macOS, prove the receipts directory is writable inside the Seatbelt profile:
 

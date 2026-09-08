@@ -87,6 +87,80 @@ def apply_forward(text: str) -> tuple[str, int]:
     return text, count
 
 
+#: Characters that are legal in an environment-variable name once upper-cased.
+#: ``{{PROJECT_NAME_UPPER}}`` is substituted into identifiers such as
+#: ``$env:{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR``, so it is not free text: a hyphen
+#: there produces ``$env:MY-PROJECT_AUTHOR_VENDOR``, which PowerShell parses as a
+#: subtraction and the whole wrapper stops parsing. Hyphenated project slugs are the
+#: common case, so deriving this by ``.upper()`` alone shipped a dispatch wrapper that
+#: could not run.
+_ENV_IDENT_ILLEGAL = re.compile(r"[^A-Za-z0-9_]")
+_ENV_IDENT_VALID = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def env_identifier(name: str) -> str:
+    """Upper-case ``name`` into a valid environment-variable identifier.
+
+    Non-identifier characters collapse to ``_`` and a leading digit is prefixed,
+    because the result is substituted into code, not into prose.
+    """
+    ident = _ENV_IDENT_ILLEGAL.sub("_", name.strip().upper())
+    if ident and ident[0].isdigit():
+        ident = "_" + ident
+    return ident
+
+
+#: Characters that cannot survive substitution into the *code positions* these values
+#: land in. This is the same class of defect ``env_identifier`` fixed for
+#: ``{{PROJECT_NAME_UPPER}}``, one token over: ``{{PROJECT_ROOT}}`` and
+#: ``{{RECEIPTS_DIR}}`` are inserted into single-quoted PowerShell literals (e.g.
+#: ``WorkingDirectory = '{{PROJECT_ROOT}}'``), double-quoted shell strings, and JSON
+#: string values. An apostrophe closes the PowerShell literal early and the whole
+#: dispatch wrapper stops parsing -- while ``instantiate.py`` and ``--verify`` both
+#: return 0, because every token *was* substituted. There is no escaping that is
+#: correct in all three destinations simultaneously, so the value is refused at the
+#: point it is supplied, where the adopter can still choose a different directory.
+_PATH_FORBIDDEN = {
+    "'": "closes a single-quoted PowerShell literal early",
+    '"': "closes a double-quoted shell/JSON string early",
+    "`": "is PowerShell's escape character",
+    "$": "interpolates in PowerShell and shell double quotes",
+    ";": "terminates a statement in both shells",
+    "|": "pipes in both shells",
+    "&": "backgrounds or chains in both shells",
+    "\n": "is a newline, which cannot appear inside a quoted literal at all",
+    "\r": "is a carriage return, which cannot appear inside a quoted literal",
+    "\t": "is a tab, which silently changes the value nobody can see",
+}
+
+#: ``{{PROJECT_NAME}}`` is not prose either. It becomes part of filenames
+#: (``<name>-allowed-signers``, ``<name>-exact-index-<guid>``), env-var identifiers,
+#: agent-file names and branch names, so it is held to what all of those accept.
+_NAME_ALLOWED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _check_path_value(label: str, value: str) -> str:
+    r"""Refuse a path value that cannot be substituted into code, and normalise ``\``.
+
+    Backslashes are *converted* rather than refused: ``P:\my-project`` is the natural
+    Windows spelling, forward slashes work everywhere PowerShell, bash and JSON read
+    these paths, and this package's own examples are already written with them. A
+    conversion that cannot change the meaning of the path is worth more than a refusal
+    the adopter has to work around by hand.
+    """
+    for char, why in _PATH_FORBIDDEN.items():
+        if char in value:
+            shown = repr(char)
+            raise ValueError(
+                f"{label} contains {shown}, which {why}. This value is substituted "
+                f"into executable code -- single-quoted PowerShell literals, "
+                f"double-quoted shell strings and JSON strings -- so a character that "
+                f"breaks any of those breaks the generated wrapper while instantiation "
+                f"and --verify both report success. Choose a path without it."
+            )
+    return value.replace("\\", "/")
+
+
 def derive_values(
     project_name: str,
     project_root: str,
@@ -97,7 +171,8 @@ def derive_values(
 ) -> dict[str, str]:
     """Build the full placeholder -> value map, deriving case variants when omitted.
 
-    Raises ValueError if any required base value is blank.
+    Raises ValueError if any required base value is blank, or if an explicitly
+    supplied ``project_name_upper`` is not a valid environment-variable identifier.
     """
     for label, val in (
         ("project_name", project_name),
@@ -109,15 +184,50 @@ def derive_values(
             raise ValueError(f"required value '{label}' is empty")
 
     project_name = project_name.strip()
+    if not _NAME_ALLOWED.match(project_name):
+        raise ValueError(
+            f"project_name '{project_name}' must match {_NAME_ALLOWED.pattern}. It is "
+            "not prose: it becomes part of generated filenames "
+            "(<name>-allowed-signers, <name>-exact-index-<guid>), environment-variable "
+            "identifiers, agent-file names and branch names. A space or a quote there "
+            "produces files and commands nothing can address, and instantiation would "
+            "still report every token substituted."
+        )
+    project_root = _check_path_value("project_root", project_root.strip())
+    receipts_dir = _check_path_value("receipts_dir", receipts_dir.strip())
+    repo_url = _check_path_value("repo_url", repo_url.strip())
+    if project_name_title:
+        # Title case is the one value that really is prose (headings, sentences), but it
+        # still lands inside quoted strings, so the quote characters are refused here too.
+        for char in ("'", '"', "`", "\n", "\r"):
+            if char in project_name_title:
+                raise ValueError(
+                    f"project_name_title contains {char!r}, which breaks the quoted "
+                    "strings it is substituted into."
+                )
+    if project_name_upper and project_name_upper.strip():
+        upper = project_name_upper.strip()
+        if not _ENV_IDENT_VALID.match(upper):
+            # Refused rather than silently repaired: an override is a deliberate choice,
+            # and quietly rewriting it would leave the adopter reading env-var names in
+            # their own notes that do not match the ones the tools now export.
+            raise ValueError(
+                f"project_name_upper '{upper}' is not a valid environment-variable "
+                "identifier ([A-Za-z_][A-Za-z0-9_]*). It is substituted into code such "
+                "as $env:<UPPER>_AUTHOR_VENDOR, where a hyphen or space stops the "
+                "dispatch wrapper from parsing at all."
+            )
+    else:
+        upper = env_identifier(project_name)
     return {
         "{{PROJECT_NAME}}": project_name,
         "{{PROJECT_NAME_TITLE}}": (
             project_name_title or project_name.capitalize()
         ).strip(),
-        "{{PROJECT_NAME_UPPER}}": (project_name_upper or project_name.upper()).strip(),
-        "{{PROJECT_ROOT}}": project_root.strip(),
-        "{{RECEIPTS_DIR}}": receipts_dir.strip(),
-        "{{REPO_URL}}": repo_url.strip(),
+        "{{PROJECT_NAME_UPPER}}": upper,
+        "{{PROJECT_ROOT}}": project_root,
+        "{{RECEIPTS_DIR}}": receipts_dir,
+        "{{REPO_URL}}": repo_url,
     }
 
 

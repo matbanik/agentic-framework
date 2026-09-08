@@ -31,10 +31,10 @@ Is this image generation?
   → YES → Codex CLI (`image_generator` class)
 
 Is this data processing (OCR, PDF, large file, transcription)?
-  → YES → agy CLI (Gemini 3.5 Flash High) — native Windows `agy -p` stdout capture (≥ 1.1.1)
+  → YES → agy CLI (the `surface_orchestrator` class) — native Windows `agy -p` stdout capture (≥ 1.1.1)
 
 Is this creative writing / natural prose?
-  → YES → Claude Code (Opus 4.5)
+  → YES → Claude Code (the `creative_prose` class)
 
 Is this headless isolated-worker / overnight / CI bulk work where
 in-harness Task is unavailable or undesirable?
@@ -178,7 +178,7 @@ Get-Content {{RECEIPTS_DIR}}/dispatch/{dispatchId}/final.md
 ```powershell
 $raw = Get-Content {{RECEIPTS_DIR}}/dispatch/claude-output.txt -Encoding Unicode -Raw
 # Or for critical decisions:
-# $raw = Get-Content {{RECEIPTS_DIR}}/dispatch/opus48-output.txt -Encoding Unicode -Raw
+# $raw = Get-Content {{RECEIPTS_DIR}}/dispatch/coordinator-output.txt -Encoding Unicode -Raw
 $json = $raw | ConvertFrom-Json
 $result = $json.result          # The actual text/analysis
 $sessionId = $json.session_id   # For follow-up with --continue

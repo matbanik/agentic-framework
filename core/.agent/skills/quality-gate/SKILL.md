@@ -127,4 +127,4 @@ When working on `ui/` code, the following additional checks apply:
 
 ### Mock-Contract Validation
 
-When reviewing or writing unit tests that mock API responses, verify TS interfaces match the actual Python API models. See [testing-strategy.md §Mock-Contract Validation Rule](../../docs/build-plan/testing-strategy.md) for details.
+When reviewing or writing unit tests that mock API responses, verify TS interfaces match the actual Python API models. See [testing-strategy.md §Mock-Contract Validation Rule](../../docs/testing-strategy.md) for details.
