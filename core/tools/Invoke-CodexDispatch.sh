@@ -173,7 +173,7 @@ sha256_file() {
 
 physical_path() {
   local path="$1"
-  python3 -c 'import os,sys; print(os.path.realpath(os.path.abspath(sys.argv[1])).replace("\\\\","/"))' "$path"
+  python3 -c 'import os,sys; print(os.path.realpath(os.path.abspath(sys.argv[1])).replace(chr(92),"/"))' "$path"
 }
 
 path_under() {
