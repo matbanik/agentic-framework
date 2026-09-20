@@ -423,33 +423,26 @@ locate_resolver() {
     echo "${AGENT_RESOLVE_SCRIPT}"
     return
   fi
-  local candidates=()
+  # LOCATE_ORDER is exclusive: a configured file or home that is missing must
+  # not fall through to %USERPROFILE%/.agent (.agent/INSTANTIATE.md S2).
+  local candidate=""
   if [[ -n "${AGENT_MODEL_REGISTRY:-}" ]]; then
     local override="${AGENT_MODEL_REGISTRY}"
     if [[ -d "$override" ]]; then
-      candidates+=("${override}/tools/resolve_model.py")
+      candidate="${override}/tools/resolve_model.py"
     else
-      candidates+=("$(dirname "$override")/tools/resolve_model.py")
+      candidate="$(dirname "$override")/tools/resolve_model.py"
     fi
+  elif [[ -n "${AGENT_MODEL_REGISTRY_HOME:-}" ]]; then
+    candidate="${AGENT_MODEL_REGISTRY_HOME}/tools/resolve_model.py"
+  elif [[ -n "${USERPROFILE:-}" ]]; then
+    candidate="${USERPROFILE}/.agent/tools/resolve_model.py"
+  elif [[ -n "${HOME:-}" ]]; then
+    candidate="${HOME}/.agent/tools/resolve_model.py"
   fi
-  # Shared home from env, never a baked drive letter: a literal like "P:/.agent" is one
-  # machine's layout and is meaningless on macOS/Linux (.agent/INSTANTIATE.md S2).
-  if [[ -n "${AGENT_MODEL_REGISTRY_HOME:-}" ]]; then
-    candidates+=("${AGENT_MODEL_REGISTRY_HOME}/tools/resolve_model.py")
+  if [[ -n "$candidate" && -f "$candidate" ]]; then
+    echo "$candidate"
   fi
-  if [[ -n "${USERPROFILE:-}" ]]; then
-    candidates+=("${USERPROFILE}/.agent/tools/resolve_model.py")
-  fi
-  if [[ -n "${HOME:-}" ]]; then
-    candidates+=("${HOME}/.agent/tools/resolve_model.py")
-  fi
-  local c
-  for c in "${candidates[@]}"; do
-    if [[ -f "$c" ]]; then
-      echo "$c"
-      return
-    fi
-  done
 }
 
 PYTHON_BIN="$(resolve_python)"
@@ -468,12 +461,12 @@ env = os.environ.get('AGENT_MODEL_REGISTRY')
 if env:
     p = pathlib.Path(env)
     candidates.append(p if p.suffix.lower() == '.json' else p / 'model-registry.json')
-shared = os.environ.get('AGENT_MODEL_REGISTRY_HOME')
-if shared:
-    candidates.append(pathlib.Path(shared) / 'model-registry.json')
-home = os.environ.get('USERPROFILE') or os.environ.get('HOME')
-if home:
-    candidates.append(pathlib.Path(home) / '.agent' / 'model-registry.json')
+elif os.environ.get('AGENT_MODEL_REGISTRY_HOME'):
+    candidates.append(pathlib.Path(os.environ['AGENT_MODEL_REGISTRY_HOME']) / 'model-registry.json')
+else:
+    home = os.environ.get('USERPROFILE') or os.environ.get('HOME')
+    if home:
+        candidates.append(pathlib.Path(home) / '.agent' / 'model-registry.json')
 for c in candidates:
     if c.is_file():
         doc = json.loads(c.read_text(encoding='utf-8'))

@@ -6,6 +6,8 @@ description: Implementation-review-only critical review workflow. Reviews comple
 
 Use this workflow to adversarially review **completed implementation work** that has produced handoff artifacts. This workflow produces findings only — it never fixes issues or reviews unstarted plans.
 
+**EGRESS_PRECEDENCE (orchestrator).** The implementing agent that *dispatches* this workflow must obtain independent review unless PROFILE C1/C2/C3b or E5 forbids sending work to an external provider; then stop for B4's named human reviewer. That stop is **not** SIGN 1. Self-review remains prohibited. Missing CLI (`can_dispatch_external_reviewer == no`) is **not** the same as forbidden egress: when egress is forbidden, do not prepare a provider web-prompt and do not request manual external submission.
+
 This is the workflow for prompts like:
 
 - "Critically review the latest handoff"
@@ -381,7 +383,7 @@ If that file already exists, append a new dated review update section — as a
 
 The workflow is incomplete until the canonical review handoff exists and is readable.
 
-> **Start from** [`.agent/context/handoffs/REVIEW-TEMPLATE.md`](file:///{{PROJECT_ROOT}}/.agent/context/handoffs/REVIEW-TEMPLATE.md) (v2.1)
+> **Start from** [`.agent/templates/REVIEW-TEMPLATE.md`](file:///{{PROJECT_ROOT}}/.agent/templates/REVIEW-TEMPLATE.md) (v2.1)
 >
 > **Verbosity control**: Set `requested_verbosity` in the review YAML frontmatter. See `.agent/docs/context-compression.md §Verbosity Tiers`.
 

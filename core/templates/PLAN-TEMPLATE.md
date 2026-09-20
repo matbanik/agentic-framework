@@ -140,7 +140,7 @@ Legacy 9-column tables remain valid.
 {This project does/does not modify build-plan sections. Validation:}
 
 ```powershell
-rtk proxy pwsh -NoProfile -Command { $matches=@(Select-String -Path docs/BUILD_PLAN.md -Pattern '{project-slug}'); [pscustomobject]@{matches=$matches.Count; lines=@($matches.LineNumber)} | ConvertTo-Json -Depth 3 } *> {{RECEIPTS_DIR}}/build-plan-audit.json; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/build-plan-audit.json; exit $code
+Test-Path docs/BUILD_PLAN.md *> {{RECEIPTS_DIR}}/build-plan-audit.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/build-plan-audit.txt; exit $code
 ```
 
 ---
@@ -149,7 +149,7 @@ rtk proxy pwsh -NoProfile -Command { $matches=@(Select-String -Path docs/BUILD_P
 
 > [!IMPORTANT]
 > Classify every command through
-> [`.agent/docs/output-evidence-policy.md`](../../../.agent/docs/output-evidence-policy.md).
+> [`.agent/docs/output-evidence-policy.md`](../docs/output-evidence-policy.md).
 > Use a verified native RTK route for compact views and `rtk proxy` for exact evidence.
 
 ### 1. {Check Category}

@@ -15,31 +15,49 @@ Use this workflow to start a new build session. Instead of reading a pre-written
 
 ## Prerequisites
 
-Read these files in order:
+Read `PROJECT-PROFILE.md` (adopting-project root) first. If it is absent, **stop**
+and run ADOPTION-GUIDE Step 1 — do not invent profile answers. Every later
+capability choice (D3 spec hub, D6 gate, C/E dispatch, D9) is read from this file.
 
-1. `AGENTS.md`
-2. `.agent/context/current-focus.md`
-3. `.agent/context/known-issues.md`
-4. `.agent/docs/emerging-standards.md` — scan for standards applicable to the MEUs being planned. Add matching standards as explicit subtasks in Step 4.
+Then read `AGENTS.md`.
+
+**D9_NO_BRANCH.** PROFILE D9 chooses whether MEU seeds and tools are in play.
+
+- If **D9 is no:** do not require `.agent/context/current-focus.md` MEU sections,
+  `tools/meu_status.py`, or known-issues MEU coupling. Missing those assets is
+  not a stop. Write the plan/task from PROFILE + AGENTS + handoffs/reflections
+  that exist. Do not invoke `python tools/meu_status.py`.
+- If **D9 is yes:** missing required MEU assets refuse. Read
+  `.agent/context/current-focus.md` — if missing, write a <30-line stub
+  (Current Priority + Next Steps) and continue. Read
+  `.agent/context/known-issues.md`. If `tools/meu_status.py` is absent, refuse.
+  Scan `.agent/docs/emerging-standards.md` for standards applicable to the MEUs
+  being planned and add matching standards as explicit subtasks in Step 4.
 
 ## Context Tool Decision Gate (Before Planning)
 
 Before Step 1, follow `.agent/docs/context-tool-decision-gate.md`. Inventory Graphify,
-Graphify Research, and Headroom against the resolved planning scope. If any tool is
-eligible, flag the potential token-savings opportunity to the human and wait for a
-direct `USER_EXPLICIT` `use` or `accepted_loss` choice before planning starts. If none
-is eligible, record `not_applicable` and continue. Persist the decision block in both
-plan artifacts generated in Step 4.
+Graphify Research, and Headroom against the resolved planning scope. If a named graph
+or Headroom install is absent, record `not_applicable` **without waiting** and continue.
+If any tool is eligible, flag the potential token-savings opportunity to the human and
+wait for a direct `USER_EXPLICIT` `use` or `accepted_loss` choice before planning
+starts. Persist the decision block in both plan artifacts generated in Step 4.
 
 ## Steps
 
 ### 1. Discover What's Completed
 
-Scan these sources to build a picture of current progress:
+If PROFILE **D9 is no**, skip this CLI. List `.agent/context/handoffs` plus the
+latest `docs/execution/reflections/*.md` instead, then continue to Step 2 using
+the D3 spec hub from PROFILE.
+
+If PROFILE **D9 is yes**, scan these sources to build a picture of current progress:
 
 ```powershell
-rtk proxy pwsh -NoProfile -Command { rtk proxy uv run python tools/meu_status.py stats; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; rtk proxy uv run python tools/meu_status.py list --status pending; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; rtk proxy uv run python tools/meu_status.py list --status in_progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; rtk proxy uv run python tools/meu_status.py next --limit 10; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Get-ChildItem .agent/context/handoffs -File | Sort-Object LastWriteTime,Name; Get-ChildItem docs/execution/reflections/*.md | Sort-Object LastWriteTime,Name -Descending | Select-Object -First 1; exit 0 } *> {{RECEIPTS_DIR}}/create-plan-discovery.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/create-plan-discovery.txt; exit $code
+python tools/meu_status.py stats *> {{RECEIPTS_DIR}}/create-plan-discovery.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/create-plan-discovery.txt; exit $code
 ```
+
+The CLI has no `add`: if the registry has zero MEUs, hand-edit `.agent/context/meu-status.yaml` (session-grouping A4 schema) then `python tools/meu_status.py render`. If `tools/meu_status.py` is absent when D9 is yes, refuse.
 
 From the handoffs and registry, determine:
 - Which MEUs are ✅ approved
@@ -50,19 +68,11 @@ If the most recent reflection has "Next Session Design Rules," apply those to to
 
 ### 2. Identify What's Next
 
-Read the build plan files for the next pending work:
-
-```
-# Read the build priority matrix for overall ordering
-cat docs/build-plan/build-priority-matrix.md
-
-# Read the specific build-plan file for the next pending phase/section
-cat docs/build-plan/{NN}-{phase}.md
-```
+Read the Spec hub for the next pending work. PROFILE D3 names the hub; default is `docs/BUILD_PLAN.md`. Read that file. `docs/build-plan/build-priority-matrix.md` and `docs/build-plan/{NN}-{phase}.md` are origin-optional companions — read them **only if present**. Do not treat a missing `docs/build-plan/` tree as a stop.
 
 Identify the set of pending MEUs that are unblocked (all dependencies satisfied by approved MEUs).
 
-Also inspect `docs/BUILD_PLAN.md` as the build-plan hub/index and determine whether the planned project will require hub-level updates (for example: stale execution-plan references, phase-status notes, moved/renamed plan links, or summary text that would become inaccurate once the project is executed). This check is mandatory during planning; do not leave `docs/BUILD_PLAN.md` maintenance to memory.
+Also inspect the D3 hub (`docs/BUILD_PLAN.md` by default) and determine whether the planned project will require hub-level updates (for example: stale execution-plan references, phase-status notes, moved/renamed plan links, or summary text that would become inaccurate once the project is executed). This check is mandatory during planning; do not leave hub maintenance to memory. If the D3 file is absent in this tree, record hub N/A with evidence (`Test-Path`) and continue.
 
 ### 2A. Run a Spec Sufficiency Gate
 
@@ -147,7 +157,7 @@ Use sequential thinking to group the next set of pending MEUs into a coherent **
 - **Right-sizing**: not too small (wasted context setup) and not too large (context degradation)
 - **Build-plan continuity**: stay within the same build-plan file/phase when possible
 - **Completeness first**: prefer the full documented contract across canonical docs; do not introduce artificial narrowing unless the spec explicitly does so
-- **Batch invariant awareness**: when a project touches test snapshots, registries, or Protocol definitions (ports), ensure the plan includes running `validate_codebase.py --check contract` as part of the MEU gate to catch cumulative drift across MEU boundaries
+- **Batch invariant awareness**: the MEU gate is D6 from `PROJECT-PROFILE.md`. Do not call `validate_codebase.py` unless that file exists at `tools/validate_codebase.py`; if it is absent, omit it from the plan's gate and use the PROFILE D6 command instead.
 
 Output a clear project scope:
 - Project slug (e.g., `domain-entities-ports`)
@@ -165,13 +175,13 @@ New-Item -ItemType Directory -Force -Path "docs\execution\plans\$projectSlug" | 
 ```
 
 Write both files to `docs/execution/plans/{YYYY-MM-DD}-{project-slug}/`:
-- `implementation-plan.md` — start from [`docs/execution/plans/PLAN-TEMPLATE.md`](file:///{{PROJECT_ROOT}}/docs/execution/plans/PLAN-TEMPLATE.md) (v2.0)
-- `task.md` — start from [`docs/execution/plans/TASK-TEMPLATE.md`](file:///{{PROJECT_ROOT}}/docs/execution/plans/TASK-TEMPLATE.md) (v2.1 — H1 pre-review / review barrier / H2 post-review closeout)
+- `implementation-plan.md` — start from [`.agent/templates/PLAN-TEMPLATE.md`](file:///{{PROJECT_ROOT}}/.agent/templates/PLAN-TEMPLATE.md) (v2.0)
+- `task.md` — start from [`.agent/templates/TASK-TEMPLATE.md`](file:///{{PROJECT_ROOT}}/.agent/templates/TASK-TEMPLATE.md) (v2.1 — H1 pre-review / review barrier / H2 post-review closeout)
 
 > [!CAUTION]
 > **Template Pre-Flight (mandatory before writing):** (use your harness's `read_tool` — `Read`/`view_file`/etc., per `.agent/docs/harness-profiles.md`)
-> 1. Read → `docs/execution/plans/PLAN-TEMPLATE.md`
-> 2. Read → `docs/execution/plans/TASK-TEMPLATE.md`
+> 1. Read → `.agent/templates/PLAN-TEMPLATE.md`
+> 2. Read → `.agent/templates/TASK-TEMPLATE.md`
 > 3. Only then write `implementation-plan.md` and `task.md`, using the template structure as the skeleton and filling in project-specific content.
 
 > [!IMPORTANT]
@@ -218,7 +228,8 @@ The plan must include:
   restated at multiple sites is a stale clause scheduled for a future correction round — when one
   site is later corrected, the others silently become wrong. Reviewer counterpart: PR-9.
 - An **Out of Scope** table where every row is evidence-backed per control C2 — `deferred` rows name a MEU-ID already scheduled in `meu-status.yaml`/grouping; `out-of-scope` rows cite a real source (build-plan line ref / ADR / `Human-approved`) in the *Basis* column. A bare or hand-waved exclusion is a SKIP and will fail plan review (PR-7)
-- An explicit task to review and update `docs/BUILD_PLAN.md` for any hub/index drift caused or revealed by the project. This task must appear in both `implementation-plan.md` and `task.md`, with exact validation commands. If the planner finds no required `docs/BUILD_PLAN.md` change, the task must still exist and say so explicitly (for example: validate that no stale references remain, then mark the task complete with evidence).
+- An explicit task to review and update the resolved PROFILE D3 spec hub for any hub/index drift caused or revealed by the project. This task must appear in both `implementation-plan.md` and `task.md`, with exact validation commands. If the planner finds no required hub change, the task must still exist and say so explicitly (for example: validate that no stale references remain, or record hub N/A with `Test-Path` when the D3 file is absent, then mark the task complete with evidence).
+  PROFILE D3 defaults to `docs/BUILD_PLAN.md`; if D3 names another path, the task targets that path and must not invent the default.
 - Exact file paths to create or modify
 - Exact validation commands
 - Explicit stop conditions
@@ -232,13 +243,24 @@ The plan must include:
 
 No plan may defer required behavior merely because the build plan is thin. The planner must either resolve the behavior from sources or stop on an explicit human decision gate before execution.
 
-For `docs/BUILD_PLAN.md` specifically, do not use vague wording like "clean up BUILD_PLAN later" or bury the work in prose. The planner must create a concrete task row with owner, deliverable, validation, and status just like any other project task.
+For the PROFILE D3 hub, do not use vague wording like "clean up the spec hub later" or bury the work in prose. The planner must create a concrete task row with owner, deliverable, validation, and status just like any other project task.
+PROFILE D3 defaults to `docs/BUILD_PLAN.md`; a different D3 path replaces that default rather than adding a second hub.
 
 > [!CAUTION]
 > **DO NOT STOP HERE. Step 4 output is a draft, not a deliverable.**
 > Writing `implementation-plan.md` + `task.md` is NOT a stopping point and is NOT a human-review gate. The mandated next action is to **immediately proceed to Step 4A → Step 5 and auto-dispatch `/plan-critical-review`** — do not end your turn, do not "present the plan for review", do not ask the user to approve the draft. **The human sees *reviewed* plans, never raw drafts** (`AGENTS.md:63`, `AGENTS.md:263`).
 >
 > Stopping after Step 4 to request human review is the **single most common governance failure** for this workflow (GUARDRAILS **SIGN 1 / SIGN 2** — the legacy "STOP after the plan" behavior was *superseded* by the Step 5 auto-review loop). If you feel an urge to pause and ask the user "is this plan OK?", that urge is the bug — dispatch the reviewer instead.
+>
+> **PROFILE EGRESS_PRECEDENCE:** External review dispatch is mandatory unless
+> `PROJECT-PROFILE.md` C1/C2/C3b or E5 forbids sending work to an external
+> provider; then stop for B4's named human reviewer. That stop is a
+> human-decision gate, **not SIGN 1**. Self-review remains prohibited — never
+> author the plan-critical-review verdict. `plan_to_exec_gate: human` is a
+> separate post-`approved` pause. Missing CLI (`can_dispatch_external_reviewer
+> == no`) is **not** the same as forbidden egress: when egress is forbidden,
+> do not prepare a provider web-prompt and do not request manual external
+> submission.
 
 ### 4A. GUI Element Compliance Check (Conditional)
 
@@ -262,7 +284,7 @@ If triggered, verify the plan meets these requirements before proceeding to Step
 If ANY check fails, fix the plan before presenting in Step 5.
 
 > [!NOTE]
-> **Skip this step** if no MEUs in the project touch GUI elements (e.g., pure domain/infra/API projects).
+> **Skip this step** if no MEUs in the project touch GUI elements (e.g., pure domain/infra/API projects). If the named GUI reference files (`docs/gui-element-reference.md`, `docs/gui-button-index.md`, `docs/gui-input-field-index.md`, `docs/gui-output-index.md`, `.agent/docs/gui-standards-enforcement.md`) are absent, skip §4A, record `gui-refs-not-shipped`, and continue to Step 5. MANIFEST excludes these origin indexes.
 
 ### 5. Auto-Dispatch Plan Critical Review
 
@@ -277,7 +299,7 @@ If ANY check fails, fix the plan before presenting in Step 5.
 > conservative default; see `.agent/docs/harness-profiles.md`), Step 5c's auto-continue
 > is disabled — see Step 5c for the exact rule.
 
-After generating the plan in Step 4, immediately dispatch it for critical review:
+After generating the plan in Step 4, immediately dispatch it for critical review — unless PROFILE EGRESS_PRECEDENCE forbids external dispatch, in which case stop for B4's named human reviewer (that stop is **not SIGN 1**; self-review remains prohibited):
 
 #### 5a. Dispatch to External Reviewer
 
@@ -296,7 +318,7 @@ Review targets:
   docs/execution/plans/{YYYY-MM-DD}-{project-slug}/implementation-plan.md
   docs/execution/plans/{YYYY-MM-DD}-{project-slug}/task.md
 Write verdict to .agent/context/handoffs/{plan-folder-name}-plan-critical-review.md
-Use template at .agent/context/handoffs/REVIEW-TEMPLATE.md.
+Use template at .agent/templates/REVIEW-TEMPLATE.md.
 ```
 
 #### 5b. Parse Verdict & Correction Loop
@@ -304,7 +326,7 @@ Use template at .agent/context/handoffs/REVIEW-TEMPLATE.md.
 After the reviewer finishes, read the review file:
 
 ```powershell
-rtk proxy pwsh -NoProfile -Command { Get-Content .agent/context/handoffs/{plan-folder-name}-plan-critical-review.md } *> {{RECEIPTS_DIR}}/plan-review-read.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/plan-review-read.txt; exit $code
+Get-Content .agent/context/handoffs/{plan-folder-name}-plan-critical-review.md *> {{RECEIPTS_DIR}}/plan-review-read.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/plan-review-read.txt; exit $code
 ```
 
 **If `changes_required`:**
@@ -477,7 +499,8 @@ planning record only when its phase explicitly covers execution and eligibility,
 availability, active disposition, and scope are unchanged.
 
 If any of those conditions changed, inventory Graphify, Graphify Research, and Headroom
-again. When a tool is eligible, disclose the potential token savings/loss and wait for
+again. When a named graph or Headroom install is absent, record `not_applicable`
+**without waiting**. When a tool is eligible, disclose the potential token savings/loss and wait for
 a direct `USER_EXPLICIT` `use` or `accepted_loss` decision before Step 6. When none is
 eligible, record `not_applicable` and continue without interrupting the human. Do not
 start execution from a planning-only, stale, inferred, reviewer, or system-injected
@@ -510,21 +533,16 @@ After all MEU TDD cycles and handoffs are complete, **continue immediately** wit
 
 > **Ordering matters (CR-1):** the execution-critical-review must run against the **final** project state, so all artifact updates (registry, BUILD_PLAN, regression, OpenAPI) come BEFORE the review; reflection/metrics/commit-prep come AFTER it (the reflection records the verdict). This matches the `execution-session.md` lifecycle (registry update → execution review → reflection).
 
-1. Run the MEU gate through the exact receipt command registered in `task.md`.
+1. Run the MEU gate through the exact receipt command registered in `task.md` (PROFILE D6).
 2. Update MEU status via the registered SSOT task command and preserve its receipt.
 3. Render and check SSOT regions through the registered task command.
-4. Run full regression through an exact `rtk proxy` receipt.
-5. **If any files in `packages/api/` were created or modified**, run the two-step OpenAPI drift check (G8):
+4. Run full regression through an exact receipt of the PROFILE D6 / project test command.
+5. OpenAPI drift: if `tools/export_openapi.py` or `packages/api/` are unshipped, record **skip-with-basis** and continue. If those tools exist and any files in `packages/api/` were created or modified, run the two-step OpenAPI drift check (G8):
    ```powershell
-   # Step 1: Detect drift
-   rtk proxy uv run python tools/export_openapi.py --check openapi.committed.json *> {{RECEIPTS_DIR}}/openapi-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/openapi-check.txt; exit $code
-   # → [OK] = no action needed
-   # → [FAIL] = proceed to Step 2
-
-   # Step 2: Regenerate ONLY if Step 1 reported [FAIL]
-   rtk proxy uv run python tools/export_openapi.py -o openapi.committed.json *> {{RECEIPTS_DIR}}/openapi-regen.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/openapi-regen.txt; exit $code
+   python tools/export_openapi.py --check openapi.committed.json *> {{RECEIPTS_DIR}}/openapi-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/openapi-check.txt; exit $code
+   python tools/export_openapi.py -o openapi.committed.json *> {{RECEIPTS_DIR}}/openapi-regen.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/openapi-regen.txt; exit $code
    ```
-   > **Why two steps?** `--check` provides drift evidence and catches accidental route changes. CI runs `--check` mode — if you forget to regenerate after a real change, CI catches it. Blindly regenerating with `-o` loses this safety net.
+   > **Why two steps?** `--check` provides drift evidence and catches accidental route changes. CI runs `--check` mode — if you forget to regenerate after a real change, CI catches it. Blindly regenerating with `-o` loses this safety net. Run step 2 only when step 1 reported drift.
 6. **Auto-dispatch `/execution-critical-review`** and loop corrections until APPROVED (see §6a below). This is NOT optional and is NOT a human gate — a standalone `/create-plan` run owns its own execution review (it does *not* hand off to `/execution-session`). The review now sees the final state (items 1–5). Do not write the reflection/metrics or report completion until the implementation review returns `approved` (or hits the round cap). If the correction loop changes code/tests, re-run the MEU gate (and re-touch items 2–5 if affected) before re-dispatching.
 7. Create reflection file at `docs/execution/reflections/` (see `execution-session.md` §5) — it must record the execution-review rounds/verdict from item 6.
 8. Update metrics table in `docs/execution/metrics.md`
@@ -578,7 +596,7 @@ Required sequence:
 
 ```powershell
 # // turbo
-rtk proxy uv run python .agent/skills/timestamp/scripts/stamp.py *> {{RECEIPTS_DIR}}/stamp.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/stamp.txt; exit $code
+python .agent/skills/timestamp/scripts/stamp.py *> {{RECEIPTS_DIR}}/stamp.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/stamp.txt; exit $code
 ```
 
 4. Read `{{RECEIPTS_DIR}}/stamp.txt` with the file viewer.
@@ -614,12 +632,12 @@ variants. The project-level implementation critique remains the single rolling f
 - [ ] Plan written to `docs/execution/plans/{date}-{project-slug}/`
 - [ ] All MEUs in the project executed via TDD
 - [ ] One `{date}-{project-slug}-{MEU-ID}-handoff.md` per product MEU, or one `{date}-{project-slug}-handoff.md` when `meus: []`
-- [ ] MEU gate receipt proves all blocking checks passed
+- [ ] MEU gate receipt proves all blocking checks passed (PROFILE D6)
 - [ ] **Execution critical review auto-dispatched (§6a) and looped to `approved`** (or round-cap HARD STOP) — verdict on disk at `.agent/context/handoffs/{plan-folder-name}-implementation-critical-review.md`
 - [ ] MEU registry updated per MEU
-- [ ] `docs/BUILD_PLAN.md` status regions regenerated and checked through the task receipt
-- [ ] OpenAPI drift checked and resolved (if `packages/api/` was modified) — `--check` first, then `-o` only on drift
+- [ ] Resolved PROFILE D3 hub status regions regenerated and checked through the task receipt; if that file is absent, skip-with-basis / hub N/A (do not invent a second hub besides the resolved D3 path)
+- [ ] OpenAPI drift: **skip-with-basis** when `tools/export_openapi.py` / `packages/api/` are unshipped; otherwise `--check` first, then `-o` only on drift
 - [ ] Reflection file created
 - [ ] Metrics table updated
-- [ ] Session digest created at `.agent/context/sessions/{conversation-id}/digest.md`
+- [ ] Session digest: **skip-with-basis** when session-digest tools are unshipped; otherwise create at `.agent/context/sessions/{conversation-id}/digest.md`
 - [ ] Proposed commit messages presented to human with no AI attribution trailers

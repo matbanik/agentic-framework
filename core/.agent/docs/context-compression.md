@@ -188,8 +188,8 @@ memory and wholesale reloads of completed independent work are not recovery sour
 
 ## Related Files
 
-- [TEMPLATE.md](file:///{{PROJECT_ROOT}}/.agent/context/handoffs/TEMPLATE.md) — Handoff template (v2.1)
-- [REVIEW-TEMPLATE.md](file:///{{PROJECT_ROOT}}/.agent/context/handoffs/REVIEW-TEMPLATE.md) — Review template (v2.1)
+- [HANDOFF-TEMPLATE.md](file:///{{PROJECT_ROOT}}/.agent/templates/HANDOFF-TEMPLATE.md) — Handoff template (v2.1)
+- [REVIEW-TEMPLATE.md](file:///{{PROJECT_ROOT}}/.agent/templates/REVIEW-TEMPLATE.md) — Review template (v2.1)
 - [AGENTS.md §Context Compression Rules](file:///{{PROJECT_ROOT}}/AGENTS.md) — Mandatory agent rules
 - [ACON Synthesis](file:///{{PROJECT_ROOT}}/_inspiration/acon_research/acon-compression-synthesis.md) — Research source
 - [harness-profiles.md](file:///{{PROJECT_ROOT}}/.agent/docs/harness-profiles.md) — `context_compaction` capability per harness

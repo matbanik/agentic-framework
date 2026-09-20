@@ -4,6 +4,10 @@ description: "Generate 3 portal-ready deep research prompts (ChatGPT/Gemini/Clau
 
 # Inspiration Research Workflow
 
+Before Step 0, record the **search provider** in `PROJECT-PROFILE.md` (Pomera MCP,
+another MCP search, or a human-waived native search). Do not reach Pomera with
+no provider answer.
+
 Generate 3 deep research prompts — one per provider — each tailored to that provider's **currently
 verified** portal capabilities. The human pastes each into the provider's native web portal.
 

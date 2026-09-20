@@ -43,16 +43,17 @@ REPO_URL=github.com/you/acme
 # PROJECT_NAME_UPPER=ACMECORP
 ```
 
-**2. Dry-run first** — see every change, write nothing:
+**2. Dry-run first** — see every change, write nothing. `--root` is required
+unless you pass `--in-place-package` (rewrites this transfer package; mutually
+exclusive with `--root`):
 
 ```
-python scripts/instantiate.py --config framework.vars --dry-run
+python scripts/instantiate.py --root /path/to/your-project --config framework.vars --dry-run
 ```
 
-**3. Apply** — against this package, or against wherever you copied `core/` (`--root`):
+**3. Apply** — against the copied framework tree (`--root`):
 
 ```
-python scripts/instantiate.py --config framework.vars                 # rewrite this package
 python scripts/instantiate.py --root /path/to/your-project --config framework.vars
 ```
 

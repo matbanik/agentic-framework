@@ -19,6 +19,12 @@ Beyond the P0 environment constraints above, exactly **two** workflow invariants
 1. **Independent review / no self-review** — the implementing agent never authors its own `approved` verdict (§Execution Contract).
 2. **Human approval for irreversible acts** — commit, merge, deploy, or destructive-data operations (§Human Approval Gate).
 
+### Session start
+
+Read `PROJECT-PROFILE.md` before the first workflow. If it is absent, stop and run
+ADOPTION-GUIDE Step 1. Apply **EGRESS_PRECEDENCE**, **D9_NO_BRANCH**, and
+**D6_ADOPTER_ARGV** from those answers — naming the file is not enough.
+
 Reversible actions (editing files, running tests, writing drafts/handoffs/reflections) auto-proceed — do not "stop and ask" for them.
 
 **Deletion budget — applies whenever you edit this file or `GUARDRAILS.md`:** every new rule must DELETE or MERGE at least one existing rule; net rule count may not grow. This document is the sum of incident patches, and unbounded accretion produces the contradictions that degrade adherence to the two gates above. A patch that only adds is rejected — consolidate instead.
@@ -146,7 +152,7 @@ Validation/dev/scaffold commands, including the MEU and full phase gates, use th
 
 > [!IMPORTANT]
 > **Closeout artifact quality rule.** Reflection, handoff, and metrics are **institutional memory** — apply the same rigor as production code. Before generating ANY closeout artifact, the agent MUST:
-> 1. `view_file` the relevant template (e.g., `reflections/TEMPLATE.md`, `handoffs/TEMPLATE.md`)
+> 1. `view_file` the relevant template (e.g., `.agent/templates/REFLECTION-TEMPLATE.md`, `.agent/templates/HANDOFF-TEMPLATE.md`)
 > 2. `view_file` a recent peer exemplar (sorted by date, pick the most recent) for quality calibration
 > 3. Generate the artifact following ALL template sections — no shortcuts, no "from memory"
 > 4. Verify the artifact passes the structural marker checks in `completion-preflight/SKILL.md` §Closeout Artifact Quality Check
@@ -209,7 +215,7 @@ See the slash-command → workflow → executor table in [.agent/workflows/READM
 > **Plan files go to the project, not the agent workspace.** Per `create-plan.md` Step 4, `implementation-plan.md` and `task.md` MUST be written to `docs/execution/plans/{YYYY-MM-DD}-{project-slug}/`. Do NOT create artifact copies in the Antigravity brain folder with `RequestFeedback: true` — this triggers the IDE's auto-approval policy, which injects system messages that bypass human decision gates. The project folder is the single source of truth.
 
 > [!CAUTION]
-> **`task.md` is created WITH the plan, not after approval.** During PLANNING mode (Step 4 of `create-plan.md`), ALWAYS create BOTH `implementation-plan.md` AND `task.md` in the same step. Codex validates against both files — if `task.md` is missing, review will fail. Read `docs/execution/plans/TASK-TEMPLATE.md` before writing. This is NOT optional and NOT deferred to execution.
+> **`task.md` is created WITH the plan, not after approval.** During PLANNING mode (Step 4 of `create-plan.md`), ALWAYS create BOTH `implementation-plan.md` AND `task.md` in the same step. Codex validates against both files — if `task.md` is missing, review will fail. Read `.agent/templates/TASK-TEMPLATE.md` before writing. This is NOT optional and NOT deferred to execution.
 
 ### Spec Sufficiency Gate
 
@@ -298,7 +304,7 @@ When implementing a Manageable Execution Unit (MEU):
 - A thin spec is not a valid reason to ship a narrower implementation. Resolve the gap in planning/research, update the plan/FIC with the source-backed rule, then implement the full resolved contract.
 
 > [!CAUTION]
-> **Self-review prohibition.** The implementing agent (any agent/session that authored or edited the code, tests, or handoff under review) MUST NOT perform `/validation-review`, `/plan-critical-review`, or `/execution-critical-review` on its own work. These workflows require an independent agent (external reviewer — Codex CLI / `independent_reviewer`; full chain in `.agent/docs/model-routing.md`) to prevent confirmation bias. The implementing agent's role is to **dispatch and collect results**, not to execute the review steps. If Codex CLI is unavailable or rate-limited, follow the fallback protocol in `.agent/skills/cli-dispatch/SKILL.md` §Rate-Limit Fallback — do NOT fall back to self-review. External validation is mandatory unless the human explicitly waives it.
+> **Self-review prohibition.** The implementing agent (any agent/session that authored or edited the code, tests, or handoff under review) MUST NOT perform `/validation-review`, `/plan-critical-review`, or `/execution-critical-review` on its own work. These workflows require an independent agent (external reviewer — Codex CLI / `independent_reviewer`; full chain in `.agent/docs/model-routing.md`) to prevent confirmation bias. The implementing agent's role is to **dispatch and collect results**, not to execute the review steps. **EGRESS_PRECEDENCE:** dispatch is mandatory unless PROFILE C1/C2/C3b or E5 forbids sending work to an external provider; then stop for B4's named human reviewer. That stop is **not** SIGN 1. Self-review remains prohibited. Missing CLI (`can_dispatch_external_reviewer == no`) is **not** the same as forbidden egress: when egress is forbidden, do not prepare a provider web-prompt. If Codex CLI is unavailable or rate-limited *and dispatch was permitted*, follow the fallback protocol in `.agent/skills/cli-dispatch/SKILL.md` §Rate-Limit Fallback — do NOT fall back to self-review.
 
 > [!CAUTION]
 > **Persistence & Definition of Done (anti-premature-stop, EXECUTION PHASE ONLY — Step 6+).** Applies only after the plan is approved (by external reviewer or human) and the agent has entered EXECUTION mode; it does NOT apply during PLANNING (Steps 1–4). The plan-review (Step 5) loop and its exits are governed by `create-plan.md` §5 and `GUARDRAILS.md` SIGN 1–2.

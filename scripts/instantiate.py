@@ -32,8 +32,9 @@ Always dry-run first:
     python scripts/instantiate.py --config framework.vars            # apply
     python scripts/instantiate.py --verify                           # assert no {{TOKENS}} left
 
-By default the script rewrites the framework files sitting next to it (the copy inside
-this package). If you copied ``core/`` into your project first, point it there:
+By default the script **refuses** to run without `--root` (the copied adopter
+tree). `--in-place-package` is the only way to rewrite this transfer package;
+the two flags together refuse. If you copied ``core/`` into your project first:
 
     python scripts/instantiate.py --root /path/to/your-project --config framework.vars
 
@@ -91,6 +92,37 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv"}
 #: and a temp-index filename, while ``--verify`` reported the tree clean: verify walks the
 #: same traversal, so it never looked at the files it was supposed to be checking.
 SKIP_TOP_LEVEL = {"scripts"}
+#: Adopter-owned paths the installer must not rewrite even when they contain tokens.
+ADOPTER_OWNED_NAMES = {"PROJECT-PROFILE.md"}
+ADOPTER_OWNED_DIR_PREFIXES = ("_probe/",)
+#: After ADOPTION-GUIDE copy, only these prefixes/files are framework-installed.
+#: Everything else (user notes, app templates, docs the adopter already had) is
+#: outside the inventory even if it contains ``{{PROJECT_NAME}}``.
+ADOPTER_INSTALLED_PREFIXES = (
+    ".agent/",
+    "tools/",
+    ".cursor/agents/",
+    ".claude/agents/",
+)
+ADOPTER_INSTALLED_ROOT_FILES = {
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GUARDRAILS.md",
+    "MANIFEST.md",
+}
+#: ``--in-place-package`` rewrites the transfer package, not an adopter tree.
+PACKAGE_INSTALLED_PREFIXES = ("core/", ".agent/")
+PACKAGE_INSTALLED_ROOT_FILES = {
+    "ADOPTION-GUIDE.md",
+    "ADOPTION-QUESTIONS.md",
+    "PROJECT-PROFILE-TEMPLATE.md",
+    "README.md",
+    "UPDATE-CHECKLIST.md",
+    "MANIFEST.md",
+}
+AGENT_DEF_ROLES = ("builder", "verifier")
+AGENT_DEF_FOLDERS = (".cursor/agents", ".claude/agents")
+BOM = b"\xef\xbb\xbf"
 
 CONFIG_KEYS = {
     "PROJECT_NAME": "project_name",
@@ -137,18 +169,93 @@ def iter_text_files(root: Path):
         yield path
 
 
-def verify_only(root: Path) -> int:
+def is_adopter_owned(rel: Path) -> bool:
+    posix = rel.as_posix()
+    if rel.name in ADOPTER_OWNED_NAMES:
+        return True
+    if posix.startswith(ADOPTER_OWNED_DIR_PREFIXES) or "/_probe/" in f"/{posix}":
+        return True
+    return False
+
+
+def is_framework_installed(rel: Path, *, in_place: bool) -> bool:
+    posix = rel.as_posix()
+    if in_place:
+        prefixes = PACKAGE_INSTALLED_PREFIXES
+        roots = PACKAGE_INSTALLED_ROOT_FILES
+    else:
+        prefixes = ADOPTER_INSTALLED_PREFIXES
+        roots = ADOPTER_INSTALLED_ROOT_FILES
+    if rel.name in roots and len(rel.parts) == 1:
+        return True
+    return posix.startswith(prefixes)
+
+
+def iter_owned_text_files(root: Path, *, in_place: bool = False):
+    for path in iter_text_files(root):
+        rel = path.relative_to(root)
+        if is_adopter_owned(rel):
+            continue
+        if not is_framework_installed(rel, in_place=in_place):
+            continue
+        yield path
+
+
+def planned_agent_renames(root: Path, slug: str) -> list[tuple[Path, Path]]:
+    pairs: list[tuple[Path, Path]] = []
+    for folder in AGENT_DEF_FOLDERS:
+        for role in AGENT_DEF_ROLES:
+            src = root / folder / f"{{{{PROJECT_NAME}}}}-{role}.md"
+            dst = root / folder / f"{slug}-{role}.md"
+            if src.is_file():
+                pairs.append((src, dst))
+            elif dst.is_file():
+                continue
+    return pairs
+
+
+def refuse_rename_collisions(pairs: list[tuple[Path, Path]]) -> None:
+    for src, dst in pairs:
+        if dst.exists() and dst.resolve() != src.resolve():
+            raise ValueError(
+                f"refusing to rename {src.name} -> {dst.name}: destination exists "
+                "(collision before any write)"
+            )
+
+
+def read_text_preserve(path: Path) -> tuple[str, bool]:
+    raw = path.read_bytes()
+    bom = raw.startswith(BOM)
+    return raw.decode("utf-8-sig"), bom
+
+
+def write_text_preserve(path: Path, text: str, bom: bool) -> None:
+    data = text.encode("utf-8")
+    if bom:
+        data = BOM + data
+    path.write_bytes(data)
+
+
+def verify_only(root: Path, *, in_place: bool = False) -> int:
     """Report any files that still contain placeholder tokens."""
     token_re = re.compile("|".join(re.escape(t) for t in ph.PLACEHOLDER_TOKENS))
     offenders: list[tuple[str, int]] = []
-    for path in iter_text_files(root):
+    for path in iter_owned_text_files(root, in_place=in_place):
         try:
-            text = path.read_text(encoding="utf-8")
+            text, _bom = read_text_preserve(path)
         except UnicodeDecodeError:
             continue
         hits = len(token_re.findall(text))
         if hits:
             offenders.append((path.relative_to(root).as_posix(), hits))
+    leftover_token_names = [
+        p.relative_to(root).as_posix()
+        for p in iter_owned_text_files(root, in_place=in_place)
+        if "{{PROJECT_NAME}}" in p.name
+    ]
+    if leftover_token_names:
+        for rel in leftover_token_names:
+            offenders.append((rel, 1))
     if offenders:
         print(f"VERIFY FAILED: {len(offenders)} file(s) still contain placeholders:")
         for rel, cnt in offenders:
@@ -158,8 +265,11 @@ def verify_only(root: Path) -> int:
     return 0
 
 
-def run(values: dict[str, str], dry_run: bool, root: Path) -> int:
+def run(values: dict[str, str], dry_run: bool, root: Path, *, in_place: bool = False) -> int:
     mapping = ph.derive_values(**values)
+    slug = mapping["{{PROJECT_NAME}}"]
+    pairs = planned_agent_renames(root, slug)
+    refuse_rename_collisions(pairs)
 
     print("Placeholder -> value:")
     for token in ph.PLACEHOLDER_TOKENS:
@@ -167,10 +277,11 @@ def run(values: dict[str, str], dry_run: bool, root: Path) -> int:
     print()
 
     total_files = changed_files = total_repl = 0
-    for path in iter_text_files(root):
+    planned: list[tuple[Path, str, bool, int]] = []
+    for path in iter_owned_text_files(root, in_place=in_place):
         total_files += 1
         try:
-            original = path.read_text(encoding="utf-8")
+            original, bom = read_text_preserve(path)
         except UnicodeDecodeError:
             continue
         new_text, n = ph.apply_reverse(original, mapping)
@@ -178,8 +289,17 @@ def run(values: dict[str, str], dry_run: bool, root: Path) -> int:
             changed_files += 1
             total_repl += n
             print(f"  {n:>4}  {path.relative_to(root).as_posix()}")
-            if not dry_run:
-                path.write_text(new_text, encoding="utf-8", newline="")
+            planned.append((path, new_text, bom, n))
+
+    for src, dst in pairs:
+        print(f"  rename {src.relative_to(root).as_posix()} -> {dst.name}")
+
+    if not dry_run:
+        for path, new_text, bom, _n in planned:
+            write_text_preserve(path, new_text, bom)
+        for src, dst in pairs:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            src.replace(dst)
 
     mode = "DRY-RUN (no files written)" if dry_run else "APPLIED"
     print("\n" + "=" * 60)
@@ -187,6 +307,7 @@ def run(values: dict[str, str], dry_run: bool, root: Path) -> int:
     print(f"  files scanned: {total_files}")
     print(f"  files changed: {changed_files}")
     print(f"  replacements:  {total_repl}")
+    print(f"  renames:       {len(pairs)}")
     print("=" * 60)
     if not dry_run:
         print("Next: re-run with --verify to confirm no placeholders remain.")
@@ -327,6 +448,7 @@ def selftest() -> int:
                 "--project-root", root,
                 "--receipts-dir", "/tmp/acme",
                 "--repo-url", "github.com/you/acme",
+                "--in-place-package",
                 "--dry-run",
             ],
             capture_output=True,
@@ -337,11 +459,132 @@ def selftest() -> int:
             proc.returncode == 2 and want_in_stderr in proc.stderr,
         )
 
+    here = Path(__file__).resolve()
+    sentinel = package_root() / "ADOPTION-GUIDE.md"
+    before = sentinel.read_bytes()
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(here),
+            "--project-name",
+            "acme",
+            "--project-root",
+            "C:/dev/acme",
+            "--receipts-dir",
+            "C:/Temp/acme",
+            "--repo-url",
+            "github.com/you/acme",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    after = sentinel.read_bytes()
+    check(
+        "missing-root-is-usage-and-does-not-write",
+        proc.returncode == 2
+        and "--root is required" in (proc.stderr or "")
+        and before == after,
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(here),
+            "--root",
+            str(package_root()),
+            "--in-place-package",
+            "--verify",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    check(
+        "root-and-in-place-refused",
+        proc.returncode == 2 and "mutually exclusive" in (proc.stderr or ""),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="instantiate-owned-") as tmp:
+        dest = Path(tmp) / "proj"
+        dest.mkdir()
+        (dest / "AGENTS.md").write_text("hello {{PROJECT_NAME}}\n", encoding="utf-8")
+        (dest / "PROJECT-PROFILE.md").write_text(
+            "keep {{PROJECT_NAME}}\n", encoding="utf-8"
+        )
+        probe = dest / "_probe" / "note.md"
+        probe.parent.mkdir()
+        probe.write_text("probe {{PROJECT_NAME}}\n", encoding="utf-8")
+        (dest / "user-notes.md").write_text(
+            "Preserve literal {{PROJECT_NAME}}\n", encoding="utf-8"
+        )
+        app_tmpl = dest / "app" / "template.md"
+        app_tmpl.parent.mkdir()
+        app_tmpl.write_text("app {{PROJECT_NAME}}\n", encoding="utf-8")
+        for folder in AGENT_DEF_FOLDERS:
+            agents = dest / folder
+            agents.mkdir(parents=True)
+            for role in AGENT_DEF_ROLES:
+                (agents / f"{{{{PROJECT_NAME}}}}-{role}.md").write_text(
+                    f"name: {{{{PROJECT_NAME}}}}-{role}\n", encoding="utf-8"
+                )
+        apply_cmd = [
+            sys.executable,
+            str(here),
+            "--root",
+            str(dest),
+            "--project-name",
+            "acme",
+            "--project-root",
+            "C:/dev/acme",
+            "--receipts-dir",
+            "C:/Temp/acme",
+            "--repo-url",
+            "github.com/you/acme",
+        ]
+        proc = subprocess.run(apply_cmd, capture_output=True, text=True)
+        profile = (dest / "PROJECT-PROFILE.md").read_text(encoding="utf-8")
+        probe_t = probe.read_text(encoding="utf-8")
+        agents_md = (dest / "AGENTS.md").read_text(encoding="utf-8")
+        renamed = (dest / ".cursor/agents/acme-builder.md").is_file()
+        token_left = (dest / ".cursor/agents/{{PROJECT_NAME}}-builder.md").exists()
+        check(
+            "owned-profile-tokens-survive",
+            proc.returncode == 0 and "{{PROJECT_NAME}}" in profile,
+        )
+        check("owned-probe-tokens-survive", "{{PROJECT_NAME}}" in probe_t)
+        notes = (dest / "user-notes.md").read_text(encoding="utf-8")
+        app_t = app_tmpl.read_text(encoding="utf-8")
+        check(
+            "owned-user-notes-survive",
+            proc.returncode == 0 and "{{PROJECT_NAME}}" in notes,
+        )
+        check(
+            "owned-app-template-tokens-survive",
+            "{{PROJECT_NAME}}" in app_t,
+        )
+        check(
+            "owned-agents-substituted",
+            "acme" in agents_md and "{{PROJECT_NAME}}" not in agents_md,
+        )
+        check("agent-defs-renamed", renamed and not token_left)
+        proc2 = subprocess.run(apply_cmd, capture_output=True, text=True)
+        check(
+            "second-apply-idempotent",
+            proc2.returncode == 0
+            and (dest / ".cursor/agents/acme-builder.md").is_file()
+            and not (dest / ".cursor/agents/{{PROJECT_NAME}}-builder.md").exists(),
+        )
+        collide = dest / ".claude/agents/{{PROJECT_NAME}}-builder.md"
+        collide.write_text("stale tokenized name\n", encoding="utf-8")
+        proc3 = subprocess.run(apply_cmd, capture_output=True, text=True)
+        check(
+            "rename-collision-refused",
+            proc3.returncode == 2 and "collision" in (proc3.stderr or "").lower(),
+        )
+
     failures = sum(1 for _, ok in arms if not ok)
+    must_pass = sum(1 for _, ok in arms if ok)
     print(
         f"\nRESULT: {len(arms)} arm(s), {failures} failure(s) "
-        "[12 must-pass + 10 must-refuse, so neither a validator that always raises nor "
-        "one that never raises can pass this suite]"
+        f"[{must_pass} passing this run; a validator that always raises cannot pass]"
     )
     return 1 if failures else 0
 
@@ -356,8 +599,12 @@ def main() -> int:
         "--root",
         type=Path,
         default=None,
-        help="directory to rewrite (default: this package); "
-        "point at your copied framework tree",
+        help="adopter tree to rewrite (required unless --in-place-package)",
+    )
+    parser.add_argument(
+        "--in-place-package",
+        action="store_true",
+        help="rewrite this transfer package (mutually exclusive with --root)",
     )
     parser.add_argument("--config", type=Path, help="KEY=VALUE file with the values")
     parser.add_argument("--project-name")
@@ -379,12 +626,20 @@ def main() -> int:
         "--verify cannot see this class (every token IS substituted, just wrongly)",
     )
     args = parser.parse_args()
-    root = args.root.resolve() if args.root else package_root()
 
     if args.selftest:
         return selftest()
+
+    if args.in_place_package and args.root:
+        parser.error("--root and --in-place-package are mutually exclusive")
+    if not args.in_place_package and args.root is None:
+        parser.error(
+            "--root is required to rewrite an adopter tree. "
+            "Pass --in-place-package only to rewrite this transfer package."
+        )
+    root = args.root.resolve() if args.root else package_root()
     if args.verify:
-        return verify_only(root)
+        return verify_only(root, in_place=args.in_place_package)
 
     values: dict[str, str] = {}
     if args.config:
@@ -411,7 +666,7 @@ def main() -> int:
         )
 
     try:
-        return run(values, dry_run=args.dry_run, root=root)
+        return run(values, dry_run=args.dry_run, root=root, in_place=args.in_place_package)
     except ValueError as exc:
         parser.error(str(exc))
 

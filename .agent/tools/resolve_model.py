@@ -5,8 +5,8 @@ This file is a template pointer, not the implementation. The live
 ``resolve_model.py`` embeds catalog examples and day-one binding tables that
 must not ride a delete-and-recopy package. After you instantiate a registry
 home, either keep this wrapper so it forwards along the S2 locate order
-(``AGENT_MODEL_REGISTRY``, then ``AGENT_MODEL_REGISTRY_HOME``, then
-``%USERPROFILE%/.agent``)
+(``AGENT_MODEL_REGISTRY``, else ``AGENT_MODEL_REGISTRY_HOME``, else
+``%USERPROFILE%/.agent`` — a configured home that is missing does not fall through)
 or replace it with the real tool copied from a working registry.
 
 If this file *is* the tool sitting in the located home, it refuses rather
@@ -22,24 +22,24 @@ from pathlib import Path
 
 
 def registry_homes() -> list[Path]:
-    homes: list[Path] = []
+    """LOCATE_ORDER is exclusive: a configured file or home does not fall through."""
     env = os.environ.get("AGENT_MODEL_REGISTRY")
     if env:
         path = Path(env)
-        homes.append(
+        return [
             path.parent if path.suffix.lower() in {".json", ".yaml", ".yml"} else path
-        )
-    # Shared / "drive-root" home: a single registry serving several projects on one
-    # machine. Configured by env, never a baked drive letter -- a literal like
-    # ``P:/.agent`` is one machine's layout and is meaningless on macOS/Linux, where
-    # this package is equally supported. See ``.agent/INSTANTIATE.md`` S2.
+        ]
+    # Shared home: a single registry serving several projects. Configured by env,
+    # never a baked drive letter -- a literal like ``P:/.agent`` is one machine's
+    # layout. See ``.agent/INSTANTIATE.md`` S2. A missing configured home is
+    # fail-closed; do not walk %USERPROFILE%/.agent after it.
     shared = os.environ.get("AGENT_MODEL_REGISTRY_HOME")
     if shared:
-        homes.append(Path(shared))
+        return [Path(shared)]
     user = os.environ.get("USERPROFILE") or os.environ.get("HOME")
     if user:
-        homes.append(Path(user) / ".agent")
-    return homes
+        return [Path(user) / ".agent"]
+    return []
 
 
 def locate_tool(name: str) -> Path:

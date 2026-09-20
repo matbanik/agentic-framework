@@ -10,7 +10,7 @@ Use this workflow when validating a completed MEU. Codex is the **validation age
 
 - Read the MEU handoff artifact at `.agent/context/handoffs/{YYYY-MM-DD}-{project-slug}-handoff.md`
 - Read ALL changed files listed in the handoff (full content, not just diffs)
-- Read `docs/build-plan/testing-strategy.md` for test standards
+- Read `.agent/docs/testing-strategy.md` for test standards (skip `docs/build-plan/` unless PROFILE D3 names it)
 - Read `.agent/roles/reviewer.md` for adversarial checklist
 
 ## Steps
@@ -139,37 +139,16 @@ If handoff is incomplete or status is `blocked`, stop and report.
 
 ### 2. Run Full Test Suite
 
-// turbo
-Run the complete test suite (not just new tests):
-```bash
-pytest -x --tb=long -v
-```
+Run PROFILE **D6_ADOPTER_ARGV** (exact executable, argv, cwd, scope, shell, receipt from `PROJECT-PROFILE.md`). Do not invent `tools/validate_codebase.py`, `uv`, or `packages/` as the gate.
 
 // turbo
-Run type checking (scope to touched packages per active phase):
+If D6 is a pytest argv, run that registered command (not a guessed repo-wide suite):
 ```bash
-# Phase 1+1A: packages/core/src/
-# Phase 2+:   packages/core/src/ packages/infrastructure/src/
-# Phase 4+:   packages/core/src/ packages/infrastructure/src/ packages/api/src/
-# Phase 5+:   add mcp-server/ (use tsc --noEmit, vitest, eslint instead)
-pyright packages/core/src/    # ← adjust per active phase
+# example only — replace with PROFILE D6
+python -m pytest test_hello.py -q
 ```
 
-// turbo
-Run linting:
-```bash
-# Same phase scope as above
-ruff check packages/core/src/ # ← adjust per active phase
-```
-
-// turbo
-**Phase 5+ only** — Run TypeScript/MCP validation:
-```bash
-# Skip this block for Phases 1–4
-cd mcp-server && npx tsc --noEmit   # Type-check MCP server
-npx vitest run                       # MCP tool tests
-npx eslint src/ --max-warnings 0     # MCP linting
-```
+If PROFILE D6 also names type-check or lint argv, run those next. Skip origin `packages/` pyright/ruff/mcp-server blocks when those trees are not shipped and not registered in D6.
 
 Record all output.
 

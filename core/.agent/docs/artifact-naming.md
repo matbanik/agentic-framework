@@ -15,7 +15,7 @@
 ```
 
 - **Path**: `.agent/context/handoffs/`
-- **Template**: `.agent/context/handoffs/TEMPLATE.md`
+- **Template**: `.agent/templates/HANDOFF-TEMPLATE.md`
 - **Same-day collision**: append MEU range suffix (e.g., `-ph4-ph7-handoff.md`) or letter (`-a`, `-b`)
 - **Review files**: `{YYYY-MM-DD}-{project-slug}-plan-critical-review.md` or `-implementation-critical-review.md`
 
@@ -26,7 +26,7 @@
 ```
 
 - **Path**: `docs/execution/reflections/`
-- **Template**: `docs/execution/reflections/TEMPLATE.md`
+- **Template**: `.agent/templates/REFLECTION-TEMPLATE.md`
 
 ### Template-First Rule (Mandatory)
 
@@ -37,10 +37,10 @@ Required `view_file` calls before artifact creation:
 
 | Artifact | Template | Exemplar (most recent by date) |
 |----------|----------|---------------------------------|
-| **Handoff** | `view_file: .agent/context/handoffs/TEMPLATE.md` | `ls .agent/context/handoffs/ \| Sort-Object` → pick latest |
-| **Reflection** | `view_file: docs/execution/reflections/TEMPLATE.md` | `ls docs/execution/reflections/ \| Sort-Object` → pick latest |
-| **Plan review** | `view_file: .agent/context/handoffs/REVIEW-TEMPLATE.md` | Pick latest `*-plan-critical-review.md` |
-| **Impl review** | `view_file: .agent/context/handoffs/REVIEW-TEMPLATE.md` | Pick latest `*-implementation-critical-review.md` |
+| **Handoff** | `view_file: .agent/templates/HANDOFF-TEMPLATE.md` | `ls .agent/context/handoffs/ \| Sort-Object` → pick latest |
+| **Reflection** | `view_file: .agent/templates/REFLECTION-TEMPLATE.md` | `ls docs/execution/reflections/ \| Sort-Object` → pick latest |
+| **Plan review** | `view_file: .agent/templates/REVIEW-TEMPLATE.md` | Pick latest `*-plan-critical-review.md` |
+| **Impl review** | `view_file: .agent/templates/REVIEW-TEMPLATE.md` | Pick latest `*-implementation-critical-review.md` |
 
 **Enforcement:** `completion-preflight` §Closeout Artifact Quality Check validates structural markers. Non-compliant artifacts will force a rewrite. Read the template AND exemplar first to avoid rework.
 

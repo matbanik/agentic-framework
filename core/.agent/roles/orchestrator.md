@@ -23,7 +23,7 @@ Own one scoped project from intake to completion. Select the minimum set of role
 3. Enforce default execution sequence: `coder -> tester -> reviewer`.
 4. Add `researcher` before coding when requirements are unclear, the build plan lacks behavioral detail, or current best-practice confirmation is required.
 5. Add `guardrail` before completion for security-sensitive, data-loss, migration, auth, or encryption changes.
-6. Maintain handoff notes in `.agent/context/handoffs/` using `.agent/context/handoffs/TEMPLATE.md`.
+6. Maintain handoff notes in `.agent/context/handoffs/` using `.agent/templates/HANDOFF-TEMPLATE.md`.
 7. Require explicit human approval before merge, release, or deploy actions.
 8. Require blocking validation checks to pass before declaring done.
 9. During PLANNING, check `.agent/skills/` for relevant skill files that match the task's target packages. Load applicable skills into context.

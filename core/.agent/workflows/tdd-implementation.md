@@ -173,7 +173,7 @@ If all MEU-scoped implementation tasks are `[x]` (or `[B]`), execute the post-ME
 1. **Update MEU status via SSOT** — `uv run python tools/meu_status.py update MEU-{N} approved` (auto-stamps date, regenerates labels)
 2. **Render SSOT regions** — `uv run python tools/meu_status.py render` (regenerates BUILD_PLAN.md and meu-registry.md status tables from YAML)
 3. **Update `.agent/context/current-focus.md`** — reflect new project state
-4. **Run MEU gate** — `uv run python tools/validate_codebase.py --scope meu`
+4. **Run MEU gate** — PROFILE D6_ADOPTER_ARGV (no packaged `validate_codebase.py`)
 5. **Run full regression** — `uv run pytest tests/ -x --tb=short -v`
 6. **OpenAPI drift check (G8)** — if any file in `packages/api/` was created or modified:
    ```powershell
@@ -188,7 +188,7 @@ If all MEU-scoped implementation tasks are `[x]` (or `[B]`), execute the post-ME
 7. **Anti-placeholder scan** — `rg "TODO|FIXME|NotImplementedError" packages/`
 8. **Audit BUILD_PLAN.md** for stale references
 9. **Create reflection** — `docs/execution/reflections/{date}-{slug}-reflection.md`
-   - **MUST** read (your harness `read_tool`) `docs/execution/reflections/TEMPLATE.md` before writing — Template-First Rule (AGENTS.md §436)
+   - **MUST** read (your harness `read_tool`) `.agent/templates/REFLECTION-TEMPLATE.md` before writing — Template-First Rule (AGENTS.md §436)
    - Follow the full 7-section structure: Friction Log → Quality Signals → Workflow Signals → Pattern Extraction → Design Rules → Next Day Outline → Efficiency Metrics → Instruction Coverage YAML
    - See `execution-session.md §5` for section descriptions. The YAML block is section 7 of 7 — not the entire file.
 10. **Append metrics row** — `docs/execution/metrics.md`

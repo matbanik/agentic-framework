@@ -30,8 +30,12 @@ full write-up in [`development-lifecycle.md`](core/.agent/docs/development-lifec
 ## What's actually in here
 
 ```
-.agent/                template of a registry home — copy, fill catalog/bindings
-  INSTANTIATE.md       how an adopter writes their own drive/workspace-root registry
+.agent/                template of a registry home — copy into `.agent-registry/`
+  INSTANTIATE.md       LOCATE_ORDER (fail-closed) + how to fill catalog/bindings
+  model-registry.template.yaml
+  docs/model-classes.md
+  schema/
+  tools/               thin wrappers + slug-free PowerShell module
   model-registry.template.yaml
   docs/model-classes.md
   schema/

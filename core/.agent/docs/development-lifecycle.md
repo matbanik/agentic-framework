@@ -62,7 +62,7 @@ flowchart TD
     subgraph PHASE_6["⚙️ Phase 6: Implementation"]
         F1["FIC + TDD Red Phase<br/>(tests first)"]
         F2["Green Phase<br/>(implement)"]
-        F3["MEU Gate<br/>(validate_codebase.py)"]
+        F3["MEU Gate<br/>(D6_ADOPTER_ARGV)"]
         F4["Handoff Creation<br/>(.agent/context/handoffs/)"]
         F1 --> F2 --> F3 --> F4
     end
@@ -244,8 +244,8 @@ docs/build-plan/
 
 | File | Purpose |
 |------|---------|
-| [`docs/execution/plans/PLAN-TEMPLATE.md`](https://{{REPO_URL}}/blob/main/docs/execution/plans/PLAN-TEMPLATE.md) | Plan template (v2.1) |
-| [`docs/execution/plans/TASK-TEMPLATE.md`](https://{{REPO_URL}}/blob/main/docs/execution/plans/TASK-TEMPLATE.md) | Task template (v2.2) |
+| [`.agent/templates/PLAN-TEMPLATE.md`](https://{{REPO_URL}}/blob/main/.agent/templates/PLAN-TEMPLATE.md) | Plan template (v2.1) |
+| [`.agent/templates/TASK-TEMPLATE.md`](https://{{REPO_URL}}/blob/main/.agent/templates/TASK-TEMPLATE.md) | Task template (v2.2) |
 | `docs/execution/plans/{date}-{slug}/implementation-plan.md` | Per-project plan |
 | `docs/execution/plans/{date}-{slug}/task.md` | Per-project task checklist |
 
@@ -327,7 +327,7 @@ When a reviewer CLI hits a rate limit, the [Rate-Limit Fallback Protocol](https:
    b. Write **all tests first** (Red phase) — confirm they fail
    c. **Implement** just enough code to pass (Green phase)
    d. **Refactor** while keeping tests green
-   e. Run **MEU gate**: `uv run python tools/validate_codebase.py --scope meu`
+   e. Run **MEU gate**: PROFILE D6_ADOPTER_ARGV
    f. Create **handoff** at `.agent/context/handoffs/`
 3. **Post-MEU deliverables** (all in same continuous pass):
    - Update MEU registry
@@ -357,7 +357,7 @@ When a reviewer CLI hits a rate limit, the [Rate-Limit Fallback Protocol](https:
 
 ### 🔄 Adaptability Notes
 
-> TDD is specific to code-producing projects. For documentation/workflow projects, replace with "write spec → implement → verify against spec." The MEU gate (`validate_codebase.py`) is {{PROJECT_NAME_TITLE}}-specific; other projects need their own validation script. The handoff protocol is fully transferable.
+> TDD is specific to code-producing projects. For documentation/workflow projects, replace with "write spec → implement → verify against spec." The MEU gate is PROFILE **D6_ADOPTER_ARGV** (no packaged `tools/validate_codebase.py`). The handoff protocol is fully transferable.
 
 ---
 
@@ -423,7 +423,7 @@ When a reviewer CLI hits a rate limit, the [Rate-Limit Fallback Protocol](https:
 | File | Purpose |
 |------|---------|
 | [`docs/execution/reflections/TEMPLATE.md`](https://{{REPO_URL}}/blob/main/docs/execution/reflections/TEMPLATE.md) | Reflection template |
-| [`.agent/context/handoffs/TEMPLATE.md`](https://{{REPO_URL}}/blob/main/.agent/context/handoffs/TEMPLATE.md) | Handoff template |
+| [`.agent/templates/HANDOFF-TEMPLATE.md`](https://{{REPO_URL}}/blob/main/.agent/templates/HANDOFF-TEMPLATE.md) | Handoff template |
 | [`docs/execution/metrics.md`](https://{{REPO_URL}}/blob/main/docs/execution/metrics.md) | Session metrics table |
 | [`.agent/context/current-focus.md`](https://{{REPO_URL}}/blob/main/.agent/context/current-focus.md) | Current project state |
 | [`.agent/context/known-issues.md`](https://{{REPO_URL}}/blob/main/.agent/context/known-issues.md) | Known issues tracker |
@@ -597,7 +597,7 @@ flowchart LR
         D1["Implementation<br/>(Phase 6)"]
         D2["Validation Review<br/>(Phase 5, 7)"]
         D3["Session Reflection<br/>(Phase 8)"]
-        D4["MCP Audits<br/>(/mcp-audit)"]
+        D4["Registered D6<br/>quality checks"]
         D5["User Reports<br/>(ad-hoc)"]
     end
 
@@ -646,7 +646,7 @@ flowchart LR
 |--------|------|---------|
 | Implementation (Phase 6) | Agent encounters unexpected behavior | `[API-MISTAKE-PERSIST]` — endpoints return 501, persistence not wired |
 | Validation Review (Phase 5/7) | External reviewer finds gaps in implementation | `[MCP-TAX-SCAN-DOC]` — tool description doesn't clarify per-action params |
-| MCP Audits (`/mcp-audit`) | Periodic functional testing | `[MCP-FINNHUB-NEWS]` — Finnhub news endpoint returns 422 |
+| Registered D6 quality checks | Periodic functional testing from PROFILE D6 | Adopter-named command and receipt |
 | User Reports | Human discovers UX/bug issue | `[GUI-SCREENSHOT-NO-INDICATOR]` — no image count in trade list |
 | Session Reflection (Phase 8) | Post-session analysis surfaces patterns | `[TAX-HARDCODED-IRS]` — IRS constants hardcoded in source |
 
@@ -861,7 +861,7 @@ This is the formal, evidence-gated successor to the manual "elevate stable refle
 |-----------|------------------|--------------|
 | Build plan files (`docs/build-plan/`) | Domain-specific specs | Write new specs for new domain |
 | MEU registry | Lists {{PROJECT_NAME_TITLE}}-specific modules | Create new registry for new project |
-| `validate_codebase.py` | Runs {{PROJECT_NAME_TITLE}} linters/tests | Write equivalent for new stack |
+| PROFILE D6_ADOPTER_ARGV | Runs the adopter's registered check | Record exact argv/cwd/scope/receipt in PROJECT-PROFILE.md |
 | `AGENTS.md` | {{PROJECT_NAME_TITLE}} conventions | Fork and customize rules |
 | Emerging standards | {{PROJECT_NAME_TITLE}} patterns | Start empty, grow organically |
 | Templates (plan, task, reflection) | Reference {{PROJECT_NAME_TITLE}} paths | Update paths and project name |

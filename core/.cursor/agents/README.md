@@ -5,9 +5,10 @@ These files register assistant-addressable `Task` subtypes for in-harness delega
 
 ## After `instantiate.py`
 
-1. Rename the files so the stem matches the instantiated `name:` frontmatter:
+1. `instantiate.py --root <project>` rewrites file *contents* and **renames** the files so the stem matches the instantiated `name:` frontmatter:
    - `{{PROJECT_NAME}}-builder.md` → `<your-slug>-builder.md`
    - `{{PROJECT_NAME}}-verifier.md` → `<your-slug>-verifier.md`
+   A destination collision refuses before any rename. A second apply is idempotent.
 2. Confirm the session's `Task` tool lists those subtypes before flipping
    `fresh_worker` away from `none` in `harness-profiles.md`.
 3. Pin `model:` by running `resolve_model.py sync` against the live registry home

@@ -27,7 +27,7 @@ param(
 
     # Vendor of the agent that authored the work under review. Required for any
     # class declaring `vendor_distinct_from: author`. Only the dispatching
-    # session knows this, so the wrapper never guesses it — absence is the named
+    # session knows this, so the wrapper never guesses it -- absence is the named
     # error `author_vendor_required`. A session may set
     # {{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR once instead of passing it per call.
     [Parameter(Mandatory = $false)]
@@ -93,6 +93,8 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$CodexExecutable = 'codex',
 
+    # Documented opt-in only. Do not pass -BenchmarkIsolation on ordinary reviews.
+    # It pins a standalone headroom contract (exact workdir, schema, context hash).
     [Parameter(Mandatory = $false)]
     [switch]$BenchmarkIsolation,
 
@@ -121,7 +123,7 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$MinCodexCliVersion = '0.145.0',
 
-    # Emergency/test escape hatch — do not use for production reviews.
+    # Emergency/test escape hatch -- do not use for production reviews.
     [Parameter(Mandatory = $false)]
     [switch]$SkipCodexVersionCheck
 )
@@ -286,7 +288,7 @@ function Stop-DispatchProcessTree {
 
     if (-not $NoTreeKill) {
         try {
-            # Kill the whole tree — cmd.exe Kill() leaves orphaned Codex/node children.
+            # Kill the whole tree -- cmd.exe Kill() leaves orphaned Codex/node children.
             $null = & taskkill.exe /PID $Process.Id /T /F 2>$null
         } catch {}
     }
@@ -375,7 +377,7 @@ function Get-PhysicalPath {
                 # Resolving an identity to nothing must fail closed (verification-principles V31).
                 # A non-empty target that resolves to '' would silently truncate the rest of the
                 # path, and every downstream containment check would then compare against a path
-                # that is not the target — a sandbox check that passes for the wrong reason.
+                # that is not the target -- a sandbox check that passes for the wrong reason.
                 if ([string]::IsNullOrWhiteSpace($resolved)) {
                     throw "Reparse point '$name' resolved to an empty path (target '$currentTarget')"
                 }
@@ -411,7 +413,7 @@ if (-not $loopIdWasGiven -and -not $NonReviewDispatch) {
     exit 1
 }
 if ($loopIdWasGiven -and $LoopId -notmatch '^[a-z0-9][a-z0-9._-]{0,127}$') {
-    [Console]::Error.WriteLine("Invalid LoopId format. Must match ^[a-z0-9][a-z0-9._-]{0,127}$ — the same pattern review_ledger.py and review-verdict.schema.v2.json enforce, so an id accepted here is accepted there.")
+    [Console]::Error.WriteLine("Invalid LoopId format. Must match ^[a-z0-9][a-z0-9._-]{0,127}$ -- the same pattern review_ledger.py and review-verdict.schema.v2.json enforce, so an id accepted here is accepted there.")
     exit 1
 }
 $kindWasGiven = -not [string]::IsNullOrWhiteSpace($Kind)
@@ -447,8 +449,8 @@ if ($loopIdWasGiven) {
             if (-not $ledgerMode) {
                 # 3, not a shrug: the mode is where the dispatch kind comes from, and the
                 # kind is what raises the timeout floor. Guessing 'plan' here would hand an
-                # execution review the 15-minute default — the exact silent failure the
-                # floor exists to prevent — and nothing in the receipt would say so.
+                # execution review the 15-minute default -- the exact silent failure the
+                # floor exists to prevent -- and nothing in the receipt would say so.
                 [Console]::Error.WriteLine("ledger_mode_unavailable: review_ledger.py permitted the round but its output did not name the loop's mode (expected 'mode=<plan|execution|discovery|handoff|multi-handoff>' on the OK line). The wrapper and the ledger ship as a pair; a ledger old enough to omit it is a mismatched pair, not a pass. Update tools/review_ledger.py.")
                 exit 3
             }
@@ -458,7 +460,7 @@ if ($loopIdWasGiven) {
             # dispatch that failed (3) and from bad arguments (1): "the loop is
             # over" and "the tool broke" call for opposite responses.
             [Console]::Error.WriteLine($ledgerText)
-            [Console]::Error.WriteLine("[ledger] refused loop '$LoopId'. Not dispatching. Escalate to a human, or apply the specific relief the message names — do not re-run with -NonReviewDispatch to get past this.")
+            [Console]::Error.WriteLine("[ledger] refused loop '$LoopId'. Not dispatching. Escalate to a human, or apply the specific relief the message names -- do not re-run with -NonReviewDispatch to get past this.")
             exit 9
         }
         default {
@@ -527,6 +529,8 @@ if ([string]::IsNullOrWhiteSpace($AuthorVendor) -and $env:{{PROJECT_NAME_UPPER}}
 
 $registryModulePath = $null
 $moduleCandidates = [System.Collections.Generic.List[string]]::new()
+# LOCATE_ORDER is exclusive: a configured file or home that is missing must not
+# fall through to %USERPROFILE%/.agent. See .agent/INSTANTIATE.md S2.
 if ($env:AGENT_MODEL_REGISTRY) {
     $override = $env:AGENT_MODEL_REGISTRY
     if ((Test-Path -LiteralPath $override) -and (Get-Item -LiteralPath $override).PSIsContainer) {
@@ -535,15 +539,9 @@ if ($env:AGENT_MODEL_REGISTRY) {
         $overrideHome = Split-Path -Parent $override
         $moduleCandidates.Add((Join-Path $overrideHome 'tools/ModelRegistry.psm1'))
     }
-}
-# Shared / "drive-root" home: one registry serving several projects on a machine.
-# Configured by env, never a baked drive letter -- a literal like 'P:/.agent' is one
-# machine's layout, is meaningless on macOS/Linux, and on another Windows box with a P:
-# drive it would silently read someone else's registry. See .agent/INSTANTIATE.md S2.
-if ($env:AGENT_MODEL_REGISTRY_HOME) {
+} elseif ($env:AGENT_MODEL_REGISTRY_HOME) {
     $moduleCandidates.Add((Join-Path $env:AGENT_MODEL_REGISTRY_HOME 'tools/ModelRegistry.psm1'))
-}
-if ($env:USERPROFILE) {
+} elseif ($env:USERPROFILE) {
     $moduleCandidates.Add((Join-Path $env:USERPROFILE '.agent/tools/ModelRegistry.psm1'))
 }
 foreach ($candidate in $moduleCandidates) {
@@ -843,7 +841,7 @@ if (-not $SkipCodexVersionCheck) {
 # ReviewReadOnly/ReviewWorkspace map to workspace-write + writable_roots={{RECEIPTS_DIR}}
 # (Codex pure read-only blocks ALL writes including P0 Temp). On Windows the sandbox
 # helper often fails entirely (helper_unknown_error), so review dispatches that need
-# shell + Temp receipts should use FullAccess (danger-full-access) instead — see
+# shell + Temp receipts should use FullAccess (danger-full-access) instead -- see
 # cli-dispatch/SKILL.md. Product/plan edits stay forbidden by the review prompt.
 $sandboxLevel = switch ($Mode) {
     'ReviewReadOnly' { 'workspace-write' }
@@ -1111,7 +1109,7 @@ if (Test-Path $eventsFile) {
     }
 }
 
-# (Token/usage parsing retired 2026-07-21 — token tracking eliminated.)
+# (Token/usage parsing retired 2026-07-21 -- token tracking eliminated.)
 
 # Undo the nullable widening the API schema needed (see adapt_output_schema.py) before
 # anything validates this file against the unmodified shipped schema. The pre-strip

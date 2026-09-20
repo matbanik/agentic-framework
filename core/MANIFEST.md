@@ -16,7 +16,9 @@ reading the file's own header (H1 / frontmatter `description:` / opening paragra
 ## Package-root `.agent/` — registry-home template
 
 Human decision Q1: this directory **templates** the registry home for adopters.
-`core/.agent/` remains the in-package instruction copy. Both exist; neither
+Copy it to `<project>/.agent-registry/` (LAYOUT_HD01), not onto the instruction
+tree at `<project>/.agent/`. `core/.agent/` remains the in-package instruction
+copy. Both exist; neither is the other.
 replaces the other. The template ships the twelve global classes with empty
 `catalog`, `bindings`, and `pins`. A model bump is a live-registry edit, not a
 recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIATE.md`.

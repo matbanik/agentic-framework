@@ -9,6 +9,8 @@ sole authority for native RTK versus exact `rtk proxy` routing.
 
 Use this workflow at the start of each build session. It orchestrates three phases: **Plan → Execute → Reflect** — creating a feedback loop that makes each successive session faster and higher quality.
 
+**EGRESS_PRECEDENCE.** External review dispatch is mandatory unless PROFILE C1/C2/C3b or E5 forbids sending work to an external provider; then stop for B4's named human reviewer. That stop is **not** SIGN 1. Self-review remains prohibited. `plan_to_exec_gate: human` is a separate post-`approved` pause. Missing CLI (`can_dispatch_external_reviewer == no`) is **not** the same as forbidden egress: when egress is forbidden, do not prepare a provider web-prompt and do not request manual external submission.
+
 Artifact naming conventions:
 
 - `docs/execution/plans/{YYYY-MM-DD}-{project-slug}/implementation-plan.md`
@@ -21,9 +23,10 @@ Artifact naming conventions:
 
 ## Prerequisites
 
+- Read `PROJECT-PROFILE.md` first. Apply EGRESS_PRECEDENCE, D9_NO_BRANCH, and D6_ADOPTER_ARGV from those answers.
 - Read `AGENTS.md`
-- Read `.agent/context/current-focus.md` for active phase
-- Read `.agent/context/meu-status.yaml` for MEU scope (see `.agent/skills/meu-status/SKILL.md`)
+- Read `.agent/context/current-focus.md` for active phase (D9=yes; optional when D9=no)
+- Read `.agent/context/meu-status.yaml` for MEU scope when D9=yes (see `.agent/skills/meu-status/SKILL.md`)
 
 ## Context Tool Decision Gate (Before Planning or Execution)
 
@@ -204,7 +207,7 @@ When every machine rung is rate-limited or unavailable, this loop does not fall 
 
 After validation has completed for the project's MEU handoff set, create the reflection file at `docs/execution/reflections/{YYYY-MM-DD}-{project-slug}-reflection.md`.
 
-> **Start from** [`docs/execution/reflections/TEMPLATE.md`](file:///{{PROJECT_ROOT}}/docs/execution/reflections/TEMPLATE.md) (v2.0)
+> **Start from** [`.agent/templates/REFLECTION-TEMPLATE.md`](file:///{{PROJECT_ROOT}}/.agent/templates/REFLECTION-TEMPLATE.md) (v2.0)
 
 Structure the reflection with these sections:
 

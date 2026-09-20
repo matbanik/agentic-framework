@@ -7,22 +7,18 @@ description: Validation pipeline for {{PROJECT_NAME_TITLE}} monorepo. Runs type 
 
 ## Overview
 
-The quality gate validates code correctness across the {{PROJECT_NAME_TITLE}} monorepo. It runs via Python (cross-platform) and supports two scoping levels.
+The quality gate is **D6_ADOPTER_ARGV** from `PROJECT-PROFILE.md`. This package
+does not ship `tools/validate_codebase.py`. Record executable, argv, cwd, scope,
+blocking, expected result, shell, and receipt path in PROFILE D6. Redirect every
+stream to `{{RECEIPTS_DIR}}`. A failing child must leave every diagnostic id on
+that receipt.
 
 ## Commands
 
+Read PROFILE D6. Example (not a universal default):
+
 ```bash
-# Full phase gate — run when ALL MEUs in a phase are complete
-uv run python tools/validate_codebase.py
-
-# MEU-scoped gate — run after each individual MEU implementation
-uv run python tools/validate_codebase.py --scope meu
-
-# Scoped to specific files
-uv run python tools/validate_codebase.py --scope meu --files packages/core/src/{{PROJECT_NAME}}_core/domain/portfolio_balance.py
-
-# Machine-readable output for agent parsing
-uv run python tools/validate_codebase.py --json
+python -m pytest test_hello.py -q
 ```
 
 ## When to Run

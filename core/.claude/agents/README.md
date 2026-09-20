@@ -5,9 +5,10 @@ These files register Agent/Task subagents for in-harness delegation
 
 ## After `instantiate.py`
 
-1. Rename the files so the stem matches the instantiated `name:` frontmatter:
+1. `instantiate.py --root <project>` rewrites file *contents* and **renames** the files so the stem matches the instantiated `name:` frontmatter:
    - `{{PROJECT_NAME}}-builder.md` → `<your-slug>-builder.md`
    - `{{PROJECT_NAME}}-verifier.md` → `<your-slug>-verifier.md`
+   A destination collision refuses before any rename. A second apply is idempotent.
 2. Confirm the Claude Code Agent/Task tool can address those names before flipping
    `fresh_worker` away from `none` in `harness-profiles.md`.
 3. Keep the verifier `tools` allowlist free of `Write`/`Edit`. Pin `model:` by

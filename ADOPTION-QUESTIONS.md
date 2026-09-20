@@ -31,7 +31,7 @@
 | A7 | Does it support **transcript compaction**? | `context_compaction` | `none` |
 | A8 | After an independent reviewer approves a plan, should execution **auto-continue**, or must a **human say go**? | `plan_to_exec_gate` | **`human`** |
 | A9 | If A6 is yes: which **builder / verifier** capability classes should `task.md` `builder_model` name? Bind those classes in the registry from A10; shipped `.cursor/agents` / `.claude/agents` files are AUTOGEN templates, not hand-maintained pins. | `builder_model` column + AUTOGEN agent-def `model:` | keep work on the coordinator; do not invent `auto` |
-| A10 | Where will the **live model-capability registry** live? Copy the package-root `.agent/` template to that shared or workspace-root home and fill `catalog` and `bindings` yourself. | live registry home; see `.agent/INSTANTIATE.md` | instantiate a workspace-root `.agent/` from this package's template. **Do not** copy another machine's filled registry |
+| A10 | Where will the **live model-capability registry** live? Default: `<project>/.agent-registry/` selected with a **session-scoped** `AGENT_MODEL_REGISTRY_HOME` (not a user-wide persist of a project path). Instruction/context stay at `<project>/.agent/`. Shared `%USERPROFILE%/.agent` is an explicit opt-in. You may **defer** filling catalog/bindings (deferral: no dispatch until compiled). | live registry home; see `.agent/INSTANTIATE.md` | `<project>/.agent-registry/` + session env. **Do not** copy the package-root template onto the instruction `.agent/` tree. **Do not** copy another machine's filled registry |
 
 > **Why A4c is not a trivia question.** A cloud-sync daemon is a second writer to your
 > filesystem, and it does not know about your agent. Three things break, all of them

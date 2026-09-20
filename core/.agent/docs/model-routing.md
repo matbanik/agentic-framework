@@ -8,7 +8,7 @@
 > **This doc names classes, never model snapshots.** Which snapshot a class resolves
 > to — and what it costs — lives in the **live registry home you instantiate**, not
 > in this package. Copy the package-root `.agent/` template and fill it per
-> [`INSTANTIATE.md`](../../../.agent/INSTANTIATE.md). Ask the resolver rather than
+> [`INSTANTIATE.md`](../INSTANTIATE.md). Ask the resolver rather than
 > reading a value out of prose:
 >
 > ```powershell
@@ -38,8 +38,8 @@
 >
 > Pair this with [harness-profiles.md](harness-profiles.md): that doc says which
 > **harness** you are; this doc says which **class** fills each role. Pair it with
-> [`.agent/docs/model-classes.md`](../../../.agent/docs/model-classes.md) for the
-> twelve global class contracts.
+> the class contracts in the registry home you instantiate (see
+> [`INSTANTIATE.md`](../INSTANTIATE.md)).
 
 ---
 
@@ -70,7 +70,7 @@ and a Claude Code session without either being written down here.
 | **Reviewer** (independent) | Adversarial plan & code review | `independent_reviewer` — see the review chain below | Cross-vendor diversity catches failure modes the author's model shares; also offloads tokens off the primary budget |
 | **Cheap validator** | Checklist-shaped validation with no risk path | `checklist_validator` | A distinct, deliberately cheap route; not a discount reviewer (see Decision Table row 5) |
 | **Surface orchestrator** | Low-reasoning, low-awareness surface work (simple edits, boilerplate coordination) | `surface_orchestrator` | Cheap orchestration for work that needs no deep reasoning; **never** troubleshooting or deep-infra |
-| **Isolated worker** | Large parallel/independent workstreams, overnight bursts, isolated-context tasks | `isolated_worker`, one per git worktree | Each spawn is an isolated main agent with fresh context; worktrees prevent file conflicts. Prefer in-harness Cursor `Task` when available; use the Cursor Agent CLI (`tools/Invoke-CursorAgentDispatch.ps1`) when Task is unavailable / CI / overnight. **Not** an independent-reviewer substitute. |
+| **Isolated worker** | Large parallel/independent workstreams, overnight bursts, isolated-context tasks | `isolated_worker`, one per git worktree | Each spawn is an isolated main agent with fresh context; worktrees prevent file conflicts. Prefer in-harness Cursor `Task` when available. Do **not** default to an unshipped Cursor Agent CLI wrapper. **Not** an independent-reviewer substitute. |
 | **Single-shot architecture** | Very large one-shot architecture reasoning | `architecture_single_shot` | Reserved for that shape only — never a coordinator default and never a `builder_model` pin |
 | **Creative prose** | Prose whose voice matters, and the second reader on it | `creative_prose` | Pinned by *difference*, not recency: see the class's registry note |
 
@@ -180,7 +180,7 @@ Fallback — do **not** self-review.
 | Classifying/triaging a big list, pure routing | `router` |
 | Reviewing a plan or a diff (independent) | `independent_reviewer` → `surface_orchestrator` (surface) → **a human**; see §Independent-reviewer chain — this row is a summary of it, never a variant |
 | Simple surface work you want orchestrated cheaply | `surface_orchestrator` |
-| Many independent tasks in parallel / overnight | `isolated_worker`, one per worktree; prefer in-harness Cursor `Task`, else the Cursor Agent CLI |
+| Many independent tasks in parallel / overnight | `isolated_worker`, one per worktree; prefer in-harness Cursor `Task`. Unshipped Cursor Agent CLI wrappers are not a default route. |
 | Very large single-shot architecture reasoning | `architecture_single_shot` |
 | Prose whose voice matters, or a second reader on prose | `creative_prose` |
 

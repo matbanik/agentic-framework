@@ -11,6 +11,10 @@ description: Mandatory pre-flight checklist for terminal commands. Enforces the 
 
 **Objective:** Prevent PowerShell buffer saturation and session hang by ensuring every command uses the redirect-to-file pattern.
 
+**Labeled bad path (do not copy):**
+`python tools/x.py | Select-Object -First 20`
+This looks successful, replaces the child's exit status with the filter's, and can hang the session on a saturated pipe. Redirect to `{{RECEIPTS_DIR}}` instead.
+
 Use [`.agent/docs/output-evidence-policy.md`](../../docs/output-evidence-policy.md) as
 the single authority for RTK native/proxy classification and exact-evidence bypasses.
 

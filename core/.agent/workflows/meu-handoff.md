@@ -29,7 +29,7 @@ Example: `.agent/context/handoffs/2026-04-25-pipeline-capabilities-MEU-101-hando
 
 ## Template
 
-> **Start from** [`.agent/context/handoffs/TEMPLATE.md`](file:///{{PROJECT_ROOT}}/.agent/context/handoffs/TEMPLATE.md) (v2.1)
+> **Start from** [`.agent/templates/HANDOFF-TEMPLATE.md`](file:///{{PROJECT_ROOT}}/.agent/templates/HANDOFF-TEMPLATE.md) (v2.1)
 >
 > Copy the template, fill all placeholder fields, and ensure:
 > - YAML frontmatter `date`, `project`, `meu`, `status`, `action_required`, `verbosity` are populated

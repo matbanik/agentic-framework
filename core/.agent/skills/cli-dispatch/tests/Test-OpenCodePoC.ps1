@@ -300,7 +300,7 @@ function Test-OpenCodeBedrockClaude {
 # --- Test 4: Bedrock GPT-5.5 ---
 # HISTORICAL provider-availability probe: GPT-5.5 GA'd on Bedrock 2026-06-01, which is
 # what this test validates. GPT-5.6-sol Bedrock availability is region-dependent (404 in
-# us-west-2 as of this writing), so this probe intentionally still targets 5.5 — do not
+# us-west-2 as of this writing), so this probe intentionally still targets 5.5 -- do not
 # "upgrade" the model ID here without first confirming GPT-5.6-sol Bedrock GA in-region.
 
 function Test-OpenCodeBedrockGPT {

@@ -13,6 +13,10 @@ Delegate plan generation (Steps 1-4 of `/create-plan`) to Claude Code CLI using 
 - The user explicitly requests delegated planning ("use architecture_single_shot to create the plan")
 - Session grouping is already done — the MEU scope and project slug are known
 
+## EGRESS_PRECEDENCE
+
+External review dispatch is mandatory unless PROFILE C1/C2/C3b or E5 forbids sending work to an external provider; then stop for B4's named human reviewer. That stop is **not** SIGN 1. Self-review remains prohibited. `plan_to_exec_gate: human` is a separate post-`approved` pause. Missing CLI (`can_dispatch_external_reviewer == no`) is **not** the same as forbidden egress: when egress is forbidden, do not prepare a provider web-prompt and do not request manual external submission.
+
 ## Prerequisites
 
 - Session grouping exists (`.agent/context/grouping/` has the relevant file)
@@ -106,8 +110,8 @@ the Codex review loop separately.
 5. `docs/build-plan/{target-file}.md`
 6. `docs/build-plan/build-priority-matrix.md`
 7. `.agent/context/grouping/{grouping-file}.md`
-8. `docs/execution/plans/PLAN-TEMPLATE.md` (MUST view before writing)
-9. `docs/execution/plans/TASK-TEMPLATE.md` (MUST view before writing)
+8. `.agent/templates/PLAN-TEMPLATE.md` (MUST view before writing)
+9. `.agent/templates/TASK-TEMPLATE.md` (MUST view before writing)
 
 ## Steps 1-2: Discovery
 

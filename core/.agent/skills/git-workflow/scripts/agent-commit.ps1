@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
     Agent-safe git commit and push. Validates signing config, runs tests, stages, commits, pushes.
@@ -277,7 +277,7 @@ Write-Host "[2/7] Checking remote URL..." -ForegroundColor Yellow
 
 $remoteUrl = git remote get-url origin 2>$null
 if ($remoteUrl -match "^https://") {
-    Write-Host "  WARNING: Remote uses HTTPS ($remoteUrl) — push may prompt for credentials." -ForegroundColor DarkYellow
+    Write-Host "  WARNING: Remote uses HTTPS ($remoteUrl) -- push may prompt for credentials." -ForegroundColor DarkYellow
 }
 else {
     Write-Host "  Remote: OK ($remoteUrl)" -ForegroundColor Green
@@ -289,7 +289,7 @@ Write-Host "[3/7] Staging changes..." -ForegroundColor Yellow
 git add -A
 $status = git status --short
 if (-not $status) {
-    Write-Host "  Nothing to commit — working tree clean." -ForegroundColor DarkYellow
+    Write-Host "  Nothing to commit -- working tree clean." -ForegroundColor DarkYellow
     exit 0
 }
 $fileCount = ($status -split "`n").Count
@@ -344,7 +344,7 @@ else {
             exit 1
         }
         if ($specDiff) {
-            Write-Host "  OpenAPI spec was stale — auto-regenerated and staged." -ForegroundColor DarkYellow
+            Write-Host "  OpenAPI spec was stale -- auto-regenerated and staged." -ForegroundColor DarkYellow
             git add openapi.committed.json
         }
         else {
@@ -352,7 +352,7 @@ else {
         }
     }
     else {
-        Write-Host "  OpenAPI export tool not found — skipped" -ForegroundColor DarkYellow
+        Write-Host "  OpenAPI export tool not found -- skipped" -ForegroundColor DarkYellow
     }
 }
 # ── Step 5: Commit ──────────────────────────────────────────────────────

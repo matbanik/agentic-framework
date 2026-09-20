@@ -25,6 +25,10 @@ Every command, on every route, obeys the same four beats:
 3. Read the receipt.
 4. `exit $code` — propagate, never swallow.
 
+**Full-failure receipt.** A failing child with multiple diagnostic ids (FAILED/ERROR
+test ids, assertion messages) must leave **every** id on the receipt together with a
+nonzero status. Compact display that keeps only the first error is not evidence.
+
 Never pipe a long-running process into a filter: the filter's exit status replaces the
 process's, and a saturated pipe can hang the session. Read the receipt after the
 process finishes.

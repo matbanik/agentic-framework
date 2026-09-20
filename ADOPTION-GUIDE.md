@@ -46,16 +46,44 @@ core/CLAUDE.md          → <project>/CLAUDE.md      (or the equivalent bootstra
                                                     Codex/Cursor, GEMINI.md for Gemini)
 core/.agent/            → <project>/.agent/          (includes empty context/ seeds)
 core/tools/             → <project>/tools/           (issue_triage + meu_status CLIs)
-core/templates/         → <project>/.agent/templates/   (or wherever artifacts live, per F1/F2)
+core/templates/         → <project>/.agent/templates/   (TEMPLATE_HOME; or F1/F2 override)
 core/.cursor/agents/    → <project>/.cursor/agents/     (in-harness builder/verifier defs)
 core/.claude/agents/    → <project>/.claude/agents/     (Claude Code Agent/Task defs)
+.agent/INSTANTIATE.md   → <project>/.agent/INSTANTIATE.md  (how-to; docs link ../INSTANTIATE.md)
 ```
 
 Also copy `core/templates/BUILD_PLAN-STUB.md` → your Spec path (default `docs/BUILD_PLAN.md`)
-so `meu_status.py render` has AUTOGEN markers.
+so `meu_status.py render` has AUTOGEN markers when D9 = yes.
 
 `core/MANIFEST.md` lists every file and its purpose, plus what was deliberately **excluded** as
 project-specific.
+
+### Step 2 copy recipe (Windows)
+
+Do **not** use a wildcard `Copy-Item` or `-LiteralPath` with a glob. Name each source.
+A missing source must fail the copy (nonzero). A destination that already exists and
+is not the intended tree must refuse rather than merge.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$pkg  = 'C:/path/to/agentic-framework'   # this transfer package
+$dest = 'C:/path/to/your project'        # spaces are fine; quote every path
+if (-not (Test-Path -LiteralPath $pkg)) { throw "missing package: $pkg" }
+if ((Test-Path -LiteralPath (Join-Path $dest 'AGENTS.md')) -and
+    -not (Test-Path -LiteralPath (Join-Path $dest '.agent'))) {
+    throw "refusing: $dest already has AGENTS.md but is not an adoption dest"
+}
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+Copy-Item -LiteralPath (Join-Path $pkg 'core/AGENTS.md')     -Destination (Join-Path $dest 'AGENTS.md')
+Copy-Item -LiteralPath (Join-Path $pkg 'core/GUARDRAILS.md') -Destination (Join-Path $dest 'GUARDRAILS.md')
+Copy-Item -LiteralPath (Join-Path $pkg 'core/CLAUDE.md')     -Destination (Join-Path $dest 'CLAUDE.md')
+Copy-Item -LiteralPath (Join-Path $pkg 'core/.agent')        -Destination (Join-Path $dest '.agent') -Recurse
+Copy-Item -LiteralPath (Join-Path $pkg 'core/tools')         -Destination (Join-Path $dest 'tools') -Recurse
+Copy-Item -LiteralPath (Join-Path $pkg 'core/templates')     -Destination (Join-Path $dest '.agent/templates') -Recurse
+Copy-Item -LiteralPath (Join-Path $pkg 'core/.cursor/agents') -Destination (Join-Path $dest '.cursor/agents') -Recurse
+Copy-Item -LiteralPath (Join-Path $pkg 'core/.claude/agents') -Destination (Join-Path $dest '.claude/agents') -Recurse
+Copy-Item -LiteralPath (Join-Path $pkg '.agent/INSTANTIATE.md') -Destination (Join-Path $dest '.agent/INSTANTIATE.md') -Force
+```
 
 ### Step 2a — Select your platform (before any shell command)
 
@@ -73,6 +101,10 @@ and never pipe long-running output through filters. The exact syntax depends on 
    install, `pwsh` vs POSIX redirect, and cross-platform dispatch for `Invoke-CodexDispatch.ps1`.
 3. After `instantiate.py`, grep your copied tree for `{{RECEIPTS_DIR}}` and confirm every
    registered validation command uses the redirect form matching your `native_shell` row.
+4. **Windows bash:** run `tools/preflight.sh` with **Git for Windows**
+   (`C:/Program Files/Git/bin/bash.exe`), not WSL `System32/bash.exe`. Prepend Git's
+   `usr/bin` and `bin` on PATH for that invocation so `rg`/`mktemp` resolve to the Git
+   ports. Record the chosen bash in PROFILE A4b.
 
 Do not run the Step 2b installer until this row is set — placeholder tokens and wrong redirect
 syntax are the most common first-run failures.
@@ -103,11 +135,11 @@ syntax are the most common first-run failures.
 > pick a real local directory (`~/.cache/{{PROJECT_NAME}}/receipts/` or similar) and prune it
 > on purpose rather than relying on the OS to do it for you.
 
-> **Agent filenames carry `{{PROJECT_NAME}}`.** After Step 2b (`instantiate.py`), rename
-> `{{PROJECT_NAME}}-builder.md` / `{{PROJECT_NAME}}-verifier.md` so the *filename stem* matches
-> the instantiated `name:` frontmatter (e.g. `acme-builder.md`). Cursor/Claude register subtypes
-> from those stems. If A6 = no subagents, delete both `agents/` trees and the
-> `subagent-delegation` skill instead.
+> **Agent filenames carry `{{PROJECT_NAME}}`.** `instantiate.py` (Step 2b) renames
+> `{{PROJECT_NAME}}-builder.md` / `{{PROJECT_NAME}}-verifier.md` so the *filename stem*
+> matches the instantiated `name:` frontmatter (e.g. `acme-builder.md`). Cursor/Claude
+> register subtypes from those stems. If A6 = no subagents, delete both `agents/` trees
+> and the `subagent-delegation` skill instead.
 
 ### Step 2b — Fill in the placeholders
 
@@ -125,7 +157,9 @@ RECEIPTS_DIR=C:/Temp/acme
 REPO_URL=github.com/you/acme
 EOF
 
-# 2. dry-run against wherever you copied core/  (omit --root to rewrite the package in place)
+# 2. dry-run against the copied tree. --root is required.
+#    --in-place-package is the only way to rewrite this transfer package; do not
+#    omit --root by accident.
 python scripts/instantiate.py --root <project> --config framework.vars --dry-run
 
 # 3. apply, then verify nothing was missed (exit 2 if any {{TOKEN}} survives)
@@ -166,14 +200,27 @@ Open `.agent/docs/harness-profiles.md`.
 
 ## Step 4 — Instantiate the registry, then configure the reviewer chain
 
-Copy the package-root `.agent/` (a sibling of `core/`, `scripts/`, and `README.md`)
-to the live home you choose — a **shared home** `.agent/` (any local durable path,
-named by `AGENT_MODEL_REGISTRY_HOME`) used by several repos, or
-a **workspace-root** `.agent/` if this project owns the catalog. Fill `catalog` and
-`bindings` with the snapshots *your* harnesses accept, then compile and run the
-checker.
+**LAYOUT_HD01.** Instruction, context, and overlay live at `<project>/.agent/`
+(copied from `core/.agent/` in Step 2). That tree is **not** a catalog.
 
-The mechanics — locate order, fill list, wrappers, validation, overlays, and
+Project-owned catalog lives at `<project>/.agent-registry/`. Copy the
+**package-root** `.agent/` template (a sibling of `core/`, `scripts/`, and
+`README.md`) into that home — or another durable local path you name with a
+**session-scoped** `AGENT_MODEL_REGISTRY_HOME`. Do not persist a project path as a
+user-wide environment variable; the next repo you open would inherit it. Shared
+user-home (`%USERPROFILE%/.agent` / `$HOME/.agent`) remains an explicit opt-in
+when you leave `AGENT_MODEL_REGISTRY_HOME` unset.
+
+You may **defer** filling catalog and bindings. A deferred profile must not
+authorize dispatch, delegation, or model resolution. `tools/preflight.sh --phase
+build` SKIPs the registry check; `--phase review` and `--phase all` still require
+compiled JSON.
+
+Do **not** copy the package-root `.agent/` onto `<project>/.agent/` — that would
+overwrite instruction bytes with catalog files.
+
+The mechanics — LOCATE_ORDER (fail-closed: a configured home that is missing does
+not fall through to user-home), fill list, wrappers, validation, overlays, and
 what not to do — live in [`.agent/INSTANTIATE.md`](.agent/INSTANTIATE.md). Follow
 that file; do not recopy its steps into this guide. `core/.agent/` is the
 in-package instruction copy. Do not instantiate into it.
@@ -203,7 +250,8 @@ If D9 = yes (default for multi-session work):
 1. Confirm `.agent/context/known-issues.yaml` and `meu-status.yaml` seeds are present (empty).
 2. Install Python deps: `pyyaml`, `jsonschema`.
 3. Edit `tools/issue_triage/model.py` → `VALID_COMPONENTS` and the ID-prefix table in
-   `.agent/skills/issue-triage/SKILL.md` per **D8**.
+   `.agent/skills/issue-triage/SKILL.md` per **D8**. The shipped prefix map stays until
+   you customize it; do not silently remap origin defaults.
 4. Replace the starter phase in `meu-status.yaml` with your real phases (or leave it until the
    first `/session-grouping` run registers MEUs).
 5. Smoke: `python tools/issue_triage.py stats` and `python tools/meu_status.py stats`.
@@ -299,8 +347,14 @@ Do not declare adoption complete until all of these are true:
    `/issue-triage` → `/session-grouping` so the first plan is grounded in registered MEUs.
 2. `/create-plan` (or your equivalent) → produces a plan + task list with criteria written
    **before** any work. Prior reflection **Next Session Design Rules** apply here.
-3. The plan is **auto-dispatched to the independent reviewer** — the human sees *reviewed* plans,
-   never raw drafts.
+3. **EGRESS_PRECEDENCE.** External review dispatch is mandatory unless PROFILE
+   C1/C2/C3b or E5 forbids sending work to an external provider; then stop for
+   B4's named human reviewer. That stop is **not** SIGN 1. Self-review remains
+   prohibited. `plan_to_exec_gate: human` is a separate post-`approved` pause.
+   Missing CLI (`can_dispatch_external_reviewer == no`) is **not** the same as
+   forbidden egress: when egress is forbidden, do not prepare a provider
+   web-prompt and do not request manual external submission. When dispatch is
+   permitted, the human sees *reviewed* plans, never raw drafts.
 4. On `approved`: continue per `plan_to_exec_gate` (`human` ⇒ wait for an explicit go-ahead).
 5. Execute unit by unit, producing evidence per unit.
 6. Independent review of the work → correct → re-review until approved.

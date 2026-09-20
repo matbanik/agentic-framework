@@ -100,10 +100,17 @@ function Get-RegistryCandidate {
     [CmdletBinding()]
     param()
 
+    # LOCATE_ORDER is exclusive, not a walk: a configured file or home that is
+    # missing must not fall through to %USERPROFILE%/.agent (that was how a
+    # deferred adopter silently bound someone else's catalog).
     $candidates = [System.Collections.Generic.List[string]]::new()
-    if ($env:AGENT_MODEL_REGISTRY) { $candidates.Add($env:AGENT_MODEL_REGISTRY) }
+    if ($env:AGENT_MODEL_REGISTRY) {
+        $candidates.Add($env:AGENT_MODEL_REGISTRY)
+        return $candidates
+    }
     if ($env:AGENT_MODEL_REGISTRY_HOME) {
         $candidates.Add((Join-Path $env:AGENT_MODEL_REGISTRY_HOME 'model-registry.json'))
+        return $candidates
     }
     if ($env:USERPROFILE) {
         $candidates.Add((Join-Path $env:USERPROFILE '.agent/model-registry.json'))

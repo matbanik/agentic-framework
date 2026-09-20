@@ -21,10 +21,16 @@
 | `injects_auto_approval` (A2) | `yes` \| `no` | **default `yes`** — assume injection risk |
 | `can_dispatch_external_reviewer` (A3) | `yes` \| `no` | default `no` |
 | `native_shell` (A4) | `powershell` \| `bash` \| `posix-sh` | default `posix-sh` |
+| Receipts path / pwsh availability (A4b) | | Git for Windows bash on Windows |
+| Cloud-sync working copy? (A4c) | `yes` \| `no` | **default `yes`** until the real path is checked |
+| Canonical dispatcher (A4d) | `.ps1` \| `.sh` | `.ps1` on Windows, `.sh` on macOS/Linux |
 | `read_tool` / `shell_tool` / `end_turn_signal` (A5) | | |
 | Subagents + nesting depth (A6) | | |
+| Standing policy against spawning? (A6b) | `yes` \| `no` | **default `yes`** — treat spawning as forbidden until confirmed |
 | `context_compaction` (A7) | | `none` ⇒ ~50% checkpoint becomes a hand-back |
 | `plan_to_exec_gate` (A8) | `human` \| `reviewer-auto` | **default `human`** |
+| Builder/verifier classes (A9) | | only if A6 is yes; bind in the A10 registry |
+| Registry home + deferral (A10) | path \| `deferred` | default `<project>/.agent-registry/` via **session-scoped** `AGENT_MODEL_REGISTRY_HOME`; `deferred` forbids dispatch until compiled JSON exists |
 
 > If driver + host are both present, apply the **per-flag merge**: gate = most restrictive;
 > injection = `yes` if either; tools/shell = the driver's.
@@ -53,6 +59,7 @@
 | Regulated/privileged/confidential content? (C1) | `yes` \| `no` (**default `yes`**) |
 | Legal basis to send to each external provider? (C2) | e.g. BAA / DPA / none |
 | De-identification or redaction possible? (C3) | |
+| If C3 = yes: what scans the payload, and is the scan run on the exact file that gets dispatched? (C3b) | **default: no dispatch** — an unverified redaction is an unredacted dispatch |
 | If no egress permitted → review mode (C4) | `local-only` \| **`human-only`** |
 
 **Decision:** external-CLI dispatch is `PERMITTED` / `PROHIBITED`.
@@ -69,8 +76,10 @@
 | Canonical source of truth — "Spec" (D3) | |
 | What counts as **evidence** (D4) | |
 | **Criteria-before-work** artifact (the FIC) (D5) | |
-| Validation checks / commands (D6) | |
+| Validation checks / commands (D6) | **D6_ADOPTER_ARGV:** executable + argv **or** documented manual procedure; cwd; scope; blocking; expected result; shell; receipt path. Example only: `python -m pytest test_hello.py`. Not a universal default. |
 | Definition of done (D7) | |
+| Issue component names / ID prefixes (D8) | |
+| Issue → MEU → plan learning loop? (D9) | `yes` \| `no` (**default `yes`** for multi-session; `no` skips MEU seeds/tools) |
 
 ---
 
@@ -95,6 +104,7 @@
 | Plans / task lists (F1) | |
 | Handoffs / reviews / reflections (F2) | |
 | Temp/receipt output dir (F3) | |
+| Receipts must survive reboot? (F3b) | `survive` \| `run-only` (**default `survive`**) |
 | Version control + commit gate (F4) | |
 | Models: coordinator / builder / router (F5) | |
 | Cost constraints (F6) | metered / flat |

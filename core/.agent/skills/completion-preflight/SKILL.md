@@ -110,7 +110,7 @@ Required markers:
 rtk proxy pwsh -NoProfile -Command { $path='<handoff-file>'; foreach ($pattern in @('Acceptance Criteria|AC-','CACHE BOUNDARY','Evidence|FAIL_TO_PASS','Changed Files')) { if (-not (Select-String -Path $path -Pattern $pattern -Quiet)) { Write-Error ('missing handoff pattern: '+$pattern); exit 1 } }; 'PASS: handoff markers' } *> {{RECEIPTS_DIR}}/handoff-structure.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/handoff-structure.txt; exit $code
 ```
 
-If ANY marker is missing → read (your harness `read_tool`) `.agent/context/handoffs/TEMPLATE.md` and fix the handoff.
+If ANY marker is missing → read (your harness `read_tool`) `.agent/templates/HANDOFF-TEMPLATE.md` and fix the handoff.
 
 #### AC-table integrity gate (control C4 — HARD GATE)
 

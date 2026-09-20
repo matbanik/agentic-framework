@@ -74,7 +74,7 @@ pytest --cov=packages/core --cov-report=term
 2. **Implementation agent implements the code** — makes the test pass
 3. **Run tests** — verify green
 4. **The implementation agent NEVER modifies tests** to make them pass
-5. **Run the MEU validation gate** — `uv run python tools/validate_codebase.py --scope meu`
+5. **Run the MEU validation gate** — PROFILE D6_ADOPTER_ARGV
 6. **Repeat** for next feature
 
 ## Fixtures
@@ -156,8 +156,8 @@ For any MEU touching API/MCP/UI/config write paths, include these test categorie
 
 ## Validation Pipeline
 
-**MEU gate** (active implementation work): `uv run python tools/validate_codebase.py --scope meu`
-**Phase gate** (only after all MEUs in a phase are complete): `uv run python tools/validate_codebase.py`
+**MEU gate** (active implementation work): PROFILE D6_ADOPTER_ARGV
+**Phase gate** (only after all MEUs in a phase are complete): same D6 command at phase scope. There is no packaged `tools/validate_codebase.py`.
 
 **Blocking checks** apply by scaffold and phase:
 - Current scaffold: `pyright`, `ruff`, `pytest`

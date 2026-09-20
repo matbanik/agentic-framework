@@ -2,7 +2,7 @@
 
 > **Canonical routing matrix:** [`.agent/docs/model-routing.md`](model-routing.md) is the source of truth for the full routed stack (3 model tiers — Coordinator / Builder / Router — plus an external reviewer and two execution modes) and the independent-reviewer chain. **This file is the detailed work-class taxonomy *within* the Coordinator and Builder tiers** — which specific tasks are "mechanical" (delegate) vs "correctness" (keep).
 >
-> **Harness-conditional class resolution (Q1–Q2, 2026-07-22):** the `coordinator` and `builder` classes resolve per harness — Cursor vs Claude Code bindings differ. Which snapshot each class binds to lives in the live registry home you instantiate (see [`.agent/INSTANTIATE.md`](../../../.agent/INSTANTIATE.md)) and must be resolved, not restated here.
+> **Harness-conditional class resolution (Q1–Q2, 2026-07-22):** the `coordinator` and `builder` classes resolve per harness — Cursor vs Claude Code bindings differ. Which snapshot each class binds to lives in the live registry home you instantiate (see [`.agent/INSTANTIATE.md`](../INSTANTIATE.md)) and must be resolved, not restated here.
 >
 > **Source:** `Local Canon + Human-approved` (2026-06-13 `instruction-set-optimization`, decision D5; Q1–Q8 2026-07-22). Evidence: `docs/execution/plans/2026-06-13-instruction-set-optimization/audit-findings.md` §6. Effort guidance: `.agent/skills/cli-dispatch/SKILL.md` §Reviewer Effort Policy.
 

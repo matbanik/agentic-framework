@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Validation test suite for the CLI Dispatch skill.
   Tests dispatch routes plus a deterministic Invoke-CodexDispatch.ps1 contract suite
@@ -13,12 +13,12 @@
   Prerequisites:
   - codex CLI in PATH (npm global)
   - claude CLI in PATH (npm global)
-  - agy CLI at $env:LOCALAPPDATA\agy\bin\agy.exe (version ≥ 1.1.1; stdout capture verified on 1.1.5)
+  - agy CLI at $env:LOCALAPPDATA\agy\bin\agy.exe (version >= 1.1.1; stdout capture verified on 1.1.5)
   - All CLIs authenticated
   - agy model set to the `surface_orchestrator` binding for `gemini-cli` via TUI
     /model (or --model); resolve it with
     `Resolve-AgentModel -Class surface_orchestrator -Harness gemini-cli`
-  - Stuck/broken MCP servers disabled — they block agy -p even for trivial prompts
+  - Stuck/broken MCP servers disabled -- they block agy -p even for trivial prompts
 #>
 
 param(
@@ -222,7 +222,7 @@ function Resolve-WrapperPath {
 }
 
 function Test-CodexWrapperContract {
-    Write-TestHeader "Invoke-CodexDispatch.ps1 — contract smoke (no live Codex)"
+    Write-TestHeader "Invoke-CodexDispatch.ps1 -- contract smoke (no live Codex)"
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $wrapper = Resolve-WrapperPath
@@ -237,7 +237,7 @@ function Test-CodexWrapperContract {
 
     # The packaged wrapper deliberately contains `$env:{{PROJECT_NAME_UPPER}}_...`, which
     # is NOT valid PowerShell until instantiate.py substitutes it. Parsing the packaged
-    # file therefore always failed, and the old code `return`ed on that failure — so
+    # file therefore always failed, and the old code `return`ed on that failure -- so
     # every execution arm below was unreachable in the packaged tree while the suite
     # still reported a tidy pass/fail tally. A test that cannot run is not a test (V4).
     #
@@ -255,8 +255,8 @@ function Test-CodexWrapperContract {
 
     $wasTokenized = $text -match '\{\{'
     if ($wasTokenized) {
-        # The temp tree MIRRORS the real layout — wrapper and ledger under tools/,
-        # schemas under .agent/schemas/ — because both resolve siblings by relative
+        # The temp tree MIRRORS the real layout -- wrapper and ledger under tools/,
+        # schemas under .agent/schemas/ -- because both resolve siblings by relative
         # path: the wrapper looks for $PSScriptRoot/review_ledger.py, and the ledger
         # resolves its schema as <its dir>/../.agent/schemas/. A flat temp dir would
         # break the second one and every gate arm would fail closed at exit 3 for a
@@ -326,8 +326,8 @@ function Test-CodexWrapperContract {
 
     # Both -NonReviewDispatch and -AuthorVendor are REQUIRED here, and the assertion is
     # on the message rather than merely on non-zero. Two *earlier* clauses reject this
-    # invocation otherwise — the review-loop gate (loop_id_required) and
-    # author_vendor_required — so without them the arm exits 1 without ever reaching the
+    # invocation otherwise -- the review-loop gate (loop_id_required) and
+    # author_vendor_required -- so without them the arm exits 1 without ever reaching the
     # justification check. It passed that way for a long time. That is the V3 failure
     # verbatim: a decoy rejected by an unrelated earlier validation looks exactly like
     # one caught by the rule under test, and only asserting on the message tells them
@@ -383,7 +383,7 @@ function Test-CodexWrapperContract {
     # The kind comes from the mode the ledger recorded at `begin`, so these arms open real
     # loops rather than asserting against a flag. -GateOnly is enough to observe the
     # resolved timeout: the wrapper resolves it before the gate returns precisely so this
-    # is checkable without a live Codex (V2 — observe the real entry point).
+    # is checkable without a live Codex (V2 -- observe the real entry point).
     $pyForKind = $null
     foreach ($candidate in @('python3', 'python')) {
         $found = Get-Command $candidate -ErrorAction SilentlyContinue
@@ -392,7 +392,7 @@ function Test-CodexWrapperContract {
     $ledgerForKind = Join-Path (Split-Path $runnable -Parent) 'review_ledger.py'
     if (-not $pyForKind -or -not (Test-Path -LiteralPath $ledgerForKind)) {
         # Not a pass and not a silent skip: name what was missing (V5/V31).
-        Write-TestResult "dispatch-kind arms" $false "SKIPPED — python=$pyForKind ledger=$ledgerForKind; this is not a pass" 0
+        Write-TestResult "dispatch-kind arms" $false "SKIPPED -- python=$pyForKind ledger=$ledgerForKind; this is not a pass" 0
     } else {
         $sw.Restart()
         $execLoop = 'kind-exec-loop'
@@ -441,7 +441,7 @@ function Test-CodexWrapperContract {
         Write-TestResult "Invalid -Kind rejected by ValidateSet" $badKindOk "exit=$codeBadKind" $sw.Elapsed.TotalSeconds
 
         # A ledger too old to print `mode=` must fail closed at 3, not fall back to a
-        # guessed kind. Only runnable against the temp copy — overwriting the real
+        # guessed kind. Only runnable against the temp copy -- overwriting the real
         # tools/review_ledger.py in an instantiated tree is not something a test may do.
         $sw.Restart()
         if (-not $wasTokenized) {
@@ -478,7 +478,7 @@ sys.exit(0)
     Write-TestResult "review-verdict.schema.json resolvable" $schemaOk $(if ($schemaOk) { $schema } else { 'missing' }) $sw.Elapsed.TotalSeconds
 
     # v2 is what new loops register against, and review_ledger.py refuses a v1 document
-    # submitted to a v2 loop — so its absence must be a failure, not a shrug.
+    # submitted to a v2 loop -- so its absence must be a failure, not a shrug.
     $sw.Restart()
     $schema2 = $null
     foreach ($candidate in @(
@@ -506,13 +506,13 @@ sys.exit(0)
         }
         if (-not $py) {
             # Not a pass and not a silent skip: say which tool was missing (V5/V31).
-            Write-TestResult "review_ledger.py selftest" $false 'SKIPPED — no python3/python on PATH; this is not a pass' $sw.Elapsed.TotalSeconds
+            Write-TestResult "review_ledger.py selftest" $false 'SKIPPED -- no python3/python on PATH; this is not a pass' $sw.Elapsed.TotalSeconds
         } else {
             $ledgerOut = & $py $ledgerScript selftest 2>&1
             $ledgerCode = $LASTEXITCODE
             # Filter the output array directly. `"$ledgerOut" -split "\r?\n"` looks
             # right but joins the array with spaces first, so the newlines are gone
-            # before the split and nothing ever matches — an empty summary that reads
+            # before the split and nothing ever matches -- an empty summary that reads
             # as "the ledger said nothing" rather than "the extraction is broken".
             $summary = ($ledgerOut | Where-Object { "$_" -match '^RESULT:' } | Select-Object -First 1)
             Write-TestResult "review_ledger.py selftest" ($ledgerCode -eq 0) "exit=$ledgerCode $summary" $sw.Elapsed.TotalSeconds
@@ -524,7 +524,7 @@ sys.exit(0)
     # The old literal '{{RECEIPTS_DIR}}\dispatch-tests' default created a real directory
     # of that literal name inside core/ and wrote live CLI receipts into it; the raw
     # model slugs in those receipts then failed the Tier-1 release gate. Nothing
-    # complained at the time — the only symptom was a release check failing later, in a
+    # complained at the time -- the only symptom was a release check failing later, in a
     # different tool, about a file nobody remembered writing.
     $sw.Restart()
     if ($OutputDir) {
@@ -534,7 +534,7 @@ sys.exit(0)
     } else {
         $priorRcpt = $env:RECEIPTS_DIR
         try {
-            # 1. Nothing set at all — refuse, and name the variable that fixes it.
+            # 1. Nothing set at all -- refuse, and name the variable that fixes it.
             $script:ResolvedOutputDir = $null; $script:OutputDirError = $null
             Remove-Item Env:\RECEIPTS_DIR -ErrorAction SilentlyContinue
             $r1 = Get-OutputDir
@@ -567,7 +567,7 @@ sys.exit(0)
         } finally {
             # Clear the memo as well as the variable. Leaving the temp path cached would
             # redirect the receipts of every live arm that runs after this one under
-            # `-Test all` — into a directory this block just deleted.
+            # `-Test all` -- into a directory this block just deleted.
             $script:ResolvedOutputDir = $null
             $script:OutputDirError = $null
             if ($null -eq $priorRcpt) {
@@ -619,7 +619,7 @@ sys.exit(0)
     $sw.Restart()
     $pyForAdapter = @('python3', 'python') | ForEach-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Where-Object { $_ } | Select-Object -First 1
     if (-not (Test-Path -LiteralPath $adapterSrc)) {
-        Write-TestResult "Shared schema adapter selftest" $false "adapt_output_schema.py not found at $adapterSrc — the -OutputSchema path has no implementation to check" $sw.Elapsed.TotalSeconds
+        Write-TestResult "Shared schema adapter selftest" $false "adapt_output_schema.py not found at $adapterSrc -- the -OutputSchema path has no implementation to check" $sw.Elapsed.TotalSeconds
     } elseif (-not $pyForAdapter) {
         Write-TestSkip "Shared schema adapter selftest" "neither python3 nor python is on PATH"
     } else {
@@ -730,7 +730,7 @@ exit 0
         }
     }
 
-    # POSIX companion (macOS/Linux) — presence + placeholder + bash -n when bash exists
+    # POSIX companion (macOS/Linux) -- presence + placeholder + bash -n when bash exists
     $sw.Restart()
     $shWrapper = Resolve-WrapperPath -Name 'Invoke-CodexDispatch.sh'
     if (-not $shWrapper) {
@@ -785,7 +785,7 @@ exit 0
 # --- Test 1: Codex Validation (live; opt-in; no length false-pass) ---
 
 function Test-CodexValidation {
-    Write-TestHeader "Codex CLI — Validation (GPT-5.5, reasoning=high)"
+    Write-TestHeader "Codex CLI -- Validation (GPT-5.5, reasoning=high)"
 
     $dir = Get-OutputDir
     if (-not $dir) { Write-TestResult "Codex Validation" $false $script:OutputDirError 0; return }
@@ -837,7 +837,7 @@ Report: VERDICT (PASS or CHANGES_REQUIRED), then a 1-line SUMMARY.
             return
         }
         if ($run.ExitCode -ne 0) {
-            Write-TestResult "Codex Validation" $false "codex exited $($run.ExitCode) — see $logFile.stderr" $sw.Elapsed.TotalSeconds
+            Write-TestResult "Codex Validation" $false "codex exited $($run.ExitCode) -- see $logFile.stderr" $sw.Elapsed.TotalSeconds
             return
         }
 
@@ -846,7 +846,7 @@ Report: VERDICT (PASS or CHANGES_REQUIRED), then a 1-line SUMMARY.
             if ($content -match "VERDICT.*PASS" -or $content -match "(?m)^VERDICT:\s*PASS") {
                 Write-TestResult "Codex Validation" $true "VERDICT PASS found ($($content.Length) chars)" $sw.Elapsed.TotalSeconds
             } else {
-                Write-TestResult "Codex Validation" $false "No VERDICT PASS in output ($($content.Length) chars) — length alone is not a pass" $sw.Elapsed.TotalSeconds
+                Write-TestResult "Codex Validation" $false "No VERDICT PASS in output ($($content.Length) chars) -- length alone is not a pass" $sw.Elapsed.TotalSeconds
             }
         } else {
             Write-TestResult "Codex Validation" $false "Output file not created" $sw.Elapsed.TotalSeconds
@@ -860,7 +860,7 @@ Report: VERDICT (PASS or CHANGES_REQUIRED), then a 1-line SUMMARY.
 # --- Test 2: Codex Image Generation ---
 
 function Test-CodexImageGen {
-    Write-TestHeader "Codex CLI — Image Generation (GPT-5.5, image_gen)"
+    Write-TestHeader "Codex CLI -- Image Generation (GPT-5.5, image_gen)"
 
     $dir = Get-OutputDir
     if (-not $dir) { Write-TestResult "Codex Image Gen" $false $script:OutputDirError 0; return }
@@ -919,7 +919,7 @@ function Test-CodexImageGen {
 # --- Test 3: agy Data Processing ---
 
 function Test-AgyDataProcessing {
-    Write-TestHeader "agy CLI — Data Processing (Gemini 3.5 Flash High)"
+    Write-TestHeader "agy CLI -- Data Processing (Gemini 3.5 Flash High)"
 
     $agyPath = "$env:LOCALAPPDATA\agy\bin\agy.exe"
     if (-not (Test-Path $agyPath)) {
@@ -982,7 +982,7 @@ Return the complete report as markdown on stdout.
             if ($null -ne $content -and $content.Length -gt 20) {
                 Write-TestResult "agy Data Processing" $true "Stdout capture OK ($($content.Length) chars, version=$version)" $sw.Elapsed.TotalSeconds
             } else {
-                Write-TestResult "agy Data Processing" $false "Stdout empty/short — check ~/.gemini/antigravity-cli/log for MCP stalls" $sw.Elapsed.TotalSeconds
+                Write-TestResult "agy Data Processing" $false "Stdout empty/short -- check ~/.gemini/antigravity-cli/log for MCP stalls" $sw.Elapsed.TotalSeconds
             }
         } else {
             Write-TestResult "agy Data Processing" $false "Output receipt not created" $sw.Elapsed.TotalSeconds
@@ -997,7 +997,7 @@ Return the complete report as markdown on stdout.
 
 function Test-ClaudeCreativeWriting {
     $model = Get-ClassModel -Class 'creative_prose' -Harness 'claude-p'
-    Write-TestHeader "Claude Code — Creative Writing ($model)"
+    Write-TestHeader "Claude Code -- Creative Writing ($model)"
 
     $dir = Get-OutputDir
     if (-not $dir) { Write-TestResult "Claude Creative Writing" $false $script:OutputDirError 0; return }
@@ -1012,7 +1012,7 @@ Write in a natural, human-like tone. Avoid bullet points, numbered lists,
 and AI-typical phrasing like 'certainly' or 'I'd be happy to'.
 
 Write a short paragraph (50-80 words) describing a sunrise over a mountain lake.
-Focus on sensory details — what you see, hear, and feel. Write as a skilled human
+Focus on sensory details -- what you see, hear, and feel. Write as a skilled human
 nature writer would.
 "@
 
@@ -1067,10 +1067,10 @@ nature writer would.
 
 Write-Host "`n" -NoNewline
 Write-Host "╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-Write-Host "║      CLI DISPATCH SKILL — VALIDATION TEST SUITE        ║" -ForegroundColor Magenta
+Write-Host "║      CLI DISPATCH SKILL -- VALIDATION TEST SUITE        ║" -ForegroundColor Magenta
 Write-Host "╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
 Write-Host ""
-Write-Host "  Output dir: $(if ($OutputDir) { $OutputDir } elseif ($env:RECEIPTS_DIR) { Join-Path $env:RECEIPTS_DIR 'dispatch-tests' } else { '<unset — live arms will fail closed>' })"
+Write-Host "  Output dir: $(if ($OutputDir) { $OutputDir } elseif ($env:RECEIPTS_DIR) { Join-Path $env:RECEIPTS_DIR 'dispatch-tests' } else { '<unset -- live arms will fail closed>' })"
 Write-Host "  Test scope: $Test"
 Write-Host ""
 

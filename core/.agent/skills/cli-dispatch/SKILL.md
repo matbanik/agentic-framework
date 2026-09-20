@@ -409,13 +409,14 @@ unavailable, the escalation is the **human handoff path in §0**, which is a rea
 state. Effort flags do not buy independence.
 
 ### 3. Fallback Steps
+0. **If PROFILE forbids egress (C1/C2/C3b or E5):** stop for B4's named human reviewer. Do not write `<provider>-web-prompt.md` and do not request manual external submission. Skip the rest of this section.
 1. **Advance to the next eligible cross-vendor reviewer rung** (surface-only rungs stay surface-only).
 2. **If all cross-vendor rungs are exhausted:** Save the prompt to a file at `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`.
 3. **Present to user (HARD STOP):** Inform them all rungs are rate-limited and offer manually submitting to a web interface or setting a timer to retry.
 4. **Collect results:** User pastes the web response into `{{RECEIPTS_DIR}}/dispatch/<provider>-web-response.md`.
 
 ### 4. Capability and Round-Cap Constraints
-- **Capability / No-Dispatch check**: If `can_dispatch_external_reviewer == no`, write the complete reviewer prompt to `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`, report the manual external submission requirement as a human-decision gate, and stop. Never self-review or substitute a local approval verdict.
+- **EGRESS_PRECEDENCE.** External review dispatch is mandatory unless PROFILE C1/C2/C3b or E5 forbids sending work to an external provider; then stop for B4's named human reviewer. That stop is **not** SIGN 1. Self-review remains prohibited. `plan_to_exec_gate: human` is a separate post-`approved` pause. Missing CLI (`can_dispatch_external_reviewer == no`) is **not** the same as forbidden egress: when dispatch was permitted but the CLI is missing, follow the rate-limit fallback below (including a provider web-prompt when that fallback applies). When egress is forbidden, you must not prepare a provider web-prompt and must not request manual external submission.
 - **Round-cap behavior**: The plan review correction loop is capped at 3 rounds. When the cap is reached, it is a HARD STOP. Do NOT bypass the gate; present the current state to the user and wait for explicit human instructions.
 
 ---

@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=../../tools/meu_status/meu-status.schema.json
-# Empty seed — register MEUs via /session-grouping or tools/meu_status.py.
+# Empty seed — register MEUs via /session-grouping or by editing this YAML.
+# tools/meu_status.py has no `add` subcommand; after a hand-edit run `render`.
 # Replace the starter phase with your real phases (Block D / build plan).
 version: 1
 phases:

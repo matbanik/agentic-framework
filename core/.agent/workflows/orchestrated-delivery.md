@@ -70,7 +70,7 @@ Create one handoff file per MEU:
 
 `.agent/context/handoffs/{YYYY-MM-DD}-{project-slug}-handoff.md`
 
-Use `.agent/context/handoffs/TEMPLATE.md`.
+Use `.agent/templates/HANDOFF-TEMPLATE.md`.
 
 ## Completion Criteria
 

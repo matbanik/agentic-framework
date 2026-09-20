@@ -29,7 +29,7 @@ Refresh if **any** of these land in the source repo:
 | `tools/issue_triage/**` or `tools/meu_status/**` CLI/schema changes | Adopter loop executability |
 | Issue taxonomy / category enums / triage workflow steps | Classification contract |
 | `session-grouping.md` / `issue-triage.md` / `issue-lifecycle-guide.md` | MEU planning handoffs |
-| Live registry `schema/`, `tools/ModelRegistry.psm1`, or the class contracts change | The package-root `.agent/` template must match the schema and module the live tools enforce |
+| Live registry `schema/`, `tools/ModelRegistry.psm1`, or the class contracts change | The package-root `.agent/` template must match the schema and module the live tools enforce. Copy destination is `.agent-registry/` (LAYOUT_HD01), not the instruction `.agent/` tree. |
 | The bump procedure in the live registry's `README.md` changes | `.agent/INSTANTIATE.md` §6 is its portable twin |
 
 Skip a full refresh for product-only work (UI, API, populated MEU registries, Electron E2E).
@@ -45,6 +45,11 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 - [ ] Receipts go to `{{RECEIPTS_DIR}}/` (or your active `RECEIPTS_DIR`) with all-stream redirect.
 - [ ] You will **overwrite** `core/` content; package-root docs (`README.md`, `ADOPTION-*`,
       `UPDATE-CHECKLIST.md`, `scripts/`) are edited by hand — do not blindly wipe them.
+- [ ] After recopying any `*.ps1`, run `python scripts/tests/test_ps1_encoding.py`.
+      Every shipped `core/**/*.ps1` must be ASCII or begin with a UTF-8 BOM. A BOM-less
+      em-dash file must be refused. Instantiated `Invoke-CodexDispatch.ps1` must parse
+      under `powershell.exe` (5.1) and `pwsh` without `ParserError`; missing PromptText
+      must reach usage.
 
 ---
 

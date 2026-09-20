@@ -3,9 +3,11 @@
 > Relocated from AGENTS.md (2026-06-13 instruction-set-optimization slim). Operational reference: Quick Commands, Skills index, MCP Servers, Context & Docs, RTK.
 >
 > Command lines below show tool argv only. Route and capture them through the
-> [RTK section below](#rtk-rust-token-killer---token-optimized-commands) and
-> terminal preflight before execution.
-> (`output-evidence-policy.md` is source-repo-only — see MANIFEST §EXCLUDED.)
+> [RTK section below](#rtk-rust-token-killer---token-optimized-commands) when RTK
+> is installed, and through `.agent/docs/output-evidence-policy.md` always.
+> Redirect every process stream to `{{RECEIPTS_DIR}}`. A failing child must leave
+> every diagnostic id on that receipt (full-failure receipt; compact display must
+> not drop the second error).
 
 
 ## Quick Commands
@@ -18,12 +20,13 @@
 bash tools/preflight.sh                # 8 prerequisite checks; exit 1 names the failures
 bash tools/preflight.sh --phase build  # skip the codex/pwsh checks when no review is planned
 
-# Validation (current scaffold: Python-only)
-uv run python tools/validate_codebase.py --scope meu  # MEU gate during active implementation
-uv run python tools/validate_codebase.py              # Full phase gate after all phase MEUs complete
-pytest tests/unit/                                    # Python unit tests
-pyright packages/                                     # Python type check
-ruff check packages/                                  # Python lint
+# Validation — D6_ADOPTER_ARGV (from PROJECT-PROFILE.md Block D)
+# There is no packaged tools/validate_codebase.py. Register the adopter's
+# executable + argv, cwd, scope, blocking, expected result, shell, and receipt
+# in PROFILE D6. Example (not a universal default):
+python -m pytest test_hello.py -q
+# Missing executable and failing children must exit nonzero; the receipt keeps
+# every diagnostic id (do not compact away the second failure).
 
 # MEU Status SSOT
 uv run python tools/meu_status.py list --status pending --unblocked  # Next unblocked work
@@ -96,7 +99,7 @@ pytest --cov=packages/core --cov-report=term            # Coverage (advisory)
 - Code quality examples → `.agent/docs/code-quality.md`
 - **Emerging standards** → `.agent/docs/emerging-standards.md` — living checklist of MCP/GUI/API standards discovered during development. **Read before planning any MCP or GUI MEU.**
 - Role specs → `.agent/roles/`
-- Handoff template → `.agent/context/handoffs/TEMPLATE.md`
+- Handoff template → `.agent/templates/HANDOFF-TEMPLATE.md`
 - Current focus → `.agent/context/current-focus.md`
 - Known issues → `.agent/context/known-issues.yaml` (SSOT) / `.agent/context/known-issues.md` (generated)
 - Full specification → `docs/BUILD_PLAN.md`

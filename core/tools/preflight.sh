@@ -42,6 +42,7 @@ FAIL_COUNT=0
 WARN_COUNT=0
 SKIP_COUNT=0
 FAIL_NAMES=""
+REPORT_BUF=""
 
 usage() {
   cat <<'EOF'
@@ -66,8 +67,12 @@ EOF
 # ---------------------------------------------------------------------------
 
 report() {
-  # report NAME STATUS DETAIL
-  printf '  %-9s %-5s %s\n' "$1" "$2" "$3"
+  # Buffer per-check detail so the first stdout line can stay the verdict
+  # (FIRST_LINE_CONTRACT). Callers grep -qx the first line; a banner-first
+  # layout made that grep miss every OK/REFUSE run.
+  local line
+  line="$(printf '  %-9s %-5s %s\n' "$1" "$2" "$3")"
+  REPORT_BUF="${REPORT_BUF}${line}"
   case "$2" in
     PASS) PASS_COUNT=$((PASS_COUNT + 1)) ;;
     FAIL) FAIL_COUNT=$((FAIL_COUNT + 1)); FAIL_NAMES="$FAIL_NAMES $1" ;;
@@ -76,8 +81,14 @@ report() {
   esac
 }
 
+emit_details() {
+  printf 'preflight (phase=%s)\n' "$PHASE"
+  printf '%s' "$REPORT_BUF"
+}
+
 fail_closed() {
-  printf 'FAIL-CLOSED: %s\n' "$1" >&2
+  printf 'FAIL-CLOSED: %s\n' "$1"
+  emit_details
   exit 3
 }
 
@@ -137,11 +148,9 @@ make_temp_dir() {
   # be `dir="$(make_temp_dir)" || fail_closed ...`; the status of that assignment IS the
   # substitution's status, which is what makes the propagation work.
   command -v mktemp >/dev/null 2>&1 || {
-    printf 'no mktemp on PATH, so the checks that need a scratch directory cannot run.\n' >&2
     return 3
   }
   mktemp -d "${TMPDIR:-/tmp}/preflight-XXXXXX" 2>/dev/null || {
-    printf 'mktemp could not create a scratch directory under %s.\n' "${TMPDIR:-/tmp}" >&2
     return 3
   }
 }
@@ -279,9 +288,16 @@ chk_python() {
 }
 
 chk_registry() {
-  # The documented S2 order, in order. A baked drive letter is one machine's layout: dead
-  # on macOS/Linux, and on another Windows box with that letter it silently reads someone
-  # else's registry.
+  # BUILD_PHASE_SKIP: a deferred catalog is not a build prerequisite. Review and
+  # all still require a compiled registry because dispatch binds a class to a
+  # snapshot. A SKIP here is not permission to dispatch.
+  if [[ "$PHASE" == "build" ]]; then
+    report registry SKIP "phase=build; deferred registry is not a dispatch prerequisite"
+    return 0
+  fi
+  # The documented S2 order, exclusive not a walk. A baked drive letter is one machine's
+  # layout: dead on macOS/Linux, and on another Windows box with that letter it silently
+  # reads someone else's registry.
   local home="" rung="" candidate
   # The two rungs are different *kinds* of path, and .agent/INSTANTIATE.md S2 is the
   # authority: AGENT_MODEL_REGISTRY names the compiled JSON **file** ("must name the
@@ -484,6 +500,20 @@ selftest() {
       fails=$((fails + 1))
       return 0
     fi
+    # FIRST_LINE_CONTRACT: child stdout's first line must match the exit class.
+    local prefix="" first=""
+    case "$want" in
+      0) prefix="OK:" ;;
+      1) prefix="REFUSE:" ;;
+      2) prefix="USAGE:" ;;
+      3) prefix="FAIL-CLOSED:" ;;
+    esac
+    first="$(printf '%s\n' "$out" | head -n 1)"
+    if [[ -n "$prefix" && "$first" != "$prefix"* ]]; then
+      printf 'FAIL %-38s first line %s (want %s*)\n' "$label" "$first" "$prefix"
+      fails=$((fails + 1))
+      return 0
+    fi
     printf 'PASS %-38s exit %s\n' "$label" "$got"
   }
 
@@ -523,8 +553,24 @@ selftest() {
       fails=$((fails + 1))
       return 0
     fi
+    local prefix="" first=""
+    case "$want" in
+      0) prefix="OK:" ;;
+      1) prefix="REFUSE:" ;;
+      2) prefix="USAGE:" ;;
+      3) prefix="FAIL-CLOSED:" ;;
+    esac
+    first="$(head -n 1 "$out")"
+    if [[ -n "$prefix" && "$first" != "$prefix"* ]]; then
+      printf 'FAIL %-38s first line %s (want %s*)\n' "$label" "$first" "$prefix"
+      fails=$((fails + 1))
+      return 0
+    fi
     printf 'PASS %-38s exit %s\n' "$label" "$got"
   }
+
+  exec 4>&1
+  exec 1>"$tmp/stnotes.txt"
 
   # -- receipts ------------------------------------------------------------
   # Assembled at runtime from pieces. Written literally, instantiate.py substituted this
@@ -622,6 +668,14 @@ selftest() {
   # A phase flag that skipped everything would satisfy every must-refuse arm above, so the
   # skip is asserted in both directions: skipped under build, and *run* under review.
   arm "codex-skipped-when-phase-build" 0 "codex     SKIP" -- --phase build --only codex
+  arm "registry-skipped-when-phase-build" 0 "registry  SKIP" -- --phase build --only registry
+  arm "registry-runs-when-phase-review" 1 "does not exist" \
+    AGENT_MODEL_REGISTRY= AGENT_MODEL_REGISTRY_HOME="$tmp/nosuchhome" -- --phase review --only registry
+  mkdir -p "$tmp/unrelated/.agent"
+  printf '{}\n' >"$tmp/unrelated/.agent/model-registry.json"
+  arm "registry-configured-home-no-fallthrough" 1 "does not exist" \
+    AGENT_MODEL_REGISTRY= AGENT_MODEL_REGISTRY_HOME="$tmp/nosuchhome" \
+    USERPROFILE="$tmp/unrelated" HOME="$tmp/unrelated" -- --only registry
   arm "receipts-still-runs-when-phase-build" 1 "is relative" \
     RECEIPTS_DIR="relative/receipts" -- --phase build --only receipts
 
@@ -633,14 +687,17 @@ selftest() {
   arm_bounded "only-without-operand-is-usage" 2 "--only requires a value" --only
   arm_bounded "phase-without-operand-is-usage" 2 "--phase requires a value" --phase
 
+  exec 1>&4
+  notes="$(cat "$tmp/stnotes.txt" 2>/dev/null || true)"
   rm -rf "$tmp"
-  printf '\n'
   if (( fails > 0 )); then
     printf 'REFUSE: %d arm(s), %d failure(s)\n' "$arms" "$fails"
+    printf '%s\n' "$notes"
     return 1
   fi
   printf 'OK: %d arm(s), 0 failure(s) [%d must-pass arms, so the script is not refusing everything]\n' \
     "$arms" "$musts"
+  printf '%s\n' "$notes"
   return 0
 }
 
@@ -650,15 +707,18 @@ selftest() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -h|--help) usage; exit 0 ;;
+    -h|--help)
+      printf 'OK: help\n'
+      usage
+      exit 0 ;;
     --phase|--only)
       # `shift 2` with one argument remaining shifts *nothing* and returns non-zero, so
       # the loop re-read the same flag forever: `preflight.sh --only` hung until killed.
       # A usage error has to terminate the process -- an automation harness waiting on
       # this pid cannot tell a stall from a slow check, and neither can a person.
       if [[ $# -lt 2 || -z "$2" ]]; then
-        printf 'USAGE: %s requires a value\n' "$1" >&2
-        usage >&2
+        printf 'USAGE: %s requires a value\n' "$1"
+        usage
         exit 2
       fi
       case "$1" in
@@ -667,19 +727,19 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2 ;;
     --selftest) SELFTEST=1; shift ;;
-    *) printf 'USAGE: unknown argument %s\n' "$1" >&2; usage >&2; exit 2 ;;
+    *) printf 'USAGE: unknown argument %s\n' "$1"; usage; exit 2 ;;
   esac
 done
 
 case "$PHASE" in
   all|build|review) ;;
-  *) printf 'USAGE: --phase must be all, build, or review (got %s)\n' "$PHASE" >&2; exit 2 ;;
+  *) printf 'USAGE: --phase must be all, build, or review (got %s)\n' "$PHASE"; exit 2 ;;
 esac
 
 if [[ -n "$ONLY" ]]; then
   case " $ALL_CHECKS " in
     *" $ONLY "*) ;;
-    *) printf 'USAGE: --only must name one of: %s (got %s)\n' "$ALL_CHECKS" "$ONLY" >&2; exit 2 ;;
+    *) printf 'USAGE: --only must name one of: %s (got %s)\n' "$ALL_CHECKS" "$ONLY"; exit 2 ;;
   esac
 fi
 
@@ -688,7 +748,6 @@ if (( SELFTEST )); then
   exit $?
 fi
 
-printf 'preflight (phase=%s)\n' "$PHASE"
 run_checks
 
 if (( PASS_COUNT + FAIL_COUNT + WARN_COUNT + SKIP_COUNT == 0 )); then
@@ -701,8 +760,10 @@ fi
 if (( FAIL_COUNT > 0 )); then
   printf 'REFUSE: %d prerequisite(s) missing:%s (%d passed, %d warning(s), %d skipped)\n' \
     "$FAIL_COUNT" "$FAIL_NAMES" "$PASS_COUNT" "$WARN_COUNT" "$SKIP_COUNT"
+  emit_details
   exit 1
 fi
 printf 'OK: %d check(s) passed, %d warning(s), %d skipped (phase=%s)\n' \
   "$PASS_COUNT" "$WARN_COUNT" "$SKIP_COUNT" "$PHASE"
+emit_details
 exit 0

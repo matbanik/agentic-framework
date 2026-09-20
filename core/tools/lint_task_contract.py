@@ -362,6 +362,24 @@ def check_escaped_pipe(row: Row, path: str) -> None:
         )
 
 
+def check_pwsh_command_scriptblock(row: Row, commands: list[str], path: str) -> None:
+    """Refuse ``pwsh -Command { ... }`` cells.
+
+    That form is a PowerShell scriptblock. cmd.exe and POSIX sh cannot paste it,
+    and markdown table edits truncate the braces. A ``.ps1`` path or a one-line
+    command without ``-Command {`` is the portable shape. ``& { ... }`` as an
+    invocation remains allowed -- it is not ``pwsh -Command``.
+    """
+    for cmd in commands:
+        if re.search(r"(?i)(?:pwsh|powershell)(?:\.exe)?\b[^\n]*-command\s*\{", cmd):
+            raise Refuse(
+                f"{path}:{row.line_no} row {row.id} uses pwsh/powershell -Command "
+                f"with a scriptblock, which is not portable across cmd.exe and POSIX "
+                f"shells. Put the body in a .ps1 file and invoke that path, or write a "
+                f"one-line command without braces."
+            )
+
+
 def check_backticked(row: Row, path: str, template_mode: bool) -> list[str]:
     cell = row.get("validation")
     if not cell.strip() or cell.strip() in NONE_MARKERS:
@@ -685,6 +703,7 @@ def lint(path: str, template_mode: bool, builder_classes: tuple[str, ...]) -> li
         check_cell_count(row, expected, path)
         check_escaped_pipe(row, path)
         commands = check_backticked(row, path, template_mode)
+        check_pwsh_command_scriptblock(row, commands, path)
         reason = check_exit_and_receipt(row, commands, path, template_mode)
         if reason:
             exempt.setdefault(reason, []).append(row.id)
@@ -1038,6 +1057,15 @@ def selftest() -> int:
     # F12: PowerShell braces are not authoring placeholders. Both of these were refused as
     # "unresolved placeholder(s)" in a fully filled row, which pushes an author to weaken the
     # placeholder check -- the one clause here that catches rows nobody can run.
+    arm(
+        "pwsh-command-scriptblock-refused",
+        "1/REFUSE",
+        ["--task", w(_doc(_row(
+            validation=("`pwsh -NoProfile -Command { Get-Date; Write-Output ok } *> "
+                       + RD_TOKEN + "/x.txt; $code=$LASTEXITCODE; "
+                       "Get-Content " + RD_TOKEN + "/x.txt; exit $code`"))))],
+        must_say="not portable",
+    )
     arm(
         "scriptblock-is-not-a-placeholder-ok",
         "0/OK",

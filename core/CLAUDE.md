@@ -15,10 +15,12 @@ and is **not shipped** by this framework — create it yourself if you want it.
 
 Read these files before taking any action:
 
-1. **@AGENTS.md** — Full operating model: priority hierarchy, role specs, workflows, TDD
+1. **PROJECT-PROFILE.md** — if absent, stop and run ADOPTION-GUIDE Step 1. Apply
+   EGRESS_PRECEDENCE, D9_NO_BRANCH, and D6_ADOPTER_ARGV from those answers.
+2. **@AGENTS.md** — Full operating model: priority hierarchy, role specs, workflows, TDD
    protocol, execution contract, session discipline, validation pipeline, and all P0 system
    constraints.
-2. **@GUARDRAILS.md** — Safety SIGNs: plan approval gate, anti-premature-stop scope, system
+3. **@GUARDRAILS.md** — Safety SIGNs: plan approval gate, anti-premature-stop scope, system
    message immunity. These are non-negotiable constraints derived from real governance failures.
 
 ## Key Reminders
