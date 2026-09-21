@@ -233,9 +233,24 @@ Use the reviewer role output contract. Report **findings first**.
 
 Before generating any finding, write 1–2 sentences stating what this execution was supposed
 to deliver for the user (from the plan objective and ACs). The verdict must answer **"does
-the delivered work achieve this intent?"** first. Every blocking finding must name the AC,
-plan requirement, or checklist item it violates — a finding that cannot cite its violated
-contract is an observation, not a blocker.
+the delivered work achieve this intent?"** first. Every blocking finding must name the AC it
+violates — a finding that cannot cite its violated contract is an observation, not a blocker.
+
+**The verdict JSON carries this, and the ledger enforces it (2026-09-21).** Three fields of
+`review-verdict.schema.v2.json`, checked by `review_ledger.py record` before any round is counted:
+
+- `intent_anchor` — your 1–2 sentences, which **must contain the loop's registered goal sentence
+  verbatim** (`INTENT_BINDING`: the ledger normalizes case, whitespace and a trailing period, then
+  requires containment; a mismatch is refused naming the registered goal and your anchor). The goal
+  sentence is in the prompt you were given — quote it, then restate around it in your own words.
+- `intent_achieved` — `yes` / `partial` / `no`. `approved` requires `yes`; `yes` with no blocking
+  finding must be `approved`.
+- `violates` on every `blocking: true` finding — an `AC-<n>` from the plan under review (the ledger
+  registers the plan's AC ids at `begin --ac-file`; a blocker citing anything else is refused by id).
+  Cite the checklist row (IR-n) in the finding text if it helps, but `violates` names the AC.
+
+A `control-defeat` finding additionally names a `mechanism` from `.agent/context/review-vocabulary.yaml`
+(closed set; an unknown slug is refused).
 
 ### Materiality Gate (Required — Applied During Pass 2)
 

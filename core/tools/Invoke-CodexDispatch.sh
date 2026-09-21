@@ -33,6 +33,15 @@ LOOP_ID=""
 NON_REVIEW_DISPATCH=0
 GATE_ONLY=0
 LEDGER_GATE_RESULT="not-applicable"
+# Automatic re-dispatches for ONE requested round (`RETRY_MAX`, 2026-09-21): a child that
+# produced no verdict (no terminal event, or an empty final output) is re-dispatched once,
+# then the wrapper exits non-zero with nothing recorded in the ledger. One, not three with
+# backoff: a second identical failure is a signal about the request, not noise.
+RETRY_MAX=1
+RETRIES=0
+RETRY_REASON=""
+LEDGER_EVALUATE_EXIT=""
+LEDGER_PAYLOAD=""
 # Which kind of review this is. An assertion, not a source: with --LoopId the kind comes
 # from the mode the ledger recorded at `begin`, and a --Kind that disagrees is exit 1.
 KIND=""
@@ -329,10 +338,22 @@ if [[ -n "$LOOP_ID" ]]; then
   # on the ledger's non-zero exit before the exit status could be inspected --
   # turning a REFUSE (a decision that must be reported as exit 9) into an
   # unexplained abort.
+  # `--payload` is the prompt about to be dispatched (2026-09-21): a prompt that omits the
+  # loop's registered goal sentence is refused BEFORE inference, because no verdict it
+  # produced could quote the goal and `record` would refuse it after the round was paid for.
+  # An inline prompt is staged under the receipts dir so the ledger can read it.
+  if [[ -n "$PROMPT_FILE" ]]; then
+    LEDGER_PAYLOAD="$PROMPT_FILE"
+  else
+    mkdir -p "{{RECEIPTS_DIR}}"
+    LEDGER_PAYLOAD="$(mktemp "{{RECEIPTS_DIR}}/ledger-payload-XXXXXX")"
+    printf '%s' "$PROMPT_TEXT" >"$LEDGER_PAYLOAD"
+  fi
   set +e
-  LEDGER_OUTPUT="$("$LEDGER_PYTHON" "$LEDGER_SCRIPT" evaluate --loop-id "$LOOP_ID" 2>&1)"
+  LEDGER_OUTPUT="$("$LEDGER_PYTHON" "$LEDGER_SCRIPT" evaluate --loop-id "$LOOP_ID" --payload "$LEDGER_PAYLOAD" 2>&1)"
   LEDGER_EXIT=$?
   set -e
+  LEDGER_EVALUATE_EXIT="$LEDGER_EXIT"
 
   case "$LEDGER_EXIT" in
     0)
@@ -734,6 +755,12 @@ START_EPOCH="$(date +%s)"
 # $TIMEOUT_SEC was resolved next to the ledger gate (effort default, then the kind
 # floor) so --GateOnly can report it and a review cannot reach this point holding a 0.
 
+# --- the dispatch, with RETRY_MAX automatic re-dispatches ---------------------
+# Everything from launching the child to parsing its terminal event is one attempt. An
+# attempt that produced no verdict is retried once; its artifacts are kept as `attempt1-*`.
+# Nothing here touches the ledger: `record` runs once, after the loop, only for a verdict.
+while :; do
+
 EVENTS_FILE="$RUN_DIR/events.jsonl"
 : >"$EVENTS_FILE"
 : >"$RUN_DIR/stderr.txt"
@@ -806,8 +833,6 @@ wait "$CHILD_PID" 2>/dev/null || true
 CHILD_EXIT_CODE=$?
 # If killed by signal, wait may return 128+N; keep as-is.
 
-rm -f "$PROMPT_TEMP_FILE"
-
 # Parse terminal events
 TERMINAL_EVENT_COUNT=0
 TERMINAL_EVENT_TYPE=""
@@ -844,6 +869,31 @@ except Exception:
     fi
   done <"$EVENTS_FILE"
 fi
+
+# Retry decision (enrolled review dispatches only -- RETRY_MAX is "re-dispatches for one
+# requested round"). One condition: the child produced no verdict. A schema-invalid verdict
+# is NOT retried -- that is a verdict, and `record` will say what is wrong with it.
+RETRY_REASON=""
+if [[ -n "$LOOP_ID" ]]; then
+  if [[ "$TERMINAL_EVENT_COUNT" -eq 0 || ! -s "$FINAL_OUTPUT_PATH" ]]; then
+    RETRY_REASON="no-output"
+  fi
+fi
+if [[ -z "$RETRY_REASON" || "$RETRIES" -ge "$RETRY_MAX" ]]; then
+  break
+fi
+RETRIES=$((RETRIES + 1))
+for artifact in events.jsonl stderr.txt "$FINAL_OUTPUT_FILE_NAME"; do
+  if [[ -e "$RUN_DIR/$artifact" ]]; then
+    mv "$RUN_DIR/$artifact" "$RUN_DIR/attempt${RETRIES}-$artifact"
+  fi
+done
+printf 'RETRY: %s on attempt %s -- re-dispatching once (RETRY_MAX=%s); attempt artifacts kept as attempt%s-*\n' \
+  "$RETRY_REASON" "$RETRIES" "$RETRY_MAX" "$RETRIES"
+done
+# end of attempt loop
+
+rm -f "$PROMPT_TEMP_FILE"
 
 SCHEMA_VALIDATION_ERROR=""
 EXIT_VALUE="$CHILD_EXIT_CODE"
@@ -935,6 +985,37 @@ elif [[ "$IS_SUCCESS" -eq 0 && -z "$ERROR_SUMMARY" ]]; then
   ERROR_SUMMARY="Terminal event validation failed (Count: $TERMINAL_EVENT_COUNT, Type: $TERMINAL_EVENT_TYPE)"
 fi
 
+# Record the round (2026-09-21). Above the retention block because that block compresses or
+# deletes events.jsonl, the usage receipt the ledger reads. `record` is called exactly once,
+# only when a verdict exists; `record` itself validates the verdict against the v2 schema and
+# the loop's intent, citations and vocabulary, and appends nothing on refusal -- so a refusal
+# means the round was NOT consumed and the wrapper exits non-zero: the reviewer's output is
+# not a recordable verdict, and the ledger has said why.
+LEDGER_RECORDED=0
+LEDGER_RECORD_EXIT=""
+if [[ -n "$LOOP_ID" ]]; then
+  if [[ -s "$FINAL_OUTPUT_PATH" && -z "$SCHEMA_VALIDATION_ERROR" && "$TERMINAL_EVENT_TYPE" == "turn.completed" ]]; then
+    set +e
+    "$LEDGER_PYTHON" "$LEDGER_SCRIPT" record --loop-id "$LOOP_ID" \
+      --verdict-file "$FINAL_OUTPUT_PATH" --usage-receipt "$EVENTS_FILE" >"$RUN_DIR/ledger-record.txt" 2>&1
+    LEDGER_RECORD_EXIT=$?
+    set -e
+    cat "$RUN_DIR/ledger-record.txt"
+    if [[ "$LEDGER_RECORD_EXIT" -eq 0 ]]; then
+      LEDGER_RECORDED=1
+    else
+      printf '%s\n' "FAIL: verdict-not-recorded (review_ledger record exit $LEDGER_RECORD_EXIT for loop $LOOP_ID; no round was consumed)."
+      if [[ "$WRAPPER_EXIT_CODE" -eq 0 ]]; then
+        WRAPPER_EXIT_CODE="$LEDGER_RECORD_EXIT"
+        IS_SUCCESS=0
+      fi
+      [[ -n "$ERROR_SUMMARY" ]] || ERROR_SUMMARY="review_ledger record refused the verdict (exit $LEDGER_RECORD_EXIT); see ledger-record.txt"
+    fi
+  else
+    printf '%s\n' "WARN: no verdict to record for loop $LOOP_ID (final output empty or no turn.completed after $RETRIES retry/retries); nothing written to the ledger." >&2
+  fi
+fi
+
 if [[ "$IS_SUCCESS" -eq 1 ]]; then
   if [[ "$RETENTION" == "CompressOnSuccess" && -f "$EVENTS_FILE" ]]; then
     gzip -f -c "$EVENTS_FILE" >"$EVENTS_FILE.gz"
@@ -1008,6 +1089,12 @@ export ICD_AGENTS_SHA="$WORKING_AGENTS_SHA"
 export ICD_WORK_DIR="$CANONICAL_WORK_DIR"
 export ICD_CODEX_HOME="$EFFECTIVE_CODEX_HOME"
 export ICD_FA_JUST="$FULL_ACCESS_JUSTIFICATION"
+export ICD_LEDGER_EVALUATE_EXIT="$LEDGER_EVALUATE_EXIT"
+export ICD_LEDGER_RECORDED="$LEDGER_RECORDED"
+export ICD_LEDGER_RECORD_EXIT="$LEDGER_RECORD_EXIT"
+export ICD_RETRIES="$RETRIES"
+export ICD_RETRY_REASON="$RETRY_REASON"
+export ICD_RUN_DIR="$RUN_DIR"
 
 python3 <<'PY'
 import json, os
@@ -1078,6 +1165,22 @@ manifest = {
     "null_strip_error": env("ICD_NULL_STRIP_ERROR") or None,
     "null_strip_raw_kept": bool(int(env("ICD_NULL_STRIP_RAW_KEPT") or "0")),
     "schema_adapt_error": env("ICD_SCHEMA_ADAPT_NOTE") or None,
+    # The ledger's view of this dispatch and the retry count (2026-09-21), so a receipt
+    # answers "was a round recorded, and why not" without reading the transcript. Same
+    # keys as the .ps1 twin.
+    "ledger": {
+        "loop": env("ICD_LOOP_ID") or None,
+        "evaluate_exit": int(env("ICD_LEDGER_EVALUATE_EXIT")) if env("ICD_LEDGER_EVALUATE_EXIT") else None,
+        "recorded": bool(int(env("ICD_LEDGER_RECORDED") or "0")),
+        "record_exit": int(env("ICD_LEDGER_RECORD_EXIT")) if env("ICD_LEDGER_RECORD_EXIT") else None,
+    },
+    "retries": int(env("ICD_RETRIES") or "0"),
+    "retry_reason": env("ICD_RETRY_REASON") or None,
+    "reviewer_output_bytes": os.path.getsize(final) if os.path.isfile(final) else 0,
+    "attempt_artifacts": sorted(
+        n for n in (os.listdir(env("ICD_RUN_DIR")) if os.path.isdir(env("ICD_RUN_DIR")) else [])
+        if n.startswith("attempt")
+    ),
     "benchmark_isolation": bool(int(env("ICD_BENCH") or "0")),
     "benchmark_context_receipt": env("ICD_BENCH_RECEIPT") or None,
     "benchmark_context_sha256": env("ICD_BENCH_SHA") or None,
@@ -1115,6 +1218,8 @@ Start: $START_UTC
 End: $END_UTC
 Elapsed: $ELAPSED_MS ms
 CLI Version: $CLI_VERSION
+Ledger: loop=${LOOP_ID:-<none>} recorded=$LEDGER_RECORDED record_exit=${LEDGER_RECORD_EXIT:-<not called>}
+Retries: $RETRIES${RETRY_REASON:+ (last reason: $RETRY_REASON)}
 EOF
 
 exit "$WRAPPER_EXIT_CODE"

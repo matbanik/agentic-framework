@@ -1,0 +1,56 @@
+# Mechanism vocabulary — the CLOSED set `tools/review_ledger.py record` enforces.
+#
+# `begin --vocabulary` points a loop at this file (it is the default, resolved beside the tool as
+# `.agent/context/review-vocabulary.yaml`); `record` refuses any `control-defeat` finding whose
+# `mechanism` is not one of the `mechanisms[].id` below, naming the slug. That is the whole point of a
+# closed set: four paraphrases of one defeat cannot each start a fresh count, so MECHANISM_LIMIT (3)
+# is reached by the third instance of the class. Reuse the catalogued mechanism the defeat belongs to;
+# add a mechanism only when the control itself is new.
+#
+# A *mechanism* is a control that a review loop can defeat. A *manoeuvre* is one concrete way it was
+# defeated. The counter reads mechanisms only; manoeuvre lists are history kept legible, and
+# `supersedes` records that a later manoeuvre is the same defeat re-expressed.
+#
+# This is a SEED. It ships the three mechanisms the reference adopter's loops actually defeated,
+# because a control nobody has ever defeated is not yet worth a slug. Extend it from your own
+# review history, one mechanism per control.
+
+mechanisms:
+  - id: task-row-completion-predicate
+    description: >-
+      The check that decides whether a task row may be marked complete. Typical defeats: the
+      predicate matches the closeout rows rather than the work rows; it matches nothing because the
+      status cells are formatted differently than it expects (a gate that cannot fail); it compares
+      a count instead of the set; its anchor is a line number that moves.
+    manoeuvres:
+      - id: regex-matches-nothing
+        description: The predicate matched zero rows because of cell formatting, so it passed vacuously.
+      - id: count-substituted-for-set
+        description: The check compared a count instead of the set, so a row swapped for another passed.
+        supersedes: regex-matches-nothing
+
+  - id: verdict-to-state-transition
+    description: >-
+      The link between a reviewer verdict and the loop state it is supposed to move. Defeated when
+      a verdict is written while no round can consume it, when an approval is issued against a
+      state it cannot reach, or when the closeout reads the review file's own frontmatter instead
+      of the ledger — so the artifact under review is also the authority on whether it passed.
+    manoeuvres:
+      - id: approval-against-unreachable-state
+        description: An approval was issued while the loop was in a state no verdict could move.
+      - id: frontmatter-read-instead-of-ledger
+        description: Closeout read the review file's frontmatter rather than the ledger.
+        supersedes: approval-against-unreachable-state
+
+  - id: review-conduct-detection
+    description: >-
+      The wrapper-shipped detector that compares a repository snapshot across a full-access review
+      dispatch and refuses to record a verdict produced by a rule-breaking run. Defeated when a
+      sibling wrapper ships without it, when the snapshot compares path state instead of content,
+      or when paths it cannot hash are recorded as an identical placeholder in both snapshots.
+    manoeuvres:
+      - id: path-state-compared-instead-of-content
+        description: The snapshot compared porcelain path state, so an edit to an already-dirty file left it byte-identical.
+      - id: placeholder-absorbs-change
+        description: Unhashable paths were recorded identically in both snapshots, so changes behind them passed.
+        supersedes: path-state-compared-instead-of-content

@@ -44,6 +44,16 @@
     "summary": {
       "type": "string"
     },
+    "intent_anchor": {
+      "description": "The reviewer's one-sentence statement of what the work under review was for, which must quote the loop's registered goal sentence verbatim (INTENT_BINDING, enforced by review_ledger.py: normalized containment). A verdict that cannot say what the work was for is judging something else.",
+      "type": "string",
+      "minLength": 20
+    },
+    "intent_achieved": {
+      "description": "Whether the work achieves the stated intent, independent of whether findings block. `yes` with no blocking finding must be `approved`; `approved` must be `yes`. The ledger enforces both and prints the latest value first in every refusal.",
+      "type": "string",
+      "enum": ["yes", "partial", "no"]
+    },
     "findings": {
       "type": "array",
       "items": {
@@ -87,6 +97,11 @@
           "status": {
             "type": "string",
             "enum": ["open", "fixed", "accepted_risk"]
+          },
+          "violates": {
+            "description": "The contract this finding violates. Required for every `blocking: true` finding and checked by review_ledger.py against the set derived from the plan at `begin --ac-file` (AC-7): a finding that cannot cite its violated contract is an observation, not a blocker. The pattern admits checklist ids so a registry may accept them; the reference ledger registers the plan's AC ids.",
+            "type": "string",
+            "pattern": "^(AC-\\d+[a-z]?|PR-\\d+|IR-\\d+|DR-\\d+)$"
           }
         },
         "required": [
@@ -159,6 +174,8 @@
     "requested_verbosity",
     "verdict",
     "summary",
+    "intent_anchor",
+    "intent_achieved",
     "findings",
     "checklist_results"
   ],

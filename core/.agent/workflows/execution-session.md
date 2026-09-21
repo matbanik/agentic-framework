@@ -169,8 +169,9 @@ Before declaring any MEU "ready for review" or writing completion claims in the 
 
 > [!IMPORTANT]
 > **After Step 4b completes, the agent auto-dispatches `/execution-critical-review`**
-> to an external CLI reviewer and loops until APPROVED or the round cap is reached.
-> The human no longer needs to manually invoke `/execution-critical-review`.
+> to an external CLI reviewer and loops until APPROVED or the review ledger stops it (then the
+> pause-and-`continue` protocol below applies). The human no longer needs to manually invoke
+> `/execution-critical-review`.
 
 Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/execution-critical-review`:
 
@@ -178,11 +179,27 @@ Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/execution-critical-re
 
 When every machine rung is rate-limited or unavailable, this loop does not fall through to another model. It takes the human-handoff path in [`cli-dispatch/SKILL.md`](../skills/cli-dispatch/SKILL.md) §0: write the review prompt for manual external submission and stop at a human gate. Never self-review, and never substitute a reviewer on the author's own vendor.
 
-**Correction Loop:**
+**Before the first round**, open the loop once (the wrapper never does this):
+`python tools/review_ledger.py begin --loop-id exec-<plan-slug> --review-mode execution --producer <builder agent> --goal-anchor "<one sentence: what this execution was for>" --ac-file docs/execution/plans/<plan>/implementation-plan.md`
+— the goal sentence must also appear verbatim in every review prompt (the wrapper's `evaluate --payload` refuses a prompt that omits it, before inference), and the reviewer writes its rolling review file under `{{RECEIPTS_DIR}}/dispatch/<label>/`, which you copy into `handoffs/` after the dispatch (a repository write during a review dispatch is a conduct violation).
+
+**Correction Loop (pause-and-`continue` protocol, 2026-09-21):**
 - If `changes_required`: read findings, apply code/test corrections, re-run quality gates, re-dispatch
+  with the same `--LoopId` — the ledger numbers the rounds; nothing to refresh or abort.
 - If `approved`: **continue immediately to Step 5 in the same turn** — the 4c→5 boundary is NOT a stop point
-- **Round cap: 6 rounds** — HARD STOP with TL;DR summary, wait for human "continue review loop"
-- On human resume: continue loop (round 7+) until APPROVED
+- **If the wrapper exits 9 (the ledger refused the round)**: a stop fired — round budget
+  (`ROUND_BUDGETS`, execution = 6), token budget (`TOKEN_BUDGETS`), a mechanism at `MECHANISM_LIMIT`,
+  scaffolding, or instrument drift. The ledger printed `STOP_READOUT`: intent first, the exact
+  `continue` command last. What happens next depends only on who is present:
+  - **attended** — a human is in this chat: show the `STOP_READOUT` verbatim, **end the turn**, and
+    wait for the human's sentence. Then record it — their words, never a paraphrase — and re-dispatch:
+    `python tools/review_ledger.py continue --loop-id <loop-id> --rounds 1 [--tokens N] [--relieve-mechanism SLUG] --said "<the human's sentence, 20+ non-ws chars>" --by <name> --at <ISO8601>`
+    `continue` is **uncapped** and lifts every stop active at that moment; the loop then runs until
+    `approved` or the next stop, where the same exchange happens again. One human sentence per stop.
+  - **unattended** — no human turn is available (an automated or scheduled run, a session that cannot
+    ask): the run **ends** with the `STOP_READOUT` as its last output. That is the protection working:
+    the stops exist so an unattended loop cannot spend API budget forever, and nothing else. Never
+    synthesize a `continue`, never edit the ledger, never open a fresh loop to route around a stop.
 
 > [!CAUTION]
 > **Steps 4 → 4b → 4c → 5 → 6 → 7 are ONE continuous turn — there is no seam.** The `approved` verdict and writing the reflection/metrics belong to the same pass; the boundary between them is NOT a stopping point, NOT a "natural pause", and NOT a place to offer the user a choice. The reflection and metrics are reversible work inside an already-approved plan and need no permission (`AGENTS.md` §Hard Gates). **The following are VIOLATIONS, not courtesies** — if you catch yourself composing any of them, that urge is the bug:

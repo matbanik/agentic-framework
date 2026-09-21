@@ -424,6 +424,14 @@ if ($kindWasGiven -and $NonReviewDispatch) {
 
 $ledgerGateResult = 'not-applicable'
 $ledgerMode = $null
+# Automatic re-dispatches for ONE requested round (`RETRY_MAX`, 2026-09-21; parity with the
+# .sh wrapper): a child that produced no verdict is re-dispatched once, then the wrapper
+# exits non-zero with nothing recorded in the ledger.
+$retryMax = 1
+$retries = 0
+$retryReason = ''
+$ledgerEvaluateExit = $null
+$ledgerPayload = $null
 if ($loopIdWasGiven) {
     $ledgerScript = Join-Path $PSScriptRoot 'review_ledger.py'
     if (-not (Test-Path -LiteralPath $ledgerScript -PathType Leaf)) {
@@ -437,8 +445,20 @@ if ($loopIdWasGiven) {
         exit 3
     }
 
-    $ledgerOutput = & $pythonExe $ledgerScript evaluate --loop-id $LoopId 2>&1
+    # `--payload` is the prompt about to be dispatched (2026-09-21): a prompt that omits the
+    # loop's registered goal sentence is refused BEFORE inference, because no verdict it
+    # produced could quote the goal and `record` would refuse it after the round was paid for.
+    if (-not [string]::IsNullOrEmpty($PromptFile)) {
+        $ledgerPayload = $PromptFile
+    } else {
+        $payloadDir = "{{RECEIPTS_DIR}}"
+        if (-not (Test-Path -LiteralPath $payloadDir)) { New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null }
+        $ledgerPayload = Join-Path $payloadDir ("ledger-payload-" + [System.IO.Path]::GetRandomFileName() + ".md")
+        [System.IO.File]::WriteAllText($ledgerPayload, $PromptText, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    $ledgerOutput = & $pythonExe $ledgerScript evaluate --loop-id $LoopId --payload $ledgerPayload 2>&1
     $ledgerExit = $LASTEXITCODE
+    $ledgerEvaluateExit = $ledgerExit
     $ledgerText = ($ledgerOutput | Out-String).TrimEnd()
 
     switch ($ledgerExit) {
@@ -954,6 +974,12 @@ foreach ($arg in $argsList) {
 $start = Get-Date
 $startUtc = $start.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
+# --- the dispatch, with $retryMax automatic re-dispatches (parity with the .sh wrapper) ---
+# Everything from launching the child to parsing its terminal event is one attempt. An
+# attempt that produced no verdict is retried once; its artifacts are kept as `attempt1-*`.
+# Nothing here touches the ledger: `record` runs once, after the loop, only for a verdict.
+while ($true) {
+
 # Determine the direct launcher based on file extension to avoid Win32 execution failures
 $processFilePath = $resolvedExecutable
 $processArgsList = $argsList
@@ -1079,7 +1105,6 @@ try {
 $proc.Refresh()
 $exitCode = $proc.ExitCode
 $exitValue = if ($exitCode -eq $null) { 0 } else { $exitCode }
-Remove-Item -Path $promptTempFile -ErrorAction SilentlyContinue
 
 # 5. CLI version already captured in preflight ($cliVersion)
 
@@ -1109,7 +1134,30 @@ if (Test-Path $eventsFile) {
     }
 }
 
-# (Token/usage parsing retired 2026-07-21 -- token tracking eliminated.)
+# Retry decision (enrolled review dispatches only -- $retryMax is "re-dispatches for one
+# requested round"). One condition: the child produced no verdict. A schema-invalid verdict
+# is NOT retried -- that is a verdict, and `record` will say what is wrong with it.
+$retryReason = ''
+if ($loopIdWasGiven) {
+    $finalMissing = (-not (Test-Path -LiteralPath $finalOutputPath)) -or ((Get-Item -LiteralPath $finalOutputPath).Length -eq 0)
+    if ($terminalEventCount -eq 0 -or $finalMissing) { $retryReason = 'no-output' }
+}
+if ([string]::IsNullOrEmpty($retryReason) -or $retries -ge $retryMax) { break }
+$retries++
+foreach ($artifact in @('events.jsonl', 'stderr.txt', $finalOutputFileName)) {
+    $src = "$runDir/$artifact"
+    if (Test-Path -LiteralPath $src) {
+        Move-Item -LiteralPath $src -Destination "$runDir/attempt$retries-$artifact" -Force
+    }
+}
+Write-Host "RETRY: $retryReason on attempt $retries -- re-dispatching once (RETRY_MAX=$retryMax); attempt artifacts kept as attempt$retries-*"
+}
+# end of attempt loop
+
+Remove-Item -Path $promptTempFile -ErrorAction SilentlyContinue
+
+# (Token/usage parsing retired 2026-07-21 -- token tracking eliminated; the ledger's
+# `record --usage-receipt` reads the usage out of events.jsonl since 2026-09-21.)
 
 # Undo the nullable widening the API schema needed (see adapt_output_schema.py) before
 # anything validates this file against the unmodified shipped schema. The pre-strip
@@ -1215,6 +1263,37 @@ if ($isSuccess -and $lateCompletionOk) {
     $errorSummary = "Terminal event validation failed (Count: $terminalEventCount, Type: $terminalEventType)"
 }
 
+# Record the round (2026-09-21), above the retention block because that block compresses or
+# deletes events.jsonl, the usage receipt the ledger reads. `record` is called exactly once,
+# only when a verdict exists; `record` itself validates the verdict (v2 schema, intent,
+# citations, vocabulary) and appends nothing on refusal -- a refusal means no round was
+# consumed and the wrapper exits non-zero.
+$ledgerRecorded = $false
+$ledgerRecordExit = $null
+if ($loopIdWasGiven) {
+    $finalPresent = (Test-Path -LiteralPath $finalOutputPath) -and ((Get-Item -LiteralPath $finalOutputPath).Length -gt 0)
+    if ($finalPresent -and [string]::IsNullOrEmpty($schemaValidationError) -and $terminalEventType -eq 'turn.completed') {
+        $recordOutput = @(& $pythonExe $ledgerScript record --loop-id $LoopId --verdict-file $finalOutputPath --usage-receipt $eventsFile 2>&1)
+        $ledgerRecordExit = $LASTEXITCODE
+        Write-TextNoBom "$runDir/ledger-record.txt" (($recordOutput | ForEach-Object { [string]$_ }) -join "`n")
+        $recordOutput | ForEach-Object { [Console]::Out.WriteLine($_) }
+        if ($ledgerRecordExit -eq 0) {
+            $ledgerRecorded = $true
+        } else {
+            [Console]::Out.WriteLine("FAIL: verdict-not-recorded (review_ledger record exit $ledgerRecordExit for loop $LoopId; no round was consumed).")
+            if ($wrapperExitCode -eq 0) {
+                $wrapperExitCode = $ledgerRecordExit
+                $isSuccess = $false
+            }
+            if ([string]::IsNullOrEmpty($errorSummary)) {
+                $errorSummary = "review_ledger record refused the verdict (exit $ledgerRecordExit); see ledger-record.txt"
+            }
+        }
+    } else {
+        [Console]::Error.WriteLine("WARN: no verdict to record for loop $LoopId (final output empty or no turn.completed after $retries retry/retries); nothing written to the ledger.")
+    }
+}
+
 function Compress-GzipFile {
     param([string]$src, [string]$dest)
     $srcFile = [System.IO.File]::OpenRead($src)
@@ -1284,6 +1363,18 @@ $statusManifest = [ordered]@{
     # in a receipt whose prompt was plainly a review is the audit signal.
     loop_id = if ([string]::IsNullOrWhiteSpace($LoopId)) { $null } else { $LoopId }
     ledger_gate = $ledgerGateResult
+    # The ledger's view of this dispatch and the retry count (2026-09-21; same keys as the
+    # .sh twin), so a receipt answers "was a round recorded, and why not".
+    ledger = [ordered]@{
+        loop = if ([string]::IsNullOrWhiteSpace($LoopId)) { $null } else { $LoopId }
+        evaluate_exit = $ledgerEvaluateExit
+        recorded = [bool]$ledgerRecorded
+        record_exit = $ledgerRecordExit
+    }
+    retries = $retries
+    retry_reason = if ([string]::IsNullOrEmpty($retryReason)) { $null } else { $retryReason }
+    reviewer_output_bytes = if (Test-Path -LiteralPath $finalOutputPath) { (Get-Item -LiteralPath $finalOutputPath).Length } else { 0 }
+    attempt_artifacts = @(Get-ChildItem -LiteralPath $runDir -Filter 'attempt*-*' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Sort-Object)
     # The kind the ledger recorded for this loop, not the flag the caller typed, plus
     # whether it moved the timeout. A truncated execution review whose receipt says
     # `timeout_floor_applied: false` is a wrapper/ledger pairing problem; one that says
@@ -1364,6 +1455,8 @@ Start: $startUtc
 End: $endUtc
 Elapsed: $elapsedMs ms
 CLI Version: $cliVersion
+Ledger: loop=$(if ([string]::IsNullOrEmpty($LoopId)) { '<none>' } else { $LoopId }) recorded=$ledgerRecorded record_exit=$(if ($null -eq $ledgerRecordExit) { '<not called>' } else { $ledgerRecordExit })
+Retries: $retries$(if ([string]::IsNullOrEmpty($retryReason)) { '' } else { " (last reason: $retryReason)" })
 "@
 Write-TextNoBom "$runDir/receipt.txt" $receiptText
 
