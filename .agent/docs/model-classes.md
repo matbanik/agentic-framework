@@ -80,12 +80,33 @@ declared `fallback_rungs` are the chain, in order:
 
 1. `independent_reviewer` — primary. Cross-vendor; read-only sandbox.
 2. `surface_orchestrator` — secondary, **surface-level work only**.
-3. `coordinator` on `claude-p`, flagged when the author vendor matches — last
-   resort, weaker diversity, never same-session self-review.
+3. **A human.** There is no third machine rung. A same-vendor reviewer is not a
+   weaker rung but a prohibited one, and self-review never substitutes for the
+   human handoff.
 
 Rate-limit rungs *within* a binding (`fallbacks:`) are reported by the resolver
 and never auto-selected, so a receipt always says which snapshot actually
-answered.
+answered. A binding need not declare any. Without them, a rate-limited primary
+goes straight to the class's `fallback_rungs`.
+
+## Default and request-only snapshots
+
+Each binding names one default. Some snapshots should run only when someone asks
+for them, such as a pricier sibling of the default. Keep such a snapshot in the
+catalog and out of the binding's `slug`, `alternates` and `fallbacks`. It is
+reached two ways, and both leave a trace:
+
+- the explicit override (`Resolve-AgentModel -Slug`, `resolve_model.py --slug`, a
+  dispatch wrapper's `-Model`), which resolves as `explicit_override` and still
+  has to satisfy the class contract;
+- a task row that names it.
+
+`alternates` is the wrong home. The resolver falls through to an alternate on its
+own when the default fails the contract or the requested effort, so a snapshot
+listed there can answer without anyone having asked for it. A class that must
+never run unasked goes further: `architecture_single_shot` carries
+`invoke_only_on_explicit_human_direction: true`, and `coordinator` and `builder`
+`forbid` its snapshot.
 
 ## What this document must not do
 

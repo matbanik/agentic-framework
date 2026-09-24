@@ -87,10 +87,26 @@ Edit `<home>/model-registry.yaml`:
 
 1. **`catalog`** — one entry per snapshot your harnesses accept. Required fields
    are in the schema (`vendor`, `harness_ids`, `price_band`, `capabilities`).
-   Absolute `sources[]` URLs. Catalog ids must not contain `latest`.
+   Absolute `sources[]` URLs. Catalog ids must not contain `latest`. Two fields
+   are easy to get wrong:
+   - **`harness_ids`.** Probe every id on every harness before you trust it, and
+     run a made-up name alongside as a control, because some harnesses quietly
+     switch to another model when they do not recognise a name. Do not derive a
+     new id from its predecessor's pattern. Vendors change the id shape between
+     versions; one dropped a harness prefix from one minor version to the next.
+   - **`context.input_tokens`.** Without `reprices_whole_request_above: true`
+     this is a hard window. When the vendor reprices the *whole* request above
+     some input size, record that size rather than the larger window and set the
+     flag. The resolver then refuses a dispatch that would straddle it
+     (`split_the_review`). Keep the real window in `price_note`.
 2. **`classes.*.bindings`** — for each class you will dispatch, map each harness
    to a catalog id. Leave a class unbound on a harness you do not run; the
-   resolver will say `unresolvable_on_harness` rather than substituting.
+   resolver will say `unresolvable_on_harness` rather than substituting. The
+   binding is the default. A snapshot that should run only when someone asks
+   for it stays out of the binding's `slug`, `alternates` and `fallbacks`;
+   callers reach it through the explicit override, which resolves as
+   `explicit_override` and says so on the receipt. `fallbacks` is optional. The class list (`model-classes.md`,
+   §Default and request-only snapshots) has the full rule.
 3. **`forbid`** — once the architecture-reserved snapshot is in the catalog, add
    its catalog id to `coordinator` and `builder` `contract.forbid`. The template
    omits `forbid` so it ships zero snapshot ids.
@@ -302,7 +318,12 @@ both the human's; every other step below is delegable to an agent.
    no proof either — a reason to be more careful, and to say so in the changelog
    rather than leave the absence implicit.
 5. **Edit the binding** and bump `updated:`. An agent may prepare the diff; a human
-   applies it.
+   applies it. If the bump demotes the old default to request-only, take it out of
+   the binding's `alternates` and `fallbacks` as well: left there, the resolver can
+   still reach it without anyone asking. Then re-point any test that exercises the
+   old snapshot's own behaviour (an effort clamp, a context cliff) at the explicit
+   override, so it still tests that snapshot rather than silently testing the new
+   default.
 6. **Compile.** `resolve_model.py validate --strict --write-compiled`. `--strict`
    adds the cross-reference checks a JSON Schema cannot express: forbidden ids,
    retired slugs, unresolvable harnesses. This form validates the **global**

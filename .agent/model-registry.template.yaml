@@ -11,9 +11,22 @@
 # `.agent/`, then follow INSTANTIATE.md. The unfilled template does not pass
 # schema validation (`catalog` requires at least one entry) — that is
 # intentional.
+#
+# One default per (class, harness). A binding's `slug` is what the resolver
+# returns when nobody asks for anything else. A snapshot that should run only
+# when someone asks for it by name stays in `catalog` and out of `slug`,
+# `alternates` and `fallbacks`. Callers reach it through the explicit override
+# (`-Slug`, `--slug`, a dispatch wrapper's `-Model`), which resolves as
+# `explicit_override`, or through a task row that names it. `alternates` is the
+# wrong home: the resolver falls through to an alternate on its own when the
+# default fails the contract or the requested effort. `fallbacks` is optional.
+# A binding without it has no same-class rate-limit rung, and a rate limit goes
+# to the class's `fallback_rungs`. A class that must never run unasked uses the
+# stronger pattern on `architecture_single_shot`: a contract flag, plus `forbid`
+# on the classes that must not bind its snapshot.
 
 schema_version: 1
-updated: '2026-09-05'
+updated: '2026-09-23'
 bump_gate: human
 
 catalog: {}
@@ -57,13 +70,12 @@ classes:
       price_ceiling_band: high
       auth_mode: chatgpt-plan
     bindings: {}
+    # No same-vendor rung: past `surface_orchestrator` the chain ends at a human
+    # (model-routing.md, "Same-vendor review is PROHIBITED").
     fallback_rungs:
       - harness: gemini-cli
         class: surface_orchestrator
         scope: surface_only
-      - harness: claude-p
-        class: coordinator
-        flag_if_same_vendor_as_author: true
 
   checklist_validator:
     contract:

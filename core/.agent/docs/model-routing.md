@@ -113,7 +113,8 @@ The chain, in order:
 
 The class's declared `fallbacks` are the rate-limit rungs within rung 1. They are
 reported by the resolver but never auto-selected, so a receipt always says which
-snapshot actually answered.
+snapshot actually answered. A binding may declare none; a rate-limited rung 1 then
+goes to rung 2.
 
 ### Effort ceilings and cost (Research-backed, 2026-09-04)
 
@@ -133,7 +134,7 @@ copied into prose is stale the day the vendor reprices.
   `price_ceiling_band`, and the resolver refuses a snapshot above it. Quality-First
   (`AGENTS.md` §Session Discipline) governs: do **not** drop a review effort tier to
   recover a price delta.
-- **Guard the context cliff.** One snapshot reprices the *entire* request above its
+- **Guard the context cliff.** Some snapshots reprice the *entire* request above an
   input boundary — not just the overflow tokens. Large multi-handoff review dispatches
   are the realistic way to cross it, so the resolver raises `split_the_review` when a
   declared `--input-tokens` would straddle it. Split the review rather than straddle.

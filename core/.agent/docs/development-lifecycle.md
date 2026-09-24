@@ -293,7 +293,7 @@ docs/build-plan/
 ### Rate Limit Fallback
 
 When a reviewer CLI hits a rate limit, the [Rate-Limit Fallback Protocol](https://{{REPO_URL}}/blob/main/.agent/skills/cli-dispatch/SKILL.md) walks the independent-reviewer chain **in order first**, and only escalates to human/web submission when **all rungs** are exhausted:
-1. Try the next reviewer rung (`independent_reviewer` → `surface_orchestrator` → `isolated_worker` on `claude-p` last-resort; canonical in `.agent/docs/model-routing.md`)
+1. Try the next reviewer rung (`independent_reviewer` → `surface_orchestrator`; there is no same-vendor rung; canonical in `.agent/docs/model-routing.md`)
 2. If **all rungs** are rate-limited/unavailable: save prompt to `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`, adapt for web submission (inline context, markdown)
 3. Human submits to web interface manually (a HARD STOP at a human gate — never self-review)
 4. Paste response back; agent continues
