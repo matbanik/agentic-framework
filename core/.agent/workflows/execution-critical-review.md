@@ -16,7 +16,7 @@ This is the workflow for prompts like:
 
 // turbo-all
 // NOTE: turbo-all sets SafeToAutoRun=true for non-destructive commands (rg, Get-Content, etc.).
-// It does NOT override AGENTS.md §Commits: "Never auto-commit." Git commit/push still requires explicit user direction.
+// It does NOT override AGENTS.md §Authority and Approval: "Never auto-commit." Git commit/push still requires explicit user direction.
 
 ## Write Scope (Non-Negotiable)
 
@@ -165,28 +165,22 @@ Read:
 
 Use fast, reproducible command checks. Prefer `rg`.
 
-### Receipts Authoritative (do not re-run the suite to confirm a receipt)
+### Durable evidence and final-state verification
 
-> [!IMPORTANT]
-> **A receipt that is present, complete, and matches the claim is the evidence. Do not
-> re-run the full test suite to corroborate it.** The builder already paid for that run;
-> repeating it inside the review buys no new information, and it is the single largest
-> consumer of the review's timeout — a reviewer that spends 20 minutes re-running `tests/`
-> and then times out has produced no verdict while still spending the round.
+Read the handoff's pasted evidence.v1 command/procedure, status, scope, tested state and
+decisive output. Verify a fresh passing full gate against independently obtained current
+D6 input identity. Do not rerun an established matching full run just to repeat its summary;
+run independent targeted/adversarial probes that test the claims.
 
-This is not permission to review on trust. Run a **targeted** command, and say in the
-verdict's `checklist_results` which one and why, when the receipt is:
+Missing, truncated, contradictory or stale evidence is a finding. Reproduce the affected
+check. When the final full gate is missing or its input identity cannot be established,
+require a fresh full run; a targeted probe cannot repair a missing full-gate claim.
+After input-changing corrections, rerun affected checks and full before approval. Runtime
+or GUI failures need real blocker evidence and a linked follow-up, not automatic waivers.
 
-| Receipt state | What to do |
-|---|---|
-| Absent | Run the check yourself. A claim with no receipt is unverified, and "the builder says so" is not a `pass` row. |
-| Truncated, or has no exit code | Re-run **that one command**, not the suite. |
-| Self-contradictory (`0 failed` under a non-zero exit, a count that does not add up) | Re-run that one command; the contradiction itself is a finding. |
-| For a command that is not the one the claim needs (a filtered subset presented as the whole suite, `--exitfirst`, a skipped file) | Finding. Name the gap; run the missing part if it is cheap. |
-| Present, complete, consistent | **Read it. Do not re-run it.** Cite the receipt path in the checklist row. |
-
-For GUI/E2E specifically: prefer a post-edit Playwright receipt over re-launching Electron
-inside the reviewer — see the timeout note in `.agent/skills/cli-dispatch/SKILL.md`.
+Paste decisive reviewer observations in the rolling review artifact, including actual
+command/exit/result. Raw dispatch/receipt paths are only working output, never the sole
+durable citation. Apply PROFILE C redaction and the output evidence policy.
 
 ### Required Sweep Types
 

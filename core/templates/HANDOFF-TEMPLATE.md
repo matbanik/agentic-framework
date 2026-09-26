@@ -4,7 +4,7 @@ project: "{project-slug}"
 meu: "{MEU-ID}"
 status: "draft"
 action_required: "VALIDATE_AND_APPROVE"
-template_version: "2.1"
+template_version: "2.2"
 verbosity: "standard"
 plan_source: "docs/execution/plans/{YYYY-MM-DD}-{project-slug}/implementation-plan.md"
 build_plan_section: "bp{NN}s{X.Y}"
@@ -55,6 +55,12 @@ predecessor: "{previous-handoff-filename or none}"
 
 ### Commands Executed
 
+For each observation, include an `evidence.v1` JSON block from
+`.agent/docs/output-evidence-policy.md` with command/procedure, cwd, scope, phase,
+exit/result, tested_state and decisive pasted output. The table is a readable index,
+not a substitute. Scratch paths appear only in commands. For final implementation
+review include fresh full evidence bound to the independently obtained D6 state.
+
 | Command | Exit Code | Key Output |
 |---------|-----------|------------|
 | `{exact command}` | 0 | {relevant output} |
@@ -97,8 +103,8 @@ _Left blank for reviewer agent. Reviewer fills this section during `/validation-
 
 1. Read Scope + AC table
 2. Verify each AC against Evidence section (file:line, not memory)
-3. Run all Commands Executed and compare output
-4. Run Quality Gate commands independently
+3. Independently probe the claimed behavior and compare decisive output
+4. Verify the full gate is fresh and matches current D6 inputs; rerun if changed or unproven
 5. Record findings below
 
 ### Findings
@@ -126,6 +132,11 @@ _Repeatable section. Add one per correction round._
 ---
 
 ## Deferred Items
+
+Blocked rows require `B-<row-id>`, a labeled follow-up link, and a matching block
+under this section per the output evidence policy. Paste the actual command/nonzero
+exit/error for an external blocker, or link the pending human decision. For D9=no,
+use a scheduled domain task in place of a MEU. Unfinished implementation is not blocked.
 
 _Optional. Skip this section if no items are deferred._
 

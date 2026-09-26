@@ -4,7 +4,7 @@ date: "{YYYY-MM-DD}"
 source: "docs/build-plan/{section-reference}"
 meus: ["{MEU-ID-1}", "{MEU-ID-2}"]
 status: "draft"
-template_version: "2.0"
+template_version: "2.2"
 ---
 
 # Implementation Plan: {Project Title}
@@ -194,3 +194,13 @@ rtk proxy uv run python tools/export_openapi.py -o openapi.committed.json *> {{R
 ## Research References
 
 - {link to research doc or ADR}
+
+## Validation stage contract
+
+Bind checks to PROFILE D6: static, targeted, fresh full and optional runtime. Record argv
+or manual procedure, cwd, selected scope (including shared fixtures/configuration), blocking
+status, expected result, native shell and evidence.v1 output. Define how current input
+identity is obtained independently for code/tests/config/environment/external inputs.
+The final implementation review follows one fresh full gate; partial/cache/snapshot-only
+output cannot satisfy it. Disable intermediate reuse until identity is implemented.
+Non-software plans use actual acceptance observations. D9=no omits MEU tools/state updates.

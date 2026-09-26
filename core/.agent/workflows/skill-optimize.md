@@ -20,7 +20,7 @@ Use this for prompts like:
 
 // turbo-all
 // NOTE: non-destructive reads + the package's own confined writes (staging only).
-// Never auto-commit (AGENTS.md §Commits). Never write a production instruction doc.
+// Never auto-commit (AGENTS.md §Authority and Approval). Never write a production instruction doc.
 
 ---
 
@@ -41,7 +41,7 @@ Use this for prompts like:
 ## Prerequisites
 
 Read:
-1. `AGENTS.md` (§Human Approval Gate, §Deletion Budget, §Dual-Agent Workflow)
+1. `AGENTS.md` (§Authority and Approval, §Authority and Approval, §Independent Review)
 2. `.agent/skills/skill-optimizer/SKILL.md` — bounded-edit format, rubric, buffer + LEARNED contract
 3. `.agent/skills/skill-optimizer/rubric-templates.md` — the LLM-judge rubric (gate refuses without it)
 4. `.agent/skills/cli-dispatch/SKILL.md` — how to dispatch the optimizer + judge
@@ -93,7 +93,7 @@ is always `blocked_for_human`**.
 
 Present the staging report. **Human adoption is manual and terminal**: a human
 reviews the staged LEARNED block and copies it into the production doc by hand. The
-tool has no `--adopt`/`--apply` path (AGENTS.md §Human Approval Gate; GUARDRAILS SIGN 1/3).
+tool has no `--adopt`/`--apply` path (AGENTS.md §Authority and Approval; GUARDRAILS SIGN 1/3).
 
 ---
 

@@ -365,7 +365,7 @@ When a reviewer CLI hits a rate limit, the [Rate-Limit Fallback Protocol](https:
 
 **Purpose:** Independent AI review of the completed implementation for correctness, test rigor, and contract compliance. As in Phase 5, the reviewer role is role-generic — see `.agent/docs/model-routing.md` for the independent-reviewer chain.
 
-**Human involvement:** 🟡 Review is auto-dispatched by the workflow (`/execution-critical-review`), not human-triggered. Code/test corrections applied via [execution-corrections.md](https://{{REPO_URL}}/blob/main/.agent/workflows/execution-corrections.md) auto-proceed (reversible work under `AGENTS.md` §Hard Gates, no separate approval gate); the re-dispatched execution-critical-review is what re-validates the fix. Human intervenes only for the round-cap/rate-limit HARD STOPs or a reviewer human-decision-required question.
+**Human involvement:** 🟡 Review is auto-dispatched by the workflow (`/execution-critical-review`), not human-triggered. Code/test corrections applied via [execution-corrections.md](https://{{REPO_URL}}/blob/main/.agent/workflows/execution-corrections.md) auto-proceed (reversible work under `AGENTS.md` §Authority and Approval, no separate approval gate); the re-dispatched execution-critical-review is what re-validates the fix. Human intervenes only for the round-cap/rate-limit HARD STOPs or a reviewer human-decision-required question.
 
 ### Process
 

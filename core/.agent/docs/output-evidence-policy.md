@@ -11,8 +11,66 @@ The file has two layers, and only one of them is conditional:
 | **RTK routing** (§RTK classification) | **Only when RTK is installed.** Adopters without RTK skip §RTK classification entirely — see §No-RTK adopters. |
 
 An adopter who has never heard of RTK must still be able to satisfy
-`AGENTS.md §PRIORITY 0` from this file. If you find a P0 row that cannot be
+`AGENTS.md §Output and Evidence` from this file. If you find a P0 row that cannot be
 satisfied without RTK, that row is a defect — report it.
+
+## Durable evidence contract
+
+`{{RECEIPTS_DIR}}` (PROFILE F3) holds working receipts, including CLI dispatch output.
+F3b controls their retention across reboot; it does **not** make a scratch-path citation
+durable. Before review/closeout, paste the executed command, exit code and decisive
+output into a repository handoff/review/task artifact (F1/F2). It must be understandable
+after all receipts are removed. Apply PROFILE C redaction and egress restrictions to
+the promoted excerpt and reviewer payload. Large approved external artifacts need stable
+identity/access instructions plus the decisive repository summary.
+
+Use a fenced `json` object per observation, with `schema_version: evidence.v1`:
+
+```json
+{
+  "schema_version": "evidence.v1",
+  "check_id": "AC-1-green",
+  "command": "python -m unittest discover -s tests",
+  "cwd": ".",
+  "scope": "configured unit suite",
+  "phase": "green",
+  "exit_code": 0,
+  "result": "pass",
+  "tested_state": "actual commit plus dirty-input fingerprint",
+  "output": "actual decisive output from this run"
+}
+```
+
+The example is a shape, not evidence of a run. Replace every value with observations.
+`phase` is `red|green|static|targeted|full|runtime|manual`; `result` is
+`pass|fail|blocked|not_run`. A command needs an integer exit code; manual validation
+uses `command: null`, a specific `procedure`, named `observer`, and `exit_code: null`.
+An unexecuted stage uses `result: not_run`, `exit_code: null`, and a `reason`; never
+invent an exit or passing output. Record startup/collection errors distinctly from an
+expected Red failure. Check IDs are unique within an artifact.
+
+Scratch-root paths may occur in `command` (the actual redirect); other evidence fields
+must contain observations, not scratch citations. `tools/durable_evidence.py` recognizes
+the installed F3 root, or a session `RECEIPTS_DIR` override, with Windows separator/case
+rules and root boundaries. It validates record shape/consistency, not truth of execution,
+all prose outside records, or remote link availability. The independent reviewer checks
+claims and provenance. No global temp-citation scanner is installed.
+
+Final full evidence adds `fresh: true`, `snapshot: false`, and the current D6 input
+identity in `tested_state`. Run `python tools/durable_evidence.py <handoff> --require-full
+--expected-state <actual-state>` using the receipt pattern. Obtain state independently
+from the project's configured identity procedure; copying the record's own state back
+as the expected value proves nothing. This validator cannot compute freshness for the
+adopter. Missing identity or changed inputs requires a fresh run, not guessed reuse.
+
+For `[B]`, the task/AC row must cite `B-<row-id>` and `follow-up [label](durable-target)`.
+Add `### B-<row-id>` outside code fences, with exactly one `Reason: external-error`,
+`Reason: missing-dependency`, or `Reason: human-decision`. External/dependency blocks
+contain a failed-command evidence record with nonzero exit and decisive error.
+Human decisions contain `Decision: [label](durable-target)`. Local targets must exist;
+issue URLs must identify a page, not just a host. A link alone is insufficient. Both
+task and handoff validators use this shared predicate. Legacy artifacts need promotion
+when they are actively revalidated; retained historical records are not silently rewritten.
 
 ## Receipt pattern
 

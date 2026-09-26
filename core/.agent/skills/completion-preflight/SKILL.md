@@ -1,5 +1,5 @@
 ---
-name: Completion Pre-Flight
+name: completion-preflight
 description: Mandatory pre-flight checklist before any stop, report, or summary to the user during execution. Prevents premature stop by enforcing a deterministic re-read of the project task.md.
 ---
 
@@ -51,7 +51,7 @@ This re-injects the full task table into context, overriding any narrowed scope 
 Scan every row in the task table. Count:
 - `[ ]` = not started (must be completed before stop)
 - `[/]` = in progress (must be completed or checkpointed)
-- `[B]` = blocked — evidence-gated (acceptable to leave ONLY with a linked follow-up AND, for external-error / missing-dependency cases, a pasted command + error file; subjective reasons like "too complex"/"no time" are invalid — see AGENTS.md §Execution Contract)
+- `[B]` = blocked — evidence-gated (acceptable to leave ONLY with a linked follow-up AND, for external-error / missing-dependency cases, a B-row evidence.v1 block with pasted command + nonzero exit + decisive error output; subjective reasons like "too complex"/"no time" are invalid — see AGENTS.md §Execution Contract)
 - `[x]` = complete
 
 **Decision gate:**
@@ -72,7 +72,15 @@ Before composing the stop/summary message:
 - [ ] Project task.md updated
 - [ ] Evidence bundle references actual command output, not memory
 
-Only after all gates pass → report to user.
+For a DONE claim, also verify the independent approved review bound to this target,
+all required closeout artifacts, and a fresh full-gate evidence record matching the
+independently obtained D6 state. Run `tools/durable_evidence.py` with `--require-full`
+and `--expected-state`; run the task/handoff validators for the shared B-row predicate.
+The record checker validates shape and identity equality, not execution truth.
+
+The other sanctioned outcomes are review cap, reviewer unavailable and human decision.
+At one of those gates, report the unresolved condition and saved state even with open
+rows; do not relabel it DONE. Compaction is continuation, not a separate stop outcome.
 
 ## Structural Marker Checklist
 

@@ -1,5 +1,5 @@
 ---
-name: Pre-Handoff Review
+name: pre-handoff-review
 description: Self-review protocol addressing 10 recurring patterns from critical review analysis. Reduces average review passes from 4-11 to 3-5.
 ---
 
@@ -174,26 +174,17 @@ rg -n "\*\*{.*\*\*" <touched-service-files>
 
 > This step MUST be executed LAST, after ALL other steps (including fix generalization, cross-doc sweeps, and error mapping changes). Running it earlier creates the staleness it aims to prevent.
 
-Re-run every validation command AFTER all fixes and record fresh output:
+Run the registered static and targeted checks after affected fixes. After all input-changing
+work, establish one fresh D6 full gate on the final review state; do not repeat an already
+fresh matching full run solely to regenerate a summary. Compare code/tests/configuration,
+environment and external-input identity independently. Missing identity or changed inputs
+requires a fresh full run. Partial/cached/snapshot-only runs cannot satisfy the final gate.
 
-```powershell
-# Python projects
-uv run pytest tests/ --tb=no -q           # Record: "N passed, M skipped"
-uv run pyright <touched-packages>          # Record: "0 errors"
-uv run ruff check <touched-files>          # Record: "All checks passed!"
-
-# TypeScript projects
-npx vitest run                             # Record: "N tests, N passed"
-npx tsc --noEmit                           # Record: "clean"
-npx eslint src/ --max-warnings 0           # Record: "0 errors, 0 warnings"
-
-# Full regression (for multi-MEU projects)
-uv run pytest tests/ -v                    # Record total for handoff
-```
-
-**Evidence Command Manifest**: Record the EXACT commands used (verbatim, including all flags and scope), not just results. Reject evidence from cached/partial runs (`--lf`, `-k`, unit-only markers when integration should also run).
-
-**Rule**: The handoff counts MUST match this fresh output. Any discrepancy is a LOW finding minimum during review.
+Paste exact command/procedure, scope, exit/result, tested_state and decisive output as
+evidence.v1 in the handoff. Validate full evidence with tools/durable_evidence.py using
+--require-full and --expected-state from D6. The handoff counts must match actual output;
+scratch receipt paths alone are insufficient. This is implementor verification, never an
+independent approved verdict.
 
 ## Checklist Summary
 

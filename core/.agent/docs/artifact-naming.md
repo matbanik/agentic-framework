@@ -75,3 +75,11 @@ Output exactly one ```yaml ... ``` block in the `## Instruction Coverage` sectio
 No prose around the YAML block itself. The reflection file MUST still follow
 the full template structure from `docs/execution/reflections/TEMPLATE.md` —
 the YAML block is section 7 of 7, not the entire file.
+
+## Durable evidence ownership
+
+The canonical evidence.v1 and blocked-row contract lives in
+[output-evidence-policy.md](output-evidence-policy.md). Handoffs, reviews and lasting task
+claims preserve command/procedure, exit/result, scope, input identity and decisive pasted
+output; raw receipt links alone are insufficient. Redact per PROFILE C. Receipt retention
+is separate from durable artifact naming. Read the current template before writing.

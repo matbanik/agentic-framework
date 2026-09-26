@@ -151,7 +151,7 @@ That is exactly why the compaction step sits **after the handoff lands**, not be
 ### Rules
 
 1. **Compact at the per-MEU boundary** — after the handoff is on disk, before starting the next MEU (`create-plan.md` §6, `execution-session.md`). Use the harness's `context_compaction` capability (`.agent/docs/harness-profiles.md`).
-2. **Compact at the ~50% checkpoint, then CONTINUE** — do not hand the session back. See `AGENTS.md` §Execution Contract turn-ender #4.
+2. **Compact at the ~50% checkpoint, then CONTINUE** — do not hand the session back. See `AGENTS.md` §Execution Contract compaction continuation rule.
 3. **Never compact with unsaved durable state.** If the handoff isn't written, write it first.
 4. **Never rely on auto-compaction as the plan.** Hitting the limit means you already lost summary quality.
 5. **Prefer delegation over compaction where possible.** A subagent's transcript never enters the coordinator's context at all — structurally better than summarizing it later. Route bulk/mechanical work to the Builder tier and review to the external reviewer (`.agent/docs/model-routing.md` §Delegation & nesting rules → *Token accounting*). Compaction handles what's left.
@@ -190,7 +190,7 @@ memory and wholesale reloads of completed independent work are not recovery sour
 
 - [HANDOFF-TEMPLATE.md](file:///{{PROJECT_ROOT}}/.agent/templates/HANDOFF-TEMPLATE.md) — Handoff template (v2.1)
 - [REVIEW-TEMPLATE.md](file:///{{PROJECT_ROOT}}/.agent/templates/REVIEW-TEMPLATE.md) — Review template (v2.1)
-- [AGENTS.md §Context Compression Rules](file:///{{PROJECT_ROOT}}/AGENTS.md) — Mandatory agent rules
+- [AGENTS.md §Artifacts and Context](file:///{{PROJECT_ROOT}}/AGENTS.md) — Mandatory agent rules
 - [ACON Synthesis](file:///{{PROJECT_ROOT}}/_inspiration/acon_research/acon-compression-synthesis.md) — Research source
 - [harness-profiles.md](file:///{{PROJECT_ROOT}}/.agent/docs/harness-profiles.md) — `context_compaction` capability per harness
 - [model-routing.md](file:///{{PROJECT_ROOT}}/.agent/docs/model-routing.md) — Delegation keeps the coordinator's context lean (the structural complement to compaction)

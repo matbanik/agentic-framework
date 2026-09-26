@@ -341,6 +341,27 @@ Do not declare adoption complete until all of these are true:
 
 ---
 
+### Governance contract acceptance (before first run)
+
+- Measure instantiated AGENTS/GUARDRAILS against 170 lines/20,000 bytes and 90 lines/8,000
+  bytes. Check the actual root/nested/import loader chain and combined harness limit;
+  counting the root alone does not establish all instructions were loaded.
+- Bind static/targeted/full/runtime checks and complete input identity in PROFILE D6 and
+  commands.md. Use actual domain procedures for non-software work; D9=no skips MEU tooling.
+- Run one small failing behavior check and its corrected pass using the native shell.
+  Save the exit before reading receipts. Promote command/exit/decisive output to an
+  evidence.v1 record; make the disposable scratch copy unavailable and validate that the
+  durable record remains sufficient. A partial gate must fail --require-full validation.
+- Verify installed tools/durable_evidence.py imports alongside the task/closeout tools;
+  test missing output, stale input identity and incomplete B-row rejection. Legacy live
+  artifacts need evidence promotion when next revalidated; do not rewrite historic claims.
+- Probe configured dispatch roots, spaces, collision/path escapes and repo/receipt writes
+  on the actual supported OS/shell. ReviewReadOnly is workspace-write plus receipt access,
+  not OS read-only. FullAccess is an explicitly justified exception, not a temp-path default.
+- Exercise C-forbidden/human-only and no-RTK paths without external calls. Confirm durable
+  evidence redaction. Hooks remain disabled; scanner/snapshot/lease adapters are optional
+  follow-on work with separate negative tests.
+
 ## Step 9 — First run
 
 1. (Optional but recommended) Capture a real defect with `issue_triage.py add`, then run

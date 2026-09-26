@@ -1,4 +1,7 @@
-# Testing Strategy — {{PROJECT_NAME_TITLE}}
+# Testing Strategy
+
+PROFILE D6 is authoritative. Language tools, coverage numbers and layer layouts below
+are software examples to select or replace during adoption, not universal defaults. — {{PROJECT_NAME_TITLE}}
 
 ## Test Pyramid
 
@@ -156,24 +159,27 @@ For any MEU touching API/MCP/UI/config write paths, include these test categorie
 
 ## Validation Pipeline
 
-**MEU gate** (active implementation work): PROFILE D6_ADOPTER_ARGV
-**Phase gate** (only after all MEUs in a phase are complete): same D6 command at phase scope. There is no packaged `tools/validate_codebase.py`.
+Register static, targeted, full and optional runtime checks in PROFILE D6 and commands.md.
+Each entry names argv or manual procedure, cwd, explicit scope, blocking/advisory status,
+expected outcome, shell, evidence.v1 output and an input-identity procedure.
 
-**Blocking checks** apply by scaffold and phase:
-- Current scaffold: `pyright`, `ruff`, `pytest`
-- When TypeScript packages are scaffolded: `tsc --noEmit`, `eslint`, `vitest`, `npm run build`
+Run cheap static checks then affected targeted checks. Include shared fixtures, build/test
+configuration and generated inputs in scope. Record later stages as not_run after blocking
+failure. Before final implementation review, run one fresh full gate against the final
+review inputs; preserve exact status/output in the handoff. Partial/cached/snapshot-only
+results never satisfy full. A changed or unproven state requires rerun. Intermediate reuse
+requires complete matching code/test/config/environment/external-input identity and an
+implemented adapter; no snapshot/lease/reuse mechanism ships by default.
 
-**Advisory** (report only): `pytest --cov`, `bandit`, `pip-audit`, `semgrep`.
-See `.agent/skills/quality-gate/SKILL.md` for scope selection and skipped-check behavior.
+PROFILE D6 chooses integration selection, coverage policy, timing thresholds and supported
+runtime surfaces. Never import source-product package prefixes or numeric budgets blindly.
+Non-software validation uses actual observer/procedure/outcome evidence. Test fixtures may
+use temp directories, but never set a cleanup root such as pytest --basetemp to the shared
+receipt or durable artifact root.
 
-> [!TIP]
-> **Check what your gate actually type-checks.** A common and near-invisible failure: the
-> phase/full type-check pass targets only the *product* package tree, while the pre-commit
-> hook runs on **all staged** files. Type errors in `tests/` and tooling then accumulate
-> through MEU work and surface in a heap at commit time, long after the gate reported green.
-> Decide explicitly which trees the gate covers, make the gate and the hook agree, and write
-> the chosen scope down here — so "the MEU gate is green" is unambiguous.
-
+For a full evidence shape/identity check, use tools/durable_evidence.py with --require-full
+and an independently obtained --expected-state. This cannot prove execution truth or
+calculate the adopter's identity; independent review still validates claims.
 
 ## Testing Requirements
 
@@ -204,26 +210,15 @@ tests/
 
 ### Coverage Expectations
 
-- **New domain code**: ≥ 90% branch coverage
-- **New service code**: ≥ 80% branch coverage
-- **New API routes**: ≥ 1 contract test per route + unit tests
-- **New GUI pages**: E2E wave tests + axe-core scan (see `docs/build-plan/06-gui.md` §E2E Waves)
-- **Bug fixes**: Add regression test before fixing
+Choose and document coverage floors in D6 for the project's risks/layers. A bug fix gets a
+regression test first; routes/interfaces need meaningful boundary contract coverage. No
+90%/80% floor is imposed on unrelated adopters.
 
-### E2E Wave Activation
+### Runtime activation
 
-E2E tests activate incrementally as GUI pages are built. When implementing a GUI MEU, check `ui/tests/e2e/test-ids.ts` for required `data-testid` attributes and ensure the wave's tests are **written and wired** (test-ids registered, behavior assertions present). E2E *execution* is environment-dependent: Electron needs a display, so E2E may fail to launch in the agent/reviewer sandbox ("Process failed to launch"). When it cannot run locally, mark the run `[B]` with a linked CI follow-up (Linux `xvfb-run`, or `windows-latest` native display) — an un-run E2E is **not** a completion blocker until the CI runner exists. See `docs/build-plan/06-gui.md` §E2E Waves and known-issue `E2E-SANDBOX-NODISPLAY`.
-
-### TUI E2E Wave Activation
-
-Real-binary TUI E2E tests (`tui/internal/tuitest/`, `//go:build e2e`) activate incrementally as each screen's lifecycle wiring lands — the same wave discipline as the GUI, with a **lower** environment bar (headless; no display server needed). The MEU-344 harness, the [`tui-e2e/SKILL.md`](../skills/tui-e2e/SKILL.md) skill, and the HOME round-trip seed test are what make the later waves writable.
-
-| Wave | Gate MEU | E2E target | Status |
-|:----:|----------|------------|:------:|
-| R0-E2E | **MEU-344** `tui-e2e-harness` | Harness + HOME round-trip seed (`e2e_home_test.go`) | ✅ delivered |
-| 1 | MEU-340 `tui-blotter-interactions` | Blotter cursor/pagination/sort/detail keystroke round-trips | activate when wired |
-| 2 | MEU-341 `tui-portfolio` | Portfolio screen zones + navigation | activate when wired |
-| 3 | MEU-342 `tui-forms` | Quick-entry / form field interactions | activate when wired |
-| — | MEU-343 `tui-design-contract` | Full 5-screen design-contract suite (consumes the MEU-344 harness, **not** teatest) | activate when 340–342 land |
-
-When implementing a screen's lifecycle MEU, add its real-binary E2E in `tuitest/` behind the `e2e` tag and tick its row. If a restricted sandbox blocks ConPTY/PTY syscalls, mark the **run** `[B]` with the pasted error + a CI follow-up in your own workflow file (ubuntu + windows; this framework ships no `.github/workflows/`, so the path is yours to create) — the test stays written and wired (`E2E-SANDBOX-NODISPLAY` precedent, lower bar). See [`tui-e2e/SKILL.md`](../skills/tui-e2e/SKILL.md).
+Activate GUI/TUI/integration checks as their real runtime surfaces are delivered. Tests
+must be written and wired; build bundles before testing compiled outputs. Display/PTY or
+dependency errors need an actual command/nonzero exit/diagnostic and durable CI follow-up
+under the shared B-row contract. Whether unresolved runtime coverage blocks release is
+the declared D6/human decision, not a blanket sandbox exemption. See the applicable E2E
+skill; source-product wave IDs and “delivered” states are not portable project facts.

@@ -137,7 +137,7 @@ EXAMPLE: {before → after}
 ## Instruction Coverage
 
 <!-- Emit a single fenced YAML block matching .agent/schemas/reflection.v1.yaml -->
-<!-- See AGENTS.md § Instruction Coverage Reflection for rules -->
+<!-- See AGENTS.md §Artifacts and Context for rules -->
 <!-- NOTE 2026-07-21: token counts, environment, and implementor_model are retired
      (Antigravity-era telemetry; non-functional under Cursor/Claude Code). Do NOT emit them. -->
 

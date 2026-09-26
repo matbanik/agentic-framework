@@ -55,15 +55,15 @@ across both layers — never pick one monolithic row.**
 | Flag | Values | What it drives |
 |---|---|---|
 | `role` | `primary-driver` \| `host` \| `reviewer` \| `surface-orchestrator` \| `isolated-worker` | Which slot this harness fills in the routed stack (see [model-routing.md](model-routing.md)) |
-| `plan_to_exec_gate` | `human` \| `reviewer-auto` | Who authorizes the plan→execution transition after `approved`. `human` = pause for an explicit user chat message; `reviewer-auto` = auto-continue. Drives `create-plan.md` §5c, `AGENTS.md` §Human Approval Gate, `GUARDRAILS.md` SIGN 1 |
+| `plan_to_exec_gate` | `human` \| `reviewer-auto` | Who authorizes the plan→execution transition after `approved`. `human` = pause for an explicit user chat message; `reviewer-auto` = auto-continue. Drives `create-plan.md` §5c, `AGENTS.md` §Authority and Approval, `GUARDRAILS.md` SIGN 1 |
 | `injects_auto_approval` | `yes` \| `no` | Does the harness inject system/ephemeral messages that claim a plan was "approved" (e.g. an IDE review-policy auto-approval)? Drives `GUARDRAILS.md` SIGN 3 — when `yes`, be maximally strict about message provenance |
 | `can_dispatch_external_reviewer` | `yes` \| `no` | Can this harness shell out to a reviewer CLI (Codex/Gemini/headless-claude)? When `no`, follow the no-dispatch fallback in `cli-dispatch/SKILL.md` |
-| `native_shell` | `powershell` \| `bash` \| `posix-sh` | Redirect-to-file form for the P0 terminal rule (`*>` for PowerShell; `> f 2>&1` for bash/posix). See `AGENTS.md` §Windows Shell. On macOS/Linux also read [`.agent/docs/macos-setup.md`](macos-setup.md) for `pwsh`, Seatbelt, and receipts-dir `writable_roots`. |
+| `native_shell` | `powershell` \| `bash` \| `posix-sh` | Redirect-to-file form for the P0 terminal rule (`*>` for PowerShell; `> f 2>&1` for bash/posix). See `AGENTS.md` §Output and Evidence. On macOS/Linux also read [`.agent/docs/macos-setup.md`](macos-setup.md) for `pwsh`, Seatbelt, and receipts-dir `writable_roots`. |
 | `read_tool` | tool name | The file-read tool to substitute wherever a workflow says "read this file" (`Read`, `view_file`, etc.) |
 | `shell_tool` | tool name | The command-run tool (`Bash`, `run_command`, sandboxed `exec`, etc.) |
 | `end_turn_signal` | mechanism | How this harness ends a turn / signals "blocked on user" (stop-by-not-calling-tools, `notify_user(BlockedOnUser:false)`, process-exit, etc.) |
 | `default_classes` | capability class name(s) | Which **class** fills this harness's role. The class → snapshot binding is per-harness and lives in the live registry home you instantiate ([`INSTANTIATE.md`](../INSTANTIATE.md)); resolve it (`Resolve-AgentModel -Class <class> -Harness <harness>`) rather than reading a slug out of this table. See [`model-routing.md`](model-routing.md) |
-| `context_compaction` | mechanism \| `none` | How this harness compacts the **transcript** at a durable-state boundary. Drives the per-MEU compaction step (`create-plan.md` §6, `execution-session.md`) and turn-ender #4 (`AGENTS.md` §Execution Contract). `none` ⇒ the ~50% checkpoint reverts to a save-state hand-back. Full rules: [`context-compression.md`](context-compression.md) §Context Compaction |
+| `context_compaction` | mechanism \| `none` | How this harness compacts the **transcript** at a durable-state boundary. Drives the per-MEU compaction step (`create-plan.md` §6, `execution-session.md`) and compaction continuation rule (`AGENTS.md` §Execution Contract). `none` ⇒ the ~50% checkpoint reverts to a save-state hand-back. Full rules: [`context-compression.md`](context-compression.md) §Context Compaction |
 | `fresh_worker` | mechanism \| `none` | Whether the active tool surface exposes an authorized fresh-context worker. `isolated` task metadata requires a concrete mechanism; `none`, missing authority, or uncertainty degrades to `compact_continue`. Metadata never grants delegation permission. |
 
 ---
@@ -142,8 +142,8 @@ do not block on the literal name.
 
 - [`../../GUARDRAILS.md`](../../GUARDRAILS.md) **SIGN 1** — `plan_to_exec_gate`
 - [`../../GUARDRAILS.md`](../../GUARDRAILS.md) **SIGN 3** — `injects_auto_approval`
-- [`../../AGENTS.md`](../../AGENTS.md) §Human Approval Gate — `plan_to_exec_gate`
-- [`../../AGENTS.md`](../../AGENTS.md) §Windows Shell (P0) — `native_shell`
+- [`../../AGENTS.md`](../../AGENTS.md) §Authority and Approval — `plan_to_exec_gate`
+- [`../../AGENTS.md`](../../AGENTS.md) §Output and Evidence (P0) — `native_shell`
 - [`../workflows/create-plan.md`](../workflows/create-plan.md) §5c — `plan_to_exec_gate`
 - [`../skills/cli-dispatch/SKILL.md`](../skills/cli-dispatch/SKILL.md) — `can_dispatch_external_reviewer`, `role`
 - [`../skills/subagent-delegation/SKILL.md`](../skills/subagent-delegation/SKILL.md) — `fresh_worker` (resolves the Cursor `.cursor/agents/` and Claude Code `.claude/agents/` mechanisms into concrete in-harness dispatches)

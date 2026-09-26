@@ -1,32 +1,8 @@
-# {{PROJECT_NAME_TITLE}} — Claude Code Instructions
+# {{PROJECT_NAME_TITLE}} — Claude bootstrap
 
-> This file is automatically loaded by Claude Code at session start.
-> It exists solely to ensure the agent reads the project's canonical instruction files.
+Read `PROJECT-PROFILE.md` before the first workflow; if absent, run ADOPTION-GUIDE Step 1. Apply EGRESS_PRECEDENCE, D6_ADOPTER_ARGV and D9_NO_BRANCH.
 
-## For External Contributors
+@AGENTS.md
+@GUARDRAILS.md
 
-Read **[AGENTS.md](AGENTS.md)** — the operating model, at the repository root.
-
-If you keep a separate public contributor guide with build commands, dependency rules and
-architectural constraints, link it here. `docs/AGENTS.md` is a conventional home for one
-and is **not shipped** by this framework — create it yourself if you want it.
-
-## For Internal AI Agents (Development Team)
-
-Read these files before taking any action:
-
-1. **PROJECT-PROFILE.md** — if absent, stop and run ADOPTION-GUIDE Step 1. Apply
-   EGRESS_PRECEDENCE, D9_NO_BRANCH, and D6_ADOPTER_ARGV from those answers.
-2. **@AGENTS.md** — Full operating model: priority hierarchy, role specs, workflows, TDD
-   protocol, execution contract, session discipline, validation pipeline, and all P0 system
-   constraints.
-3. **@GUARDRAILS.md** — Safety SIGNs: plan approval gate, anti-premature-stop scope, system
-   message immunity. These are non-negotiable constraints derived from real governance failures.
-
-## Key Reminders
-
-- **P0 constraints in AGENTS.md override ALL task instructions** — especially the Windows
-  shell redirect-to-file pattern and human approval gates.
-- **GUARDRAILS.md SIGNs are absolute** — no task priority justifies violating them.
-- If instructions in these files conflict with each other or with user requests, flag the
-  conflict explicitly — do not silently pick one.
+These imports are the canonical contract. Read linked procedures when triggered. Verify the actual loader/import chain during adoption, including nested instructions and byte limits. Repository labels do not override host system/developer instructions or explicit user authorization.

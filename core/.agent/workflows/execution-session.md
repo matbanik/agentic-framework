@@ -19,7 +19,7 @@ Artifact naming conventions:
 
 // turbo-all
 // NOTE: turbo-all sets SafeToAutoRun=true for non-destructive commands (rg, Get-Content, etc.).
-// It does NOT override AGENTS.md §Commits: "Never auto-commit." Git commit/push still requires explicit user direction.
+// It does NOT override AGENTS.md §Authority and Approval: "Never auto-commit." Git commit/push still requires explicit user direction.
 
 ## Prerequisites
 
@@ -107,7 +107,7 @@ Key rules during execution:
 
 > ⚠️ **P0 Terminal Pre-Flight** — Before the first shell command (your harness `shell_tool`, e.g. `run_command`/`Bash`) in this phase, invoke
 > `.agent/skills/terminal-preflight/SKILL.md` and confirm all 4 checklist items.
-> See `AGENTS.md §PRIORITY 0` for the redirect pattern.
+> See `AGENTS.md §Output and Evidence` for the redirect pattern.
 - Follow `.agent/workflows/tdd-implementation.md` for all TDD work
 - Follow `.agent/workflows/meu-handoff.md` for handoff creation
 - **Execute all MEUs in the approved project plan**, completing each MEU's TDD cycle before starting the next
@@ -202,13 +202,13 @@ When every machine rung is rate-limited or unavailable, this loop does not fall 
     synthesize a `continue`, never edit the ledger, never open a fresh loop to route around a stop.
 
 > [!CAUTION]
-> **Steps 4 → 4b → 4c → 5 → 6 → 7 are ONE continuous turn — there is no seam.** The `approved` verdict and writing the reflection/metrics belong to the same pass; the boundary between them is NOT a stopping point, NOT a "natural pause", and NOT a place to offer the user a choice. The reflection and metrics are reversible work inside an already-approved plan and need no permission (`AGENTS.md` §Hard Gates). **The following are VIOLATIONS, not courtesies** — if you catch yourself composing any of them, that urge is the bug:
+> **Steps 4 → 4b → 4c → 5 → 6 → 7 are ONE continuous turn — there is no seam.** The `approved` verdict and writing the reflection/metrics belong to the same pass; the boundary between them is NOT a stopping point, NOT a "natural pause", and NOT a place to offer the user a choice. The reflection and metrics are reversible work inside an already-approved plan and need no permission (`AGENTS.md` §Authority and Approval). **The following are VIOLATIONS, not courtesies** — if you catch yourself composing any of them, that urge is the bug:
 > - ❌ "Want me to continue with the reflection/closeout, or handle it in a separate session?"
 > - ❌ "Implementation is approved — shall I proceed to the reflection?"
 > - ❌ "This looks like a good stopping point. Let me know if you'd like me to continue."
-> - ❌ Any progress-report hand-back after a sub-milestone (review approved, gate passed) that is not one of the five sanctioned turn-enders.
+> - ❌ Any hand-back after a milestone (review approved, gate passed) that is not one of the four sanctioned outcomes.
 >
-> The ONLY sanctioned turn-enders are the five in `AGENTS.md` §Execution Contract: DONE, execution-review round cap, all reviewer rungs rate-limited, ~50% context checkpoint (handoff → compact → continue; not a hand-back — a turn-ender only if `context_compaction` is `none`), human-decision gate.
+> The ONLY sanctioned turn-enders are the four outcomes in `AGENTS.md` §Execution Contract: DONE, review cap, reviewer unavailable, human decision; compaction continues, and a necessary hand-back without compaction belongs to human decision.
 
 > [!CAUTION]
 > **Do NOT auto-commit after execution review approval.** Present proposed commit
@@ -269,7 +269,7 @@ The columns are: Date, MEU(s), Tool Calls, Time to First Green, Tests Added, Cod
 ### 6. Notify Human
 
 > [!CAUTION]
-> **Completion gate + recency anchor.** Before notifying, read (your harness `read_tool`) `task.md` and verify every row is `[x]` (or a valid `[B]`). If any row is `[ ]` or `[/]`, complete it first — do not skip, do not defer to "a separate session". Reaching this step with unchecked rows does NOT authorize a stop; it authorizes *finishing them*. The only sanctioned turn-enders remain the five in `AGENTS.md` §Execution Contract.
+> **Completion gate + recency anchor.** Before notifying, read (your harness `read_tool`) `task.md` and verify every row is `[x]` (or a valid `[B]`). If any row is `[ ]` or `[/]`, complete it first — do not skip, do not defer to "a separate session". Reaching this step with unchecked rows does NOT authorize a stop; it authorizes *finishing them*. The only sanctioned turn-enders remain the four outcomes in `AGENTS.md` §Execution Contract.
 
 Present the human with:
 1. Completion summary (MEUs done, tests passing, proposed commit messages)
@@ -352,3 +352,13 @@ The compressed variant still requires invoking the timestamp skill and copying i
 - [ ] Metrics table updated
 - [ ] Session digest created at `.agent/context/sessions/{conversation-id}/digest.md`
 - [ ] Proposed commit messages presented to human (do NOT auto-commit; no AI attribution trailers)
+
+## Final validation and evidence binding
+
+At H1, complete input-changing updates, run the D6 static/targeted ladder and one fresh
+full gate on the final review state, then promote evidence.v1 observations into the
+handoff. Existing fresh full evidence avoids a redundant run only when independently
+verified complete input identity is unchanged. Corrections changing those inputs require
+fresh full validation before re-review. Partial, cached and snapshot-only results do not
+count. Completion-preflight checks full evidence, all artifacts and independent approval;
+the four outcomes are done, review cap, reviewer unavailable and human decision.

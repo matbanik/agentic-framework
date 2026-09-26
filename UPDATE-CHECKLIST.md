@@ -2,7 +2,7 @@
 
 Use this when the originating project's governance or subagent flows change and you
 need `_transfer-out/agentic-framework/` to match again. The package is **not** critical
-runtime data — prefer **delete outdated copies and re-copy**, then re-sanitize.
+runtime data — use selective contract merges for divergent files; recopy only files whose behavior still matches, then re-sanitize.
 
 Last refreshed: **2026-09-07** (package-root `.agent/` registry-home template, class-based
 routing, Codex dispatch resolves from the live registry, sanitize `--verify` slug gate;
@@ -436,3 +436,19 @@ Prefer a small local script (or the PowerShell copy loop used on 2026-07-22) tha
 5. Prints a file count + verify OK line into a receipt under the receipts dir
 
 Do **not** commit from this checklist unless a human explicitly asks.
+
+## 2026-09-26 governance migration: selective updates
+
+Root instructions, evidence policy/templates, validation workflows, section registry and
+task/closeout validators deliberately diverge from source commits through a32f050b.
+Preserve framework PROFILE C egress/human review, D6 commands, D9=no, TEMPLATE_HOME,
+registry capability classes and ledger kind/intent/vendor/budget/usage binding. Never
+overwrite them by wholesale source recopy. See the maintainer rule-preservation ledger
+in docs/execution/plans/2026-09-26-governance-migration/.
+
+Run read-only sanitizer verification, refcheck/selftests, governance/evidence tests and
+disposable adoption after updates. Budget targets are AGENTS 170 lines/20,000 UTF-8 bytes,
+GUARDRAILS 90 lines/8,000 bytes after substitution. Registry headings must match. Preserve
+existing user edits; a planted slug remains a release failure until its owner removes it.
+M4 citation scanning, rule audits, hooks and snapshot/lease/reuse adapters are follow-on,
+not installed mechanisms. No baseline/hook settings from the source are shipped here.

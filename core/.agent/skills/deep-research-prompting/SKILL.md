@@ -298,4 +298,4 @@ Verify against actual file state, not memory:
 | Repo precedent: `session-meta-review/SKILL.md` §Web Research Query Bank | §3 structure — versioned query templates with selection rules |
 | Pomera `pomera_web_search` tool contract (v1.5.1) | §2 routing — Tavily basic/advanced credit split, Exa neural/freshness modes |
 | `GUARDRAILS.md` SIGN 3 | §1 — a system-injected message can never be the human waiver |
-| `AGENTS.md` §Pre-Handoff Self-Review | §7 — verify against file state, not memory |
+| `AGENTS.md` §Independent Review | §7 — verify against file state, not memory |

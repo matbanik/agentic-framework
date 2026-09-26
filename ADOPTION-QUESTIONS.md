@@ -59,6 +59,11 @@
 
 ---
 
+**A11. Instruction and runtime capabilities:** What files/imports does the driver actually
+load, in which order and under what byte limit? Verify the root/nested chain and required
+repository/receipt sandbox writes. Keep hooks disabled until their failure/release paths
+are tested; do not infer FullAccess from a temp directory.
+
 ## Block B — Independent Review
 *(Configures: the reviewer chain + the self-review prohibition. This is the framework's core quality mechanism — an agent grading its own homework is the failure mode it exists to prevent.)*
 
@@ -151,6 +156,11 @@ can be a serious breach:
 
 ---
 
+**D6 detail:** Register static, targeted, fresh full and optional runtime checks separately:
+command/argv or manual procedure, cwd, affected scope, blocking status, expected result,
+shell and evidence.v1 format. How will you identify relevant code/tests/config/environment/
+external inputs? Reuse stays disabled without proof. Manual work names observer/procedure.
+
 ## Block E — Irreversible Actions & Accountability
 *(Configures: the human approval gates. Get this wrong and an agent does something it cannot undo.)*
 
@@ -178,6 +188,10 @@ can be a serious breach:
 | F6 | Any **cost constraints**? (metered API vs flat subscription) | how aggressively to delegate to subagents | assume metered |
 
 ---
+
+**F3b clarification:** Receipt retention is independent of durable proof. In either mode,
+promote exact command/exit/decisive output (or manual procedure/observation) into F1/F2
+artifacts before closeout; apply C redaction. Scratch paths alone cannot support claims.
 
 ## After you have the answers
 

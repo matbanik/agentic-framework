@@ -37,7 +37,7 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 
 - `core/AGENTS.md` — Full operating model for AI agents on {{PROJECT_NAME_TITLE}}: priority hierarchy (P0 environment stability → P1 quality gates → P2 task completion → P3 speed), role specs, workflows, TDD protocol, execution contract, and validation pipeline.
 - `core/GUARDRAILS.md` — Non-negotiable safety SIGNs (plan approval gate, anti-premature-stop scope, system-message immunity) each derived from a real governance-failure incident.
-- `core/CLAUDE.md` — Session-start pointer file that ensures Claude Code loads `AGENTS.md`/`GUARDRAILS.md` (internal) and `docs/AGENTS.md` (external contributors) before acting.
+- `core/CLAUDE.md` — Minimal Claude bootstrap with AGENTS/GUARDRAILS imports and PROJECT-PROFILE application; verify loader behavior during adoption.
 
 ## 2. `core/.agent/docs/`
 
@@ -53,7 +53,7 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `verification-principles.md` — When a check is evidence and when it only looks like evidence: 15 numbered principles (V1–V5, V13, V25, V30–V32, V41–V45), each distilled from a gate that reported success while the thing it guarded was broken. Numbering is deliberately non-contiguous and must stay stable — `GUARDRAILS.md` SIGN 1 cites **V4**, and `tools/Invoke-CodexDispatch.ps1` plus `tools/tests/Test-GetPhysicalPath.ps1` cite **V31**.
 - `emerging-standards.md` — Living registry of mandatory implementation standards discovered during development sessions, enforced during plan/execution critical review.
 - `commands.md` — Operational reference: quick validation/dev/scaffold commands, skills index, MCP servers, and RTK usage.
-- `output-evidence-policy.md` — SSOT for command-output routing: the always-applicable receipt pattern + exact-evidence bypass list, plus the RTK `native`/`proxy`/`explicit bypass` classification that applies only when RTK is installed. Required companion to `AGENTS.md §PRIORITY 0`.
+- `output-evidence-policy.md` — SSOT for command-output routing: the always-applicable receipt pattern + exact-evidence bypass list, plus the RTK `native`/`proxy`/`explicit bypass` classification that applies only when RTK is installed. Required companion to `AGENTS.md §Output and Evidence`.
 - `issue-lifecycle-guide.md` — How issues are reported, tracked, triaged, planned, and resolved end-to-end, with human/AI handoff points.
 - `triage-meu-loop.md` — Compact portable contract for the report → triage → MEU register → session-group → plan → reflect learning loop.
 - `prompt-templates.md` — Copy-paste prompt templates for driving an agentic build session through an AI coding assistant.
@@ -218,6 +218,12 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 
 ## Deliberately EXCLUDED ({{PROJECT_NAME_TITLE}}-specific — do not port)
 
+**Adopter-owned commands and historical examples:**
+- `tools/validate_codebase.py`, `core/tools/validate_codebase.py`, `tools/export_openapi.py` — not shipped; PROFILE D6 supplies the project's real validation and optional API checks.
+- `core/tools/preflight.ps1` — historical proposal only; no PowerShell preflight twin is shipped.
+- `tools/x.py`, `tools/user-script.py`, `tools/mcp_server` — example paths, not executable framework instructions.
+- `.cursor/commands/`, `.claude/commands/`, `core/.cursor/commands/`, `core/.claude/commands/` — adopter-created editor command integrations, not shipped.
+
 **Workflows** (`.agent/workflows/`) — excluded because they encode {{PROJECT_NAME_TITLE}}'s specific product surfaces (Electron GUI, MCP server, GitHub-repo mirroring) rather than generic agentic process:
 - `e2e-testing.md` — GUI E2E workflow tied to {{PROJECT_NAME_TITLE}}'s specific Electron/Playwright test harness (`ui/tests/e2e/`).
 - `gui-integration-testing.md` — Integration-testing workflow specific to {{PROJECT_NAME_TITLE}}'s Electron GUI layer.
@@ -251,7 +257,7 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `.agent/skills/rtk-optimize/` — **Decided against, not overlooked.** Folded into `.agent/docs/output-evidence-policy.md` instead. Its routing rules, command matrix, `rtk proxy`-for-exact-evidence rule, no-global-hook stance, and `pwsh`-vs-`powershell.exe` note are all in that file already — and that file opens by declaring itself the *single* authority for output routing, so a skill restating the same rules would create the second authority it exists to prevent. The one part with no twin there, the `.rtk/filters.toml` **trust boundary** (review → `trust` → `verify --require-all` → use; failure blocks use and rolls back), is now §RTK classification → *Project-local filters are a trust boundary*; it belongs beside the classification rules because it is what makes them trustworthy — an unreviewed filter decides what a receipt says. Re-port the skill only if you want RTK guidance progressively disclosed rather than linked from `AGENTS.md`, and if you do, delete the duplicated sections rather than letting two files answer one question.
 
 > **Formerly excluded, now packaged (portable):** `output-evidence-policy.md`. It is the
-> companion to `AGENTS.md §PRIORITY 0` and the SSOT for the exact-evidence bypass list,
+> companion to `AGENTS.md §Output and Evidence` and the SSOT for the exact-evidence bypass list,
 > which is tool-independent. The shipped copy separates **receipt discipline** (always
 > applies) from **RTK classification** (applies only if RTK is installed), so a no-RTK
 > adopter still has an executable P0. Source-repo receipt paths are `{{RECEIPTS_DIR}}`.
@@ -289,3 +295,17 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 **Issue/MEU runtime state (source-repo only):**
 - Populated `.agent/context/known-issues.yaml`, `meu-status.yaml`, `triage-output.yaml`, archives, grouping proposals — product history. Package ships **empty seeds** only.
 - `tests/tools/test_issue_triage*.py` / `test_meu_status*.py` — optional; re-port if you want the same golden fixtures.
+
+## Portable governance contract (2026-09-26)
+
+- `tools/durable_evidence.py` — Python stdlib evidence.v1 shape/consistency and final-state
+  comparison, plus the blocked-row predicate imported by task and closeout validators.
+  Supports command and manual observations; does not prove execution truth, compute an
+  adopter's input identity, scan all prose or check remote link availability.
+- `tools/tests/test_durable_evidence.py` — evidence/blocked/consumer regressions.
+- `scripts/tests/test_governance_migration.py` — maintainer packaging/instruction/adoption
+  regressions; scripts are not copied into adopter projects.
+- Output/validation policies and templates use existing F3 receipts and F1/F2 durable
+  homes. No new directory placeholder, hook, source baseline or snapshot lease is installed.
+- Both dispatch wrappers retain their existing physical-root, ledger and retention logic;
+  sandbox capability prose is portable and does not prescribe FullAccess for temp paths.

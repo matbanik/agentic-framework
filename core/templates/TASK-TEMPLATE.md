@@ -3,7 +3,7 @@ project: "{YYYY-MM-DD}-{project-slug}"
 source: "docs/execution/plans/{YYYY-MM-DD}-{project-slug}/implementation-plan.md"
 meus: ["{MEU-ID-1}", "{MEU-ID-2}"]
 status: "in_progress"
-template_version: "2.1"
+template_version: "2.2"
 ---
 
 # Task — {Project Title}
@@ -27,6 +27,7 @@ context_tool_decision:
 
 > Classify every validation command through PROFILE D6 (D6_ADOPTER_ARGV) and
 > [`.agent/docs/output-evidence-policy.md`](../docs/output-evidence-policy.md).
+> D6 defines static/targeted/fresh full stages and complete input identity.
 > Do not require `rtk` or `uv`. Redirect every process stream to `{{RECEIPTS_DIR}}`.
 >
 > **Handoff set:** product projects name one
@@ -48,7 +49,7 @@ context_tool_decision:
 
 | # | Task | Owner | Deliverable | Validation | Depends on | Context strategy | Durable outputs | builder_model | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 | {first implementation task} | coder | {deliverable} | `{exact command}` | — | shared | {repo/receipt path} | `builder` | `[ ]` |
+| 1 | {first implementation task} | coder | {deliverable} | `{exact command}` | — | shared | {durable repository artifact} | `builder` | `[ ]` |
 | 2 | {second implementation task} | coder | {deliverable} | `{exact command}` | 1 | compact_continue | {durable path; compact then re-read task + this output} | `coordinator` | `[ ]` |
 | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |
 
@@ -70,8 +71,8 @@ capability; otherwise change it to `compact_continue` before execution.
 > and looped to `approved`. Phase **H2** (post-review) writes the reflection/metrics/session
 > save — these RECORD the review outcome and therefore *cannot* be written before the review.
 > "Continuous pass" means: complete H1 → dispatch → loop corrections → complete H2 **without
-> stopping** (the only valid pauses are the five turn-enders in `AGENTS.md` §Execution Contract:
-> DONE, round cap, both reviewers rate-limited, ~50% context checkpoint, human-decision gate). Do
+> stopping** (the only valid pauses are the four outcomes in `AGENTS.md` §Execution Contract:
+> DONE, review cap, reviewer unavailable, human decision; compaction continues). Do
 > NOT report completion or ask the user to approve between phases.
 >
 > **The phase-divider rows below are NOT stop points.** They mark *ordering* (H2 must record the
@@ -83,16 +84,19 @@ capability; otherwise change it to `compact_continue` before execution.
 
 | | **📋 Phase H1 — Pre-Review Closeout** — continuation of implementation; do not stop at this divider. | | | | | | | | |
 | H1-1 | Re-read this `task.md` and prove no implementation row remains unchecked. | coder | Exact unchecked-row receipt | `python -c "import pathlib,sys; t=pathlib.Path('docs/execution/plans/{date}-{project-slug}/task.md').read_text(encoding='utf-8'); bad=[ln for ln in t.splitlines() if ln.startswith(chr(124)) and ln.strip()[1:].split(chr(124),1)[0].strip().strip(chr(96)).isdigit() and '[ ]' in ln]; sys.exit(1 if bad else 0)" *> {{RECEIPTS_DIR}}/task-unchecked.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/task-unchecked.txt; exit $code` | `{last-task-id}` | shared | `task.md`; exact receipt | `coordinator` | `[ ]` |
-| H1-2 | Run the registered verification plan. | tester | All blocking checks pass | `{exact command(s) from implementation-plan.md}` | H1-1 | shared | Gate receipts | `coordinator` | `[ ]` |
+| H1-2 | Run the registered verification plan. | tester | All blocking checks pass | `{exact command(s) from implementation-plan.md}` | H1-1 | shared | Durable gate observations in handoff | `coordinator` | `[ ]` |
 | H1-3 | For product MEUs, update/render/check MEU status and current focus. For `meus: []`, prove the registered product-state no-op. | orchestrator | SSOT rendered or no-op receipt | `python tools/meu_status.py render --check *> {{RECEIPTS_DIR}}/drift-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/drift-check.txt; exit $code` | H1-2 | shared | SSOT/no-op receipt | `coordinator` | `[ ]` |
 | H1-4 | If `packages/api/` changed, check OpenAPI drift and regenerate only on detected drift; otherwise record the skip basis. | tester | OpenAPI receipt or scoped skip | `python -c "import pathlib,sys; sys.exit(0 if not pathlib.Path('packages/api').exists() else 1)" *> {{RECEIPTS_DIR}}/openapi-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/openapi-check.txt; exit $code` | H1-3 | shared | OpenAPI receipt | `coordinator` | `[ ]` |
 | H1-5 | Read the handoff template and deterministic latest peer exemplar. | orchestrator | Source-read receipt | `view_file: .agent/templates/HANDOFF-TEMPLATE.md` plus latest peer handoff | H1-4 | compact_continue | Template/exemplar receipt; compact_continue fallback | `coordinator` | `[ ]` |
 | H1-6 | Create the complete evidence handoff. Product: `.agent/context/handoffs/{date}-{project-slug}-{MEU-ID}-handoff.md` per MEU. Non-product `meus: []`: `.agent/context/handoffs/{date}-{project-slug}-handoff.md`. | orchestrator | Canonical handoff set | `python tools/validate_closeout_artifacts.py --handoff {handoff-file} --plan {plan-file} *> {{RECEIPTS_DIR}}/handoff-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/handoff-check.txt; exit $code` | H1-5 | compact_continue | Canonical handoff(s); compact_continue fallback | `coordinator` | `[ ]` |
 | H1-6a | Prove every plan AC appears in the handoff AC table. | tester | Complete target-bound AC set | `python tools/validate_closeout_artifacts.py --plan {plan-file} --handoff {handoff-file} --ac-coverage-only *> {{RECEIPTS_DIR}}/handoff-ac-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/handoff-ac-check.txt; exit $code` | H1-6 | shared | AC validation receipt | `coordinator` | `[ ]` |
+| H1-6b | Verify fresh full evidence against independently obtained current D6 identity; rerun D6 full if inputs changed or evidence is missing. | tester | Fresh full evidence | `python tools/durable_evidence.py {handoff-file} --require-full --expected-state {actual-state} *> {{RECEIPTS_DIR}}/full-evidence-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/full-evidence-check.txt; exit $code` | H1-6a | shared | Handoff evidence.v1 full record | `coordinator` | `[ ]` |
 | | **🔎 Execution Critical Review** — blocking independent-review region; the implementer never authors the verdict. | | | | | | | | |
-| H1-7 | Dispatch `independent_reviewer` through `cli-dispatch/SKILL.md`; loop corrections to approval or the six-round hard stop. | reviewer dispatch / coder corrections | Rolling implementation review plus target-bound approval receipt | `python tools/validate_closeout_artifacts.py --review .agent/context/handoffs/{date}-{project-slug}-implementation-critical-review.md --approved-state-only --expected-review-mode execution --expected-target-plan docs/execution/plans/{date}-{project-slug}/implementation-plan.md --max-review-rounds 6 *> {{RECEIPTS_DIR}}/exec-review.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/exec-review.txt; exit $code` | H1-6a | isolated | Rolling review; approval receipt; compact_continue fallback | — | `[ ]` |
+| H1-7 | Dispatch independent reviewer under EGRESS_PRECEDENCE; loop corrections within ledger limits. | reviewer dispatch / coder corrections | Rolling review | `{exact authorized dispatch command with preserved exit}` | H1-6b | isolated | Rolling review; durable findings; compact_continue fallback | — | `[ ]` |
+| H1-7a | Parse current review to target-bound state. | tester | Review state receipt | `python tools/validate_closeout_artifacts.py --review {review-file} --review-state-only --expected-review-mode execution --expected-target-plan {plan-file} --max-review-rounds {configured-cap} --output {{RECEIPTS_DIR}}/review-state.json *> {{RECEIPTS_DIR}}/review-state-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/review-state-check.txt; exit $code` | H1-7 | shared | Durable review + parsed state | `coordinator` | `[ ]` |
+| H1-7b | Require approved current review state and matching ledger verdict. | tester | Verified approval | `python tools/validate_closeout_artifacts.py --review {review-file} --approved-state-only --review-state-receipt {{RECEIPTS_DIR}}/review-state.json --expected-review-mode execution --expected-target-plan {plan-file} --max-review-rounds {configured-cap} *> {{RECEIPTS_DIR}}/exec-review.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/exec-review.txt; exit $code` | H1-7a | shared | Durable approval observation | `coordinator` | `[ ]` |
 | | **📋 Phase H2 — Post-Review Closeout** — continue immediately after approval; first re-read `task.md`. | | | | | | | | |
-| H2-1 | Read the reflection template, schema, and deterministic latest peer exemplar. | orchestrator | Source-read receipt | `view_file: .agent/templates/REFLECTION-TEMPLATE.md`, `.agent/schemas/reflection.v1.yaml`, and latest peer reflection | H1-7 | shared | Reflection source receipt | `coordinator` | `[ ]` |
+| H2-1 | Read the reflection template, schema, and deterministic latest peer exemplar. | orchestrator | Source-read receipt | `view_file: .agent/templates/REFLECTION-TEMPLATE.md`, `.agent/schemas/reflection.v1.yaml`, and latest peer reflection | H1-7b | shared | Reflection source receipt | `coordinator` | `[ ]` |
 | H2-2 | Create the full reflection with review churn and Instruction Coverage YAML. | orchestrator | `docs/execution/reflections/{date}-{project-slug}-reflection.md` | `python tools/validate_closeout_artifacts.py --reflection {reflection-file} --reflection-template .agent/templates/REFLECTION-TEMPLATE.md --reflection-schema .agent/schemas/reflection.v1.yaml *> {{RECEIPTS_DIR}}/reflection-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/reflection-check.txt; exit $code` | H2-1 | compact_continue | Reflection; compact_continue fallback | `coordinator` | `[ ]` |
 | H2-3 | Append and verify the metrics row. | orchestrator | Populated metrics row | `python -c "import pathlib,sys; p=pathlib.Path('docs/execution/metrics.md'); sys.exit(0 if p.exists() and p.read_text(encoding='utf-8').strip() else 1)" *> {{RECEIPTS_DIR}}/metrics-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/metrics-check.txt; exit $code` | H2-2 | shared | Metrics receipt | `coordinator` | `[ ]` |
 | H2-4 | Run complete closeout structural, handoff, approval, and reflection checks. | tester | Passing completion-preflight receipt | `python tools/lint_task_contract.py --task docs/execution/plans/{date}-{project-slug}/task.md *> {{RECEIPTS_DIR}}/closeout-preflight.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/closeout-preflight.txt; exit $code` | H2-3 | shared | Closeout receipt | `coordinator` | `[ ]` |
@@ -107,10 +111,17 @@ capability; otherwise change it to `compact_continue` before execution.
 | `[x]` | Complete |
 | `[B]` | Blocked — evidence-gated (closed reason list + pasted error; must link follow-up) |
 
-### Evidence-First & Sequencing Rules (v2.1)
+### Evidence-First & Sequencing Rules
+
+Evidence records follow `.agent/docs/output-evidence-policy.md`; raw receipts are working
+data. Each completed row points to durable pasted observations. Update domain-specific
+H1-3/H1-4 commands from PROFILE D6/D9 before execution. Replace all placeholder commands,
+including the review cap, and preserve exact command status after receipt reads. No stop
+hook is installed by this template; a future adapter must declare/test arming and release.
+
 
 - **Evidence-first completion:** a row is `[x]` only when its deliverable exists and the handoff/walkthrough carries the evidence bundle (AGENTS.md §Execution Contract).
 - **The review barrier resolves the old reflection↔review cycle:** the handoff (H1-6) is created *before* the review (it is the review's input); the reflection/metrics (H2) are created *after* `approved` so they can record the verdict. Do not create H2 artifacts during H1, and do not dispatch the review (H1-7) before the handoff exists.
 - **Self-review prohibition:** the implementing agent dispatches and collects the H1-7 review; it never authors the `approved` verdict itself (AGENTS.md §Execution Contract).
-- **`[B]` is evidence-gated:** valid ONLY for (a) a reproduced *external* error, (b) a missing dependency/credential/permission, or (c) a human-decision gate — each with a linked follow-up and, for (a)/(b), the pasted command + error (a `{{RECEIPTS_DIR}}/` redirect path a reviewer can re-open). Subjective reasons ("too complex", "no time", "out of scope", "later") are invalid; no error artifact ⇒ not blocked ⇒ keep working (AGENTS.md §Execution Contract).
-- **Dispatching the H1-7 review is a blocking step, not a turn boundary:** continue to H2 in the same pass once the `approved` verdict file lands. The only sanctioned turn-enders are DONE, the round cap, both reviewers rate-limited, the ~50% context checkpoint, or a human-decision gate (AGENTS.md §Execution Contract).
+- **`[B]` is evidence-gated:** valid ONLY for (a) a reproduced *external* error, (b) a missing dependency/credential/permission, or (c) a human-decision gate — each with a linked follow-up and, for (a)/(b), a row-bound `### B-<row-id>` block with command, nonzero exit and pasted decisive error as `evidence.v1`; decisions need a durable decision link. The row cites `B-<row-id>` and `follow-up [label](target)`. Subjective reasons ("too complex", "no time", "out of scope", "later") are invalid; no error artifact ⇒ not blocked ⇒ keep working (AGENTS.md §Execution Contract).
+- **Dispatching the H1-7 review is a blocking step, not a turn boundary:** continue to H2 in the same pass once the `approved` verdict file lands. The only sanctioned turn-enders are DONE, review cap, reviewer unavailable, or human decision; compaction continues (AGENTS.md §Execution Contract).

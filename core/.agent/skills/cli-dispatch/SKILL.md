@@ -64,10 +64,14 @@ The `-Mode` parameter maps to the Codex sandbox levels:
 |------|---------------|-------------|
 | `ReviewReadOnly` | `workspace-write` + `writable_roots=["{{RECEIPTS_DIR}}"]` | Least-privilege review mode **when the Windows sandbox helper is healthy**. Intended to allow workspace + `{{RECEIPTS_DIR}}` writes; product/plan edits stay forbidden by the review prompt. |
 | `ReviewWorkspace`| `workspace-write` + `writable_roots=["{{RECEIPTS_DIR}}"]` | Same sandbox boundary as `ReviewReadOnly`; use when the task may need broader in-workspace edits beyond a review handoff. |
-| `FullAccess` | `danger-full-access` | **Required default for Windows Codex reviews that run shell / pytest / vitest and write P0 receipts under `{{RECEIPTS_DIR}}/`.** Bypasses the Windows sandbox helper. Requires `-FullAccessJustification` (min 20 characters). Product/plan edits remain forbidden by the review workflow prompt. |
+| `FullAccess` | `danger-full-access` | Explicit exception when a reproduced sandbox capability failure prevents authorized work. It is not required merely for temp output. Requires `-FullAccessJustification` (min 20 characters). Product/plan edits remain forbidden by the review workflow prompt. |
 
 > [!CAUTION]
-> **Windows sandbox helper vs Temp access.** `ReviewReadOnly` / `ReviewWorkspace` still invoke Codex's Windows sandbox. On this host the helper commonly fails with `windows sandbox: helper_unknown_error: setup refresh had errors`, which blocks *all* shell tool use — including reads and `{{RECEIPTS_DIR}}` receipts — even though `writable_roots` lists Temp. When that happens (or whenever the review must produce Temp receipts), dispatch with `-Mode FullAccess` and a justification naming Temp/P0 receipts + sandbox-helper bypass. Do **not** treat `ReviewReadOnly` as sufficient for Temp on Windows.
+> **Verify the adopter's sandbox.** Probe the required repository/receipt reads and writes
+> under PROFILE A. ReviewReadOnly and ReviewWorkspace both use workspace-write; neither
+> enforces repository read-only access at OS level. Prompt write-scope restrictions still
+> apply. A reproduced sandbox-helper error may justify an authorized FullAccess exception,
+> with the wrapper's required justification. A receipt path alone never justifies it.
 
 ### agy permissions (headless)
 
@@ -218,32 +222,26 @@ because the ledger counted a dispatch it permitted. So the kind carries a floor:
   (`ledger_mode_unavailable`) rather than guessing a kind. The wrapper and
   `tools/review_ledger.py` ship as a pair; update them together.
 
-### Receipts Authoritative (what the dispatcher owes the reviewer)
+### Durable review payload
 
-An execution review must not re-run the full suite to corroborate a receipt it was already
-given — that is the reviewer-side rule, and it lives in
-[`execution-critical-review.md`](../../workflows/execution-critical-review.md) §Receipts
-Authoritative. The dispatching session's half of it:
+Include the handoff's evidence.v1 records: command/procedure, exit/result, selected scope,
+input identity and pasted decisive output. Promote the final verdict/findings into the
+rolling repository review before raw-log retention removes working files. Verify current
+D6 identity; stale or missing full evidence requires a fresh run. Independent targeted
+probes supplement established full evidence. See execution-critical-review.
 
-1. **Put the receipts in the prompt** — path, command, exit code, and the counts. A
-   reviewer told only "tests pass" has nothing to read and will re-run the suite.
-2. **Leave them readable.** Receipts live under `{{RECEIPTS_DIR}}`, which is what
-   `ReviewReadOnly`/`ReviewWorkspace` list in `writable_roots`; on Windows the sandbox
-   helper commonly blocks reads there anyway, which is the other reason `FullAccess` is
-   the working default for reviews on this platform.
-3. **Do not pre-emptively grant a bigger timeout instead.** If a review needs the suite
-   re-run, the receipt was inadequate; fix the receipt.
+Dispatch containment is physical, not a temp/tmp name ban: output under RECEIPTS_DIR,
+cwd/schema under PROJECT_ROOT, prompt under either root. Keep fixture temp cleanup separate.
+Do not replace framework wrappers with product copies: framework Kind is
+plan|execution|discovery|handoff|multi-handoff and binds intent/vendor/usage to the ledger.
+Usage is recorded before retention. A successful process exit alone is not approval.
 
-For execution reviews with GUI E2E: prefer trusting a post-edit Playwright receipt over
-re-launching Electron inside Codex (see `execution-critical-review.md`).
-
-### Routine Code Review (Windows — FullAccess for Temp receipts)
+### Routine Code Review (use the verified adopter sandbox)
 
 ```powershell
-powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
+pwsh -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
   -LoopId review-core-index-2026-09-07 `
-  -Mode FullAccess `
-  -FullAccessJustification "Windows Codex review needs shell + {{RECEIPTS_DIR}} P0 receipts; sandbox helper blocks ReviewReadOnly" `
+  -Mode ReviewReadOnly `
   -ReasoningEffort medium `
   -PromptText "Review the changes in packages/core/src/index.ts for potential logic errors."
 ```
@@ -251,11 +249,10 @@ powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
 ### Structured Review Verdict (JSON Output)
 
 ```powershell
-powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
+pwsh -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
   -LoopId review-core-index-2026-09-07 `
   -Kind execution `
-  -Mode FullAccess `
-  -FullAccessJustification "Windows Codex review needs shell + {{RECEIPTS_DIR}} P0 receipts; sandbox helper blocks ReviewReadOnly" `
+  -Mode ReviewReadOnly `
   -ReasoningEffort high `
   -OutputSchema .agent/schemas/review-verdict.schema.v2.json `
   -PromptFile {{RECEIPTS_DIR}}/dispatch/review-prompt.txt

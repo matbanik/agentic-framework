@@ -184,7 +184,7 @@ fields:
 #   - "P1:fic-before-code"
 # conflicts: []
 # note: "Planning contract not needed for single-MEU execution."
-# slim_candidate: [dual_agent_workflow]
+# slim_candidate: [independent_review]
 # overthinking_observed: false
 # review_churn:
 #   rounds_to_approval: { plan: 1, execution: 2 }

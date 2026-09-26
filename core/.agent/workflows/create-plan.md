@@ -11,7 +11,7 @@ Use this workflow to start a new build session. Instead of reading a pre-written
 
 // turbo-all
 // NOTE: turbo-all sets SafeToAutoRun=true for non-destructive commands (rg, Get-Content, etc.).
-// It does NOT override AGENTS.md §Commits: "Never auto-commit." Git commit/push still requires explicit user direction.
+// It does NOT override AGENTS.md §Authority and Approval: "Never auto-commit." Git commit/push still requires explicit user direction.
 
 ## Prerequisites
 
@@ -407,7 +407,7 @@ When the reviewer returns `approved`:
 
    Branch on the **flag**, never on the harness name — a harness with no profile row
    inherits the safe `human` default. See `GUARDRAILS.md` SIGN 1 and `AGENTS.md`
-   §Human Approval Gate for the canonical statement of this carve-out.
+   §Authority and Approval for the canonical statement of this carve-out.
 
 #### 5d. Round Cap — HARD STOP
 
@@ -521,7 +521,7 @@ Switch to EXECUTION mode. Follow:
 > - ❌ "This looks like a good stopping point. Let me know if you'd like me to continue."
 > - ❌ Any turn-end / blocked-on-user signal after a sub-milestone (tests pass, handoff written, gate run) that is not one of the sanctioned turn-enders.
 >
-> Closeout (handoff → review → reflection → metrics) is reversible work inside an already-approved plan: it needs no permission (`AGENTS.md` §Hard Gates). The ONLY sanctioned turn-enders are the **five** defined in `AGENTS.md` §Execution Contract: (1) DONE (all Exit Criteria met), (2) execution-review round cap (6) reached, (3) all CLI reviewer rungs rate-limited, (4) the ~50% context-window checkpoint (handoff → **compact → continue**; not a hand-back — a turn-ender only if `context_compaction` is `none`), (5) a genuine human-decision gate.
+> Closeout (handoff → review → reflection → metrics) is reversible work inside an already-approved plan: it needs no permission (`AGENTS.md` §Authority and Approval). The ONLY sanctioned turn-enders are the **four outcomes** defined in `AGENTS.md` §Execution Contract: (1) DONE (all Exit Criteria met), (2) review cap per ledger, (3) reviewer unavailable, (4) a genuine human-decision gate. Compaction continues; a necessary hand-back without compaction belongs to human decision.
 
 After all MEU TDD cycles and handoffs are complete, **continue immediately** with the closeout deliverables below (they are part of Step 6, not a separate phase):
 
@@ -568,7 +568,7 @@ Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/execution-critical-re
 ### 7. Completion Gate
 
 > [!CAUTION]
-> **Recency anchor (restated from Step 6).** Reaching this gate with unchecked rows does NOT authorize a stop — it authorizes *finishing them*. The only sanctioned turn-enders remain the five in `AGENTS.md` §Execution Contract (DONE, round cap, all reviewer rungs rate-limited, ~50% context checkpoint, human-decision gate).
+> **Recency anchor (restated from Step 6).** Reaching this gate with unchecked rows does NOT authorize a stop — it authorizes *finishing them*. The only sanctioned turn-enders remain the four outcomes in `AGENTS.md` §Execution Contract (DONE, review cap, reviewer unavailable, human decision; compaction continues).
 
 Before ending the turn to present results (via your harness's `end_turn_signal` — a `notify_user(BlockedOnUser:false)` on Antigravity, or simply ending the turn on Claude Code/headless; see `.agent/docs/harness-profiles.md`):
 

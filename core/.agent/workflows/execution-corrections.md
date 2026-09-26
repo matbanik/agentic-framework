@@ -14,7 +14,7 @@ This is the workflow for prompts like:
 
 // turbo-all
 // NOTE: turbo-all sets SafeToAutoRun=true for non-destructive commands (rg, Get-Content, etc.).
-// It does NOT override AGENTS.md §Commits: "Never auto-commit." Git commit/push still requires explicit user direction.
+// It does NOT override AGENTS.md §Authority and Approval: "Never auto-commit." Git commit/push still requires explicit user direction.
 
 ## Write Scope (Non-Negotiable)
 
@@ -152,7 +152,7 @@ For each verified finding, specify the exact fix:
 - **Test approach**: what test to write/modify first (TDD discipline)
 - **Why**: link back to finding # and severity
 
-Group fixes by file. Update the corrections plan **in the project folder** (`docs/execution/plans/{date}-{project-slug}/implementation-plan.md`) — the single source of truth. **Never** create a `RequestFeedback:true` mirror artifact (GUARDRAILS SIGN 3, Layer 1 — that path triggers the auto-approval injection on harnesses with `injects_auto_approval: yes`). Applying code/test corrections inside an already-approved plan is reversible work and auto-proceeds (`AGENTS.md` §Hard Gates); it needs no separate approval gate — the execution-critical-review re-dispatch is what re-validates the fixes.
+Group fixes by file. Update the corrections plan **in the project folder** (`docs/execution/plans/{date}-{project-slug}/implementation-plan.md`) — the single source of truth. **Never** create a `RequestFeedback:true` mirror artifact (GUARDRAILS SIGN 3, Layer 1 — that path triggers the auto-approval injection on harnesses with `injects_auto_approval: yes`). Applying code/test corrections inside an already-approved plan is reversible work and auto-proceeds (`AGENTS.md` §Authority and Approval); it needs no separate approval gate — the execution-critical-review re-dispatch is what re-validates the fixes.
 
 ---
 

@@ -132,7 +132,7 @@ copied into prose is stale the day the vendor reprices.
   snapshot has removed is an error, not a silent downgrade.
 - **Cost is compared by band, not by dollars.** Classes declare a
   `price_ceiling_band`, and the resolver refuses a snapshot above it. Quality-First
-  (`AGENTS.md` §Session Discipline) governs: do **not** drop a review effort tier to
+  (`AGENTS.md` §Session and Profile) governs: do **not** drop a review effort tier to
   recover a price delta.
 - **Guard the context cliff.** Some snapshots reprice the *entire* request above an
   input boundary — not just the overflow tokens. Large multi-handoff review dispatches

@@ -15,7 +15,7 @@ This is the workflow for prompts like:
 
 // turbo-all
 // NOTE: turbo-all sets SafeToAutoRun=true for non-destructive reads (Get-Content, rg, etc.).
-// Never auto-commit per AGENTS.md §Commits.
+// Never auto-commit per AGENTS.md §Authority and Approval.
 
 ---
 

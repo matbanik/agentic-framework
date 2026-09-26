@@ -4,7 +4,7 @@ review_mode: "{plan | execution | discovery | handoff | multi-handoff}"
 target_plan: "docs/execution/plans/{plan-path}/implementation-plan.md"
 verdict: "pending"
 findings_count: 0
-template_version: "2.1"
+template_version: "2.2"
 requested_verbosity: "standard"
 agent: "{reviewer-agent}"
 ---
@@ -50,6 +50,13 @@ agent: "{reviewer-agent}"
 
 ## Checklist Results
 
+Paste observed checks as `evidence.v1` JSON blocks using
+`.agent/docs/output-evidence-policy.md` (manual procedure/observer allowed). Preserve
+command, exit/result and decisive output here; a dispatch receipt path is insufficient.
+For execution review, verify the handoff's fresh full-gate state against current D6
+inputs, then run independent targeted probes. Rerun full after relevant state changes
+or when prior evidence cannot be established. Wrapper exit 0 is not reviewer approval.
+
 ### Information Retrieval (IR)
 
 | Check | Result | Command | Exit | Evidence |
@@ -88,8 +95,9 @@ agent: "{reviewer-agent}"
 > — in practice it records reluctance rather than a defect — and `review_ledger.py record`
 > rejects it, so it consumes a round without producing one.
 >
-> A `Result` of `pass`/`fail`/`partial` above requires the `Command` that produced it;
-> only `n/a` may leave it empty. An asserted outcome with no command behind it is prose,
+> A `Result` of `pass`/`fail`/`partial` needs its executed command or an actual manual
+> procedure with observer and null exit code (supported by the v2 checklist schema).
+> Only `n/a` may omit both. An asserted outcome without an observation is prose,
 > and `Exit` is recorded separately because exit 0 from a wrapper means the wrapper
 > finished, not that the check ran.
 

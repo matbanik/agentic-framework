@@ -155,3 +155,14 @@ rtk pip list            rtk pnpm install        rtk npm run <script>
 - On Windows, use PowerShell 7 (`pwsh`) for child scripts that require modern cmdlets
   such as `Get-FileHash`; `powershell.exe` is legacy compatibility only.
 <!-- /headroom:rtk-instructions -->
+
+## D6 staged validation registration
+
+Register each adopter check as static, targeted, full or optional runtime, with argv/manual
+procedure, cwd, scope (including shared fixtures/config), blocking status, expected result,
+native shell and evidence.v1 output. Define input identity for relevant code/tests/config,
+environment and external inputs; disable reuse when that identity is unavailable. One
+fresh full gate precedes final implementation review. Never present targeted output as full.
+The portable record checker is `python tools/durable_evidence.py <artifact>`; final checking
+adds `--require-full --expected-state <independently-obtained-state>`. Wrap with the native
+receipt/exit pattern in output-evidence-policy. This checks records, not a product suite.

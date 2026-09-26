@@ -1,126 +1,23 @@
 ---
-name: Codebase Quality Gate
-description: Validation pipeline for {{PROJECT_NAME_TITLE}} monorepo. Runs type checks, linting, tests, anti-placeholder scans, and evidence checks. Supports phase-level and MEU-scoped runs.
+name: quality-gate
+description: Run the adopter's configured static, targeted and final full validation stages; preserve durable command or manual evidence and refuse partial completion claims.
 ---
 
-# Codebase Quality Gate Skill
+# Quality gate
 
-## Overview
+Read PROFILE D6, the registered commands, testing-strategy and output-evidence-policy before running checks. D6_ADOPTER_ARGV owns executable/argv or manual procedure, cwd, scope, blocking status, expected result, shell and input identity. No packaged product validator or universal --scope/--json flag exists.
 
-The quality gate is **D6_ADOPTER_ARGV** from `PROJECT-PROFILE.md`. This package
-does not ship `tools/validate_codebase.py`. Record executable, argv, cwd, scope,
-blocking, expected result, shell, and receipt path in PROFILE D6. Redirect every
-stream to `{{RECEIPTS_DIR}}`. A failing child must leave every diagnostic id on
-that receipt.
+## Procedure
 
-## Commands
+1. Resolve affected code, tests, shared fixtures, configuration and generated inputs from the plan/diff. Select registered static checks first, then targeted behavior/contract checks.
+2. Redirect every process stream to the configured receipt root; capture status immediately, inspect the receipt, propagate status. RTK is optional; exact evidence must remain unfiltered.
+3. On blocking failure, fix and rerun affected checks. Record later unexecuted stages as not_run with a reason. An advisory warning is reported, not silently converted into a blocking check; an unexpected skip is investigated.
+4. After all implementation and input-changing artifact updates, run a fresh full gate on the final review state. Compare complete input identity before/after. Changes, incomplete identity, cached output or snapshot-only execution cannot establish this final gate.
+5. Paste evidence.v1 records into the durable handoff. Validate with tools/durable_evidence.py, using --require-full and independently obtained --expected-state for final review. Manual checks use observer/procedure and null exit_code, not invented commands.
+6. Continue handoff → independent review → closeout. Green checks alone do not establish DONE. Reuse intermediate results only with implemented complete identity; no reuse adapter is shipped by default.
 
-Read PROFILE D6. Example (not a universal default):
+## Adopter choices
 
-```bash
-python -m pytest test_hello.py -q
-```
+Coverage floors, integration selection, supported platforms, GUI/TUI runtime checks, security scans and timing budgets are registered in D6. Compile generated bundles before checks that consume them; validate mocks against real boundary schemas. A fixture's temp directory must never share a cleanup root with receipts or durable evidence.
 
-## When to Run
-
-| Trigger | Scope | Command |
-|---------|-------|---------|
-| After each code change | MEU | `--scope meu` |
-| After completing all MEUs in a phase | Phase | (default, no flag) |
-| Before `git commit` | Phase | (default) |
-| During Codex validation | Phase | `--json` for structured output |
-
-## Check Categories
-
-### Blocking (must pass)
-
-| # | Check | Tool | Fail = |
-|---|-------|------|--------|
-| 1 | Python type check | `pyright` | Type error in domain/infra/api |
-| 2 | Python lint | `ruff` | Style or logic violation |
-| 3 | Python unit tests | `pytest -m unit` | Failing test |
-| 4 | TypeScript type check | `tsc --noEmit` | Type error in UI/MCP |
-| 5 | TypeScript lint | `eslint` | Lint violation |
-| 6 | TypeScript unit tests | `vitest` | Failing test |
-| 7 | Anti-placeholder scan | `rg TODO\|FIXME\|NotImplementedError` | Unresolved placeholder (lines with `# noqa: placeholder` excluded) |
-| 8 | Anti-deferral scan | `rg pass.*placeholder\|raise NotImplementedError` | Deferred implementation |
-| 9 | GUI-API seam tests | `pytest tests/integration/test_gui_api_seams.py` | Field mismatch, schema gap, response format bug |
-| 10 | OpenAPI spec drift | `uv run python tools/export_openapi.py --check openapi.committed.json` | API route changed without regenerating committed spec |
-| 11 | Boundary validation audit | Multi-pattern scan (see below) | Write-adjacent input lacks boundary schema enforcement |
-
-#### Check 11 — Boundary Validation Audit Patterns
-
-Run all four patterns against touched route and service files. Any match requires investigation:
-
-```powershell
-# 11a: Raw dict params in route handlers
-rg -n "dict\[str, Any\]" <touched-route-files>
-
-# 11b: Unvalidated reconstruction (replace or __dict__ update)
-rg -n "replace\(.*\*\*|__dict__.*update" <touched-service-files>
-
-# 11c: Missing extra="forbid" on request models
-rg -n "class.*Request.*BaseModel" <touched-route-files>
-# Then verify each match has extra="forbid"
-
-# 11d: kwargs bypass from external input
-rg -n "\*\*kwargs|\*\*{" <touched-service-files>
-```
-
-### Advisory (non-blocking)
-
-| # | Check | Tool | Purpose |
-|---|-------|------|---------|
-| A1 | Coverage report | `pytest --cov` | Track test coverage |
-| A2 | Security scan | `bandit` | Surface risky patterns |
-| A3 | Evidence bundle | Handoff field check | Ensure handoff completeness |
-
-## Agent Integration
-
-### Reading Results
-
-When using `--json`, output structure:
-```json
-{
-  "summary": {
-    "passed": true,
-    "blocking_passed": 8,
-    "blocking_failed": 0,
-    "advisory_count": 3,
-    "skipped_count": 0,
-    "total_duration_s": 12.5
-  },
-  "checks": [
-    {"name": "...", "passed": true, "blocking": true, "duration_s": 2.1, "message": ""}
-  ]
-}
-```
-
-### Interpreting Failures
-
-1. **Blocking failure** → Fix before proceeding. Do NOT mark `task.md` items as `[x]`.
-2. **Advisory warning** → Note in handoff but do not block progress.
-3. **Skipped check** → Phase not yet scaffolded (e.g., no TypeScript dirs). Normal.
-
-### Phase Gate vs MEU Gate
-
-- **MEU gate**: Run after each MEU. Use `--scope meu`. Some later-phase checks may fail — that's expected.
-- **Phase gate**: Run only when ALL MEUs in the phase are done. Must pass completely.
-
-### GUI-Phase Gates (Phase 6+)
-
-When working on `ui/` code, the following additional checks apply:
-
-| # | Check | Command | When |
-|---|-------|---------|------|
-| G1 | Electron build | `cd ui && npm run build` | **Every** source change to `ui/src/main/` or `ui/src/preload/` |
-| G2 | E2E smoke (when wave is active) | `cd ui && npm run build && npx playwright test` | After completing a wave gate MEU |
-
-> [!IMPORTANT]
-> **Electron build is mandatory.** Playwright E2E tests launch the compiled `out/main/index.js`, not source files.
-> Source changes to `ui/src/main/` are invisible to E2E until `npm run build` runs.
-> The stale-bundle bug (4 review passes, 2026-03-18) was caused by omitting this step.
-
-### Mock-Contract Validation
-
-When reviewing or writing unit tests that mock API responses, verify TS interfaces match the actual Python API models. See [testing-strategy.md §Mock-Contract Validation Rule](../../docs/testing-strategy.md) for details.
+For an external runtime/dependency blocker, record the actual failed command/nonzero exit/error plus a durable follow-up and row-bound blocker block. Unfinished code is not an external blocker. PROFILE C controls what evidence may be retained or sent to reviewers.

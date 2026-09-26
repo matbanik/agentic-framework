@@ -1,195 +1,79 @@
-# Instruction Registry — AGENTS.md Section Inventory
-# Generated: 2026-04-25
-# Source: Every H2 heading in AGENTS.md, auto-derived snake_case IDs
-# Priority heuristic (synthesis §6):
-#   P0 = safety/guardrail rules (auto_prune: false)
-#   P1 = quality gates
-#   P2 = workflow/process
-#   P3 = convenience/speed
-# H3 sub-sections inherit priority from their parent H2.
+# Instruction Registry — canonical AGENTS.md H2 sections
+# Consolidated 2026-09-26; history mappings are in the maintainer rule-preservation ledger.
+# P0/P1/P2/P3 are repository categories, not host instruction roles.
 
 sections:
-  # --- P0: Safety / Guardrail Rules (never auto-prune) ---
-  - section_id: priority_0_system_constraints_non_negotiable
-    heading: "PRIORITY 0 — SYSTEM CONSTRAINTS (Non-Negotiable)"
+  - section_id: authority_and_approval
+    heading: "Authority and Approval"
     priority: P0
     safety: true
     auto_prune: false
-    description: "Terminal redirect rules, priority hierarchy, no-pipe checks"
 
-  - section_id: pre_handoff_self_review_mandatory
-    heading: "Pre-Handoff Self-Review (Mandatory)"
+  - section_id: session_and_profile
+    heading: "Session and Profile"
     priority: P0
     safety: true
     auto_prune: false
-    description: "Mandatory self-review protocol before any handoff"
 
-  - section_id: execution_contract
-    heading: "Execution Contract"
+  - section_id: output_and_evidence
+    heading: "Output and Evidence"
     priority: P0
     safety: true
     auto_prune: false
-    description: "Git commit policy, MEU gate, anti-placeholder enforcement"
-
-  - section_id: windows_shell_powershell
-    heading: "Windows Shell (PowerShell)"
-    priority: P0
-    safety: true
-    auto_prune: false
-    description: "Platform-specific safety rules for PowerShell execution"
-
-  # --- P1: Quality Gates ---
-  - section_id: testing_tdd_protocol
-    heading: "Testing & TDD Protocol"
-    priority: P1
-    safety: false
-    auto_prune: false
-    description: "Tests-first workflow, FIC-based TDD, test immutability"
 
   - section_id: planning_contract
     heading: "Planning Contract"
     priority: P1
     safety: false
     auto_prune: false
-    description: "Spec sufficiency gate, boundary input contract, plan files location"
 
-  - section_id: testing_requirements
-    heading: "Testing Requirements"
+  - section_id: testing_tdd_protocol
+    heading: "Testing & TDD Protocol"
     priority: P1
     safety: false
     auto_prune: false
-    detail_home: ".agent/docs/testing-strategy.md"
-    description: "Test pyramid, fixture conventions, coverage targets (slim stub; detail relocated)"
-
-  - section_id: code_quality
-    heading: "Code Quality"
-    priority: P1
-    safety: false
-    auto_prune: false
-    description: "Linting, type checking, style conventions"
 
   - section_id: validation_pipeline
     heading: "Validation Pipeline"
     priority: P1
     safety: false
     auto_prune: false
-    detail_home: ".agent/docs/testing-strategy.md"
-    description: "Multi-stage validation toolchain (slim stub; detail relocated)"
 
-  - section_id: dual_agent_workflow
-    heading: "Dual-Agent Workflow"
+  - section_id: execution_contract
+    heading: "Execution Contract"
+    priority: P0
+    safety: true
+    auto_prune: false
+
+  - section_id: independent_review
+    heading: "Independent Review"
+    priority: P0
+    safety: true
+    auto_prune: false
+
+  - section_id: code_quality
+    heading: "Code Quality"
     priority: P1
     safety: false
     auto_prune: false
-    description: "Opus/Codex handoff protocol"
 
-  # --- P2: Workflow / Process ---
-  - section_id: quick_commands
-    heading: "Quick Commands"
+  - section_id: artifacts_and_context
+    heading: "Artifacts and Context"
     priority: P2
     safety: false
-    auto_prune: true
-    detail_home: ".agent/docs/commands.md"
-    description: "Common developer command reference (slim stub; detail relocated)"
-
-  - section_id: architecture
-    heading: "Architecture"
-    priority: P2
-    safety: false
-    auto_prune: true
-    detail_home: ".agent/docs/architecture.md"
-    description: "Monorepo layer structure and dependency rules (slim stub; detail relocated)"
+    auto_prune: false
 
   - section_id: project_context
     heading: "Project Context"
     priority: P2
     safety: false
-    auto_prune: true
-    description: "{{PROJECT_NAME_TITLE}} does NOT execute trades clarification"
+    auto_prune: false
 
-  - section_id: communication_policy
-    heading: "Communication Policy"
-    priority: P2
-    safety: false
-    auto_prune: true
-    description: "Risk surfacing, literal instruction mode"
-
-  - section_id: session_discipline
-    heading: "Session Discipline"
-    priority: P2
-    safety: false
-    auto_prune: true
-    description: "Session start/end checklist, context file hygiene"
-
-  - section_id: operating_model
-    heading: "Operating Model"
-    priority: P2
-    safety: false
-    auto_prune: true
-    description: "PLANNING/EXECUTION/VERIFICATION modes and role adoption"
-
-  - section_id: roles_workflows
-    heading: "Roles & Workflows"
-    priority: P2
-    safety: false
-    auto_prune: true
-    description: "Six deterministic roles, workflow invocation"
-
-  - section_id: commits
-    heading: "Commits"
-    priority: P2
-    safety: false
-    auto_prune: true
-    description: "Git commit conventions and signing"
-
-  - section_id: artifact_naming_convention
-    heading: "Artifact Naming Convention"
-    priority: P2
-    safety: false
-    auto_prune: true
-    detail_home: ".agent/docs/artifact-naming.md"
-    description: "Date-based handoff/reflection naming + Template-First rule. Absorbs the former handoff_protocol (handoff creation/continuity)."
-
-  # --- P3: Convenience / Speed ---
-  - section_id: skills
-    heading: "Skills"
+  - section_id: instructions_and_tools
+    heading: "Instructions and Tools"
     priority: P3
-    safety: false
-    auto_prune: true
-    detail_home: ".agent/docs/commands.md"
-    description: "On-demand skill loading reference (slim stub; detail relocated)"
-
-  - section_id: mcp_servers
-    heading: "MCP Servers"
-    priority: P3
-    safety: false
-    auto_prune: true
-    detail_home: ".agent/docs/commands.md"
-    description: "Available MCP server configuration (slim stub; detail relocated)"
-
-  - section_id: context_docs
-    heading: "Context & Docs"
-    priority: P3
-    safety: false
-    auto_prune: true
-    detail_home: ".agent/docs/commands.md"
-    description: "Context files and documentation pointers (slim stub; detail relocated)"
-
-  - section_id: instruction_coverage_reflection
-    heading: "Instruction Coverage Reflection"
-    priority: P2
     safety: false
     auto_prune: false
-    detail_home: ".agent/docs/artifact-naming.md"
-    description: "Meta-prompt for session-end reflection YAML emission (slim stub; detail relocated)"
-
-  - section_id: rtk_token_optimized_commands
-    heading: "RTK (Token-Optimized Commands)"
-    priority: P3
-    safety: false
-    auto_prune: true
-    detail_home: ".agent/docs/commands.md"
-    description: "rtk command prefix for context-token savings (slim stub; detail relocated)"
 
 # --- Workflow / Role / Skill Files ---
 workflows:
@@ -321,7 +205,7 @@ skills:
 
 # --- Protected regions (skill-optimizer outputs; metadata only, not a behavioral rule) ---
 # Machine-staged LEARNED edits land ONLY between these markers and are adopted by a
-# human by hand (tools/skill_optimize/stage.py). See AGENTS.md §Human Approval Gate.
+# human by hand (tools/skill_optimize/stage.py). See AGENTS.md §Authority and Approval.
 protected_regions:
   - region_id: learned_instructions
     marker_start: "<!-- LEARNED:START id={region_id} -->"

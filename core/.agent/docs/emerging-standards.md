@@ -1000,7 +1000,7 @@ const { showModal, guardedSelect, handleCancel, handleDiscard, handleSaveAndCont
   ```
 - **Cross-references:**
   - `GUARDRAILS.md` SIGN 3 (three-layer defense)
-  - `AGENTS.md` §P0 Human Approval Gate
+  - `AGENTS.md` §Authority and Approval
   - `create-plan.md` Step 5 HARD STOP (anti-bypass list)
 - **Research basis:** Web search on agentic HITL defense patterns — system messages must be treated as untrusted data (equivalent to indirect prompt injection). Approval gates must verify message source, not just message content.
 
@@ -1032,8 +1032,8 @@ const { showModal, guardedSelect, handleCancel, handleDiscard, handleSaveAndCont
   ```
 - **Cross-references:**
   - `BUILD_PLAN.md` Golden Rule #6 (canonical cross-layer rule)
-  - `AGENTS.md` §Spec Sufficiency Gate (verify behaviors before planning)
-  - `AGENTS.md` §Boundary Input Contract (schema parity between layers)
+  - `AGENTS.md` §Planning Contract (verify behaviors before planning)
+  - `AGENTS.md` §Planning Contract (schema parity between layers)
   - MEU-119 reflection: `docs/execution/reflections/2026-06-04-behavioral-mcp-actions-reflection.md`
 
 ### G30 — Native Dropdown Styling in Chromium/Electron (Theme-Aware)

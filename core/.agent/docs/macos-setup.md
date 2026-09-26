@@ -12,7 +12,7 @@
 > you should expect to hit them. "Unverified" was previously doing double duty as
 > "we don't know" and "assume the worst"; those are now separated.
 
-This guide is the macOS companion to `AGENTS.md` §PRIORITY 0 and
+This guide is the macOS companion to `AGENTS.md` §Output and Evidence and
 `cli-dispatch/SKILL.md` §Cross-Platform Dispatch. Windows adopters can ignore it.
 
 ---
@@ -417,7 +417,7 @@ if it exits `3`, the gate could not be evaluated (no `python3`/`python`, or
 
 ## Cross-references
 
-- `AGENTS.md` §PRIORITY 0 — `native_shell` resolution and redirect forms
+- `AGENTS.md` §Output and Evidence — `native_shell` resolution and redirect forms
 - `.agent/docs/harness-profiles.md` — shell-capability / harness flags
 - `.agent/skills/terminal-preflight/SKILL.md` — non-Windows redirect checklist
 - `.agent/skills/cli-dispatch/SKILL.md` §Cross-Platform Dispatch

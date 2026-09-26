@@ -1,5 +1,5 @@
 ---
-name: Terminal Pre-Flight
+name: terminal-preflight
 description: Mandatory pre-flight checklist for terminal commands. Enforces the redirect-to-file pattern to prevent PowerShell buffer saturation and session hangs.
 ---
 
@@ -148,3 +148,10 @@ skip the receipt. Two conditions must both hold, and the second one is the one t
 used to be missing: **the result must not be evidence for any exact-evidence bypass
 class.** A bounded read you look at yourself may skip; an `rg` whose zero matches you
 intend to cite may not, however lightweight it is.
+
+## Promote evidence before closeout
+
+Raw redirected output remains working data. Follow output-evidence-policy's durable
+evidence contract: paste command, preserved exit and decisive output into the repository
+artifact before review/closeout. Do not leave only a receipt link. Manual procedures and
+not_run stages use their explicit forms; do not manufacture successful exits.
