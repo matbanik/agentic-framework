@@ -139,14 +139,16 @@
             "enum": ["pass", "fail", "partial", "n/a"]
           },
           "command": {
-            "description": "The command that produced this result. Required for pass/fail/partial: a checklist row asserting an outcome with no command behind it is prose, and a gate that cannot be run cannot fail (V4). Omit only for `n/a`.",
+            "description": "The actual command that produced this result. For manual observations, omit command and supply procedure, observer and null exit_code. An unobserved claim is not evidence.",
             "type": "string",
             "minLength": 1
           },
           "exit_code": {
             "description": "The command's exit status. Recorded because exit 0 from a wrapper means the wrapper finished, not that the work happened (V2/V13) — keeping the number makes that distinction reviewable instead of assumed.",
-            "type": "integer"
+            "type": ["integer", "null"]
           },
+          "procedure": { "type": "string", "minLength": 1 },
+          "observer": { "type": "string", "minLength": 1 },
           "evidence": { "type": "string" }
         },
         "required": ["check", "result", "evidence"],
@@ -157,7 +159,16 @@
               "properties": { "result": { "enum": ["pass", "fail", "partial"] } },
               "required": ["result"]
             },
-            "then": { "required": ["command"] }
+            "then": {
+              "anyOf": [
+                { "required": ["command", "exit_code"], "properties": { "exit_code": { "type": "integer" } } },
+                {
+                  "required": ["procedure", "observer", "exit_code"],
+                  "properties": { "exit_code": { "type": "null" } },
+                  "not": { "required": ["command"] }
+                }
+              ]
+            }
           }
         ]
       }

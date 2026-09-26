@@ -37,6 +37,7 @@ import json
 import os
 import re
 import sys
+from durable_evidence import blocked_evidence_problems
 import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -708,6 +709,10 @@ def lint(path: str, template_mode: bool, builder_classes: tuple[str, ...]) -> li
         if reason:
             exempt.setdefault(reason, []).append(row.id)
         check_enums(row, path, builder_classes, has_builder)
+        if row.get("status").strip("`* ") == "[B]" and not template_mode:
+            problems = blocked_evidence_problems(row.raw, row.id, text, Path(path))
+            if problems:
+                raise Refuse(f"{path}:{row.line_no}: " + "; ".join(problems))
     check_dependencies(rows, path, template_mode)
 
     fully_checked = len(rows) - sum(len(v) for v in exempt.values())
@@ -868,7 +873,8 @@ def selftest() -> int:
     arm(
         "blocked-row-with-followup-ok",
         "0/OK",
-        ["--task", w(_doc(_row(status="`[B]`", task="blocked on ISSUE-42, error in receipt")))],
+        ["--task", w(_doc(_row(status="`[B]`", task="B-1; follow-up [decision](https://example.org/issues/42)"))
+                     + "\n### B-1\nReason: human-decision\nDecision: [pending decision](https://example.org/issues/42)\n")],
     )
     arm(
         "template-mode-allows-placeholders-ok",

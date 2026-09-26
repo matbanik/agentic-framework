@@ -909,7 +909,7 @@ if [[ -n "$OUTPUT_SCHEMA" && -f "$FINAL_OUTPUT_PATH" ]]; then
     NULL_STRIP_ERROR="null-strip skipped: adapter not found at $SCHEMA_ADAPTER"
   elif [[ -z "$PYTHON_EXE" ]]; then
     NULL_STRIP_ERROR="null-strip skipped: no python3/python interpreter found"
-  elif ! strip_output="$("$PYTHON_EXE" "$SCHEMA_ADAPTER" strip-nulls "$FINAL_OUTPUT_PATH" \
+  elif ! strip_output="$("$PYTHON_EXE" "$SCHEMA_ADAPTER" strip-nulls "$FINAL_OUTPUT_PATH" --schema "$CANONICAL_SCHEMA" \
         --raw-copy "$RUN_DIR/final.raw.json" 2>&1)"; then
     # Not fatal on its own: the model's output is on disk either way, and the validation
     # below is what decides whether it is usable. Recorded so a downstream refusal is

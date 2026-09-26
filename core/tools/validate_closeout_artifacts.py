@@ -37,6 +37,7 @@ import json
 import os
 import re
 import sys
+from durable_evidence import blocked_evidence_problems, evidence_problems
 import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -308,7 +309,7 @@ def check_handoff_binding(handoff_text: str, handoff_path: str, plan_path: str) 
 
 
 def check_blocked_rows(text: str, path: str) -> list[str]:
-    """Every ``[B]`` row needs a linked follow-up.
+    """Every ``[B]`` row needs a linked follow-up and row-bound evidence.
 
     ``[B]`` is the one status that closes a row without the work being done, so it
     is the only status worth a machine check: an unlinked ``[B]`` is indistinguishable
@@ -323,17 +324,14 @@ def check_blocked_rows(text: str, path: str) -> list[str]:
         # ticket-shaped pattern below, so without this every [B] row on an AC table
         # would look like it cited a follow-up -- the check would be structurally
         # incapable of failing on exactly the table it was written for.
-        haystack = AC_ID.sub("", line.replace("[B]", ""))
-        has_link = bool(re.search(r"\[[^\]]+\]\([^)]+\)|#\d+|\b[A-Z]{2,}-\d+\b", haystack))
-        if not has_link:
-            bad.append(line.strip()[:120])
+        row_id = split_cells(line.strip().strip("|"))[0].strip("`* ")
+        problems = blocked_evidence_problems(line, row_id, text, Path(path))
+        bad.extend(f"{row_id}: {problem}" for problem in problems)
     if bad:
         raise Refuse(
-            f"{len(bad)} of {len(blocked)} [B] row(s) in {path} carry no linked "
-            f"follow-up. A [B] without a follow-up is a dropped row that counts as "
-            f"closed:\n  " + "\n  ".join(bad)
+            f"Invalid [B] evidence in {path}:\n  " + "\n  ".join(bad)
         )
-    return [f"{len(blocked)} [B] row(s), all with a linked follow-up"]
+    return [f"{len(blocked)} [B] row(s), all with linked follow-up and blocker evidence"]
 
 
 def check_ac_coverage(handoff_text: str, handoff_path: str, plan_text: str, plan_path: str) -> list[str]:
@@ -369,7 +367,10 @@ def check_handoff_structure(text: str, path: str) -> list[str]:
             f"rows under it. The heading is what a presence check sees; the rows are "
             f"what a reviewer needs."
         )
-    return [f"required sections present; {len(rows)} AC row(s)"]
+    problems = evidence_problems(text)
+    if problems:
+        raise Refuse(f"handoff {path}: " + "; ".join(problems))
+    return [f"required sections present; {len(rows)} AC row(s); durable evidence present"]
 
 
 # ----------------------------------------------------------------- review check
@@ -847,7 +848,9 @@ template_version: "2.1"
 
 ## Evidence
 
-Ran the suite; 12 passed.
+```json
+{"schema_version":"evidence.v1","check_id":"suite","command":"python -m unittest","cwd":".","scope":"unit suite","phase":"targeted","exit_code":0,"result":"pass","tested_state":"fixture-tree","output":"12 tests passed"}
+```
 """
 
 _GOOD_REVIEW = """---
@@ -1140,7 +1143,8 @@ def selftest() -> int:
         "0/OK",
         ["--handoff", w("blocked_ok.md", _GOOD_HANDOFF.replace(
             "| AC-2 | integration | other thing works | Spec | test_b.py::test_other | done |",
-            "| AC-2 | integration | other thing works | Spec | test_b.py::test_other | [B] ISSUE-42 |")),
+            "| AC-2 | integration | other thing works | Spec | test_b.py::test_other | [B] B-AC-2; follow-up [decision](https://example.org/issues/42) |")
+            + "\n### B-AC-2\nReason: human-decision\nDecision: [pending decision](https://example.org/issues/42)\n"),
          "--plan", plan],
     )
     # In a properly-slugged directory on purpose: a plan at an unslugged path raises

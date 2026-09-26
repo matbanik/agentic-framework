@@ -34,9 +34,11 @@ Verbs
     adapt <shipped-schema.json> <api-schema.json>
         Write the API-acceptable adaptation of the shipped schema.
 
-    strip-nulls <document.json> [--raw-copy <path>]
-        Undo the nullable widening in a model's output: delete null-valued keys, in
-        place, so the document matches the unmodified shipped schema again. With
+    strip-nulls <document.json> [--schema <shipped-schema.json>] [--raw-copy <path>]
+        Undo nullable widening in a model's output. With the original schema, remove
+        only directly declared optional properties whose original schema rejects null.
+        Preserve meaningful nulls and unknown/required fields for post-validation.
+        Without --schema, retain the legacy delete-all-null-keys behavior. With
         ``--raw-copy``, the pre-strip text is preserved there first -- a governance
         package must not rewrite a reviewer's output with no auditable copy of what it
         actually said. Nothing is written when there is nothing to strip.
@@ -64,7 +66,7 @@ from pathlib import Path
 
 USAGE = (
     "USAGE: adapt_output_schema.py adapt <shipped-schema.json> <api-schema.json>\n"
-    "       adapt_output_schema.py strip-nulls <document.json> [--raw-copy <path>]\n"
+    "       adapt_output_schema.py strip-nulls <document.json> [--schema <path>] [--raw-copy <path>]\n"
     "       adapt_output_schema.py selftest"
 )
 
@@ -153,25 +155,36 @@ def widen_required(node: object, keys_are_names: bool = False) -> int:
     return widened
 
 
-def strip_nulls(node: object) -> int:
-    """Delete null-valued keys from a parsed document, at every depth. Returns the count.
+def strip_nulls(node: object, validator=None) -> int:
+    """Undo synthetic nulls; keep schema-declared nulls. Returns the removed count.
 
     This only ever removes keys whose value is ``null``. ``false``, ``0`` and ``""`` are
     values and stay, so it cannot launder a real answer out of a verdict, and it cannot
     turn a populated field into a missing one.
     """
+    schema = validator.schema if validator is not None else {}
+    schema = schema if isinstance(schema, dict) else {}
     if isinstance(node, list):
-        return sum(strip_nulls(item) for item in node)
+        child = validator.evolve(schema=schema.get("items", True)) if validator is not None else None
+        return sum(strip_nulls(item, child) for item in node)
     if not isinstance(node, dict):
         return 0
 
     removed = 0
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
     for name in list(node):
-        if node[name] is None:
+        child = validator.evolve(schema=properties.get(name, True)) if validator is not None else None
+        # Unknown or indirectly declared properties are retained, never guessed away.
+        # The unmodified schema remains the authoritative post-validation gate.
+        synthetic = validator is None or (
+            name in properties and name not in required and not child.is_valid(None)
+        )
+        if node[name] is None and synthetic:
             del node[name]
             removed += 1
         else:
-            removed += strip_nulls(node[name])
+            removed += strip_nulls(node[name], child)
     return removed
 
 
@@ -204,10 +217,26 @@ def cmd_adapt(src: Path, dst: Path) -> int:
     return 0
 
 
-def cmd_strip_nulls(path: Path, raw_copy: Path | None) -> int:
+def cmd_strip_nulls(path: Path, raw_copy: Path | None, schema_path: Path | None = None) -> int:
+    validator = None
+    if schema_path is not None:
+        try:
+            from jsonschema import Draft202012Validator
+            from jsonschema.exceptions import SchemaError
+        except ImportError:
+            print("FAIL-CLOSED: jsonschema is required for schema-aware null normalization.")
+            return 3
+        try:
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            Draft202012Validator.check_schema(schema)
+            validator = Draft202012Validator(schema)
+        except (OSError, ValueError, SchemaError) as exc:
+            print(f"FAIL-CLOSED: could not load original schema {schema_path}: {exc}.")
+            return 3
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+        raw_bytes = path.read_bytes()
+        text = raw_bytes.decode("utf-8")
+    except (OSError, UnicodeError) as exc:
         print(f"FAIL-CLOSED: could not read {path}: {exc}.")
         return 3
     if not text.strip():
@@ -223,15 +252,15 @@ def cmd_strip_nulls(path: Path, raw_copy: Path | None) -> int:
         )
         return 3
 
-    removed = strip_nulls(doc)
+    removed = strip_nulls(doc, validator)
     if not removed:
-        print(f"OK: no null-valued keys in {path.name}; left byte-identical")
+        print(f"OK: no synthetic null-valued keys in {path.name}; left byte-identical")
         return 0
 
     try:
         if raw_copy is not None:
             raw_copy.parent.mkdir(parents=True, exist_ok=True)
-            raw_copy.write_text(text, encoding="utf-8")
+            raw_copy.write_bytes(raw_bytes)
         path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
     except OSError as exc:
         print(f"FAIL-CLOSED: could not rewrite {path}: {exc}.")
@@ -523,10 +552,12 @@ def main(argv: list[str]) -> int:
     if verb == "adapt" and len(rest) == 2:
         return cmd_adapt(Path(rest[0]), Path(rest[1]))
     if verb == "strip-nulls":
-        if len(rest) == 1:
-            return cmd_strip_nulls(Path(rest[0]), None)
-        if len(rest) == 3 and rest[1] == "--raw-copy":
-            return cmd_strip_nulls(Path(rest[0]), Path(rest[2]))
+        if rest and len(rest) % 2 == 1:
+            options = dict(zip(rest[1::2], rest[2::2]))
+            if len(options) == len(rest) // 2 and set(options) <= {"--schema", "--raw-copy"}:
+                return cmd_strip_nulls(Path(rest[0]),
+                    Path(options["--raw-copy"]) if "--raw-copy" in options else None,
+                    Path(options["--schema"]) if "--schema" in options else None)
     print(USAGE)
     return 2
 

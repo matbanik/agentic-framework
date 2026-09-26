@@ -859,10 +859,9 @@ if (-not $SkipCodexVersionCheck) {
 
 # Sandbox Mapping
 # ReviewReadOnly/ReviewWorkspace map to workspace-write + writable_roots={{RECEIPTS_DIR}}
-# (Codex pure read-only blocks ALL writes including P0 Temp). On Windows the sandbox
-# helper often fails entirely (helper_unknown_error), so review dispatches that need
-# shell + Temp receipts should use FullAccess (danger-full-access) instead -- see
-# cli-dispatch/SKILL.md. Product/plan edits stay forbidden by the review prompt.
+# Probe adopter sandbox capabilities; temp output alone does not require FullAccess.
+# Use that mode only for an explicitly justified authorized exception.
+# Product/plan write-scope restrictions remain in the review prompt; see cli-dispatch.
 $sandboxLevel = switch ($Mode) {
     'ReviewReadOnly' { 'workspace-write' }
     'ReviewWorkspace' { 'workspace-write' }
@@ -1171,7 +1170,7 @@ if (-not [string]::IsNullOrEmpty($OutputSchema) -and (Test-Path $finalOutputPath
     } elseif (-not $stripPython) {
         $nullStripError = "null-strip skipped: no python3/python interpreter found"
     } else {
-        $stripOutput = (& $stripPython $schemaAdapter strip-nulls $finalOutputPath --raw-copy "$runDir/final.raw.json" 2>&1) -join " "
+        $stripOutput = (& $stripPython $schemaAdapter strip-nulls $finalOutputPath --schema $canonicalSchema --raw-copy "$runDir/final.raw.json" 2>&1) -join " "
         if ($LASTEXITCODE -ne 0) {
             # Do not fail the dispatch on this: the model's output is on disk either way,
             # and the post-validation below is the thing that decides whether it is usable.

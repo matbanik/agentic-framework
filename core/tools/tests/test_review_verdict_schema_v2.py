@@ -49,6 +49,8 @@ def _base(**overrides):
         "requested_verbosity": "standard",
         "verdict": "approved",
         "summary": "No blocking findings.",
+        "intent_anchor": "Demonstrate that review verdict validation accepts good records and rejects broken contracts.",
+        "intent_achieved": "yes",
         "findings": [],
         "checklist_results": [
             {
@@ -118,6 +120,15 @@ ARMS = [
         True,
     ),
     ("discovery-mode-allowed", _base(review_mode="discovery"), True),
+    ("manual-observation-allowed", _base(checklist_results=[{
+        "check": "citation audit", "result": "pass", "procedure": "Compare all eight citations to approved sources",
+        "observer": "named human", "exit_code": None, "evidence": "8 citations matched"}]), True),
+    ("manual-observation-needs-observer", _base(checklist_results=[{
+        "check": "citation audit", "result": "pass", "procedure": "Compare all eight citations",
+        "exit_code": None, "evidence": "8 citations matched"}]), False),
+    ("manual-observation-no-invented-exit", _base(checklist_results=[{
+        "check": "citation audit", "result": "pass", "procedure": "Compare all eight citations",
+        "observer": "named human", "exit_code": 0, "evidence": "8 citations matched"}]), False),
     # --- must REJECT: the v1 conflation v2 exists to undo ---
     (
         "approved-with-blocking-finding",
@@ -164,6 +175,8 @@ ARMS = [
     # --- must REJECT: ledger keys (V41) are not optional ---
     ("missing-loop_id", _without(_base(), "loop_id"), False),
     ("missing-round", _without(_base(), "round"), False),
+    ("missing-intent-anchor", _without(_base(), "intent_anchor"), False),
+    ("missing-intent-achieved", _without(_base(), "intent_achieved"), False),
     ("round-zero", _base(round=0), False),
     # --- must REJECT: structural ---
     ("extra-toplevel-key", _base(vibe="good"), False),
