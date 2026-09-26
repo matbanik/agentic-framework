@@ -7,7 +7,7 @@
 >
 > **Companion doc:** [`agentic-methodology.md`](agentic-methodology.md) is the narrative *why* (philosophy, economics, design rationale). This document is the operational *how* — when the two ever disagree on mechanics, **this document wins**.
 >
-> **Last updated:** 2026-06-18
+> **Last updated:** 2026-09-26
 
 ---
 
@@ -32,16 +32,17 @@ flowchart TD
         B3 --> B4
     end
 
-    subgraph PHASE_3["📦 Phase 3: MEU Registration"]
-        C1["MEU Registry<br/>(.agent/context/meu-registry.md)"]
-        C2["Dependency Graph<br/>(execution order)"]
-        C3["BUILD_PLAN.md<br/>status tracking"]
-        C1 --> C2
-        C2 --> C3
+    subgraph PHASE_3["📦 Phase 3: MEU Registration & Session Grouping — /session-grouping"]
+        C0["Work Intake<br/>Build-plan phase / findings<br/>/issue-triage output"]
+        C1["Stage A: Register MEUs<br/>meu-status.yaml SSOT<br/>Render meu-registry.md"]
+        C2["Stage B: Group Sessions<br/>Dependencies + critical path<br/>One project per session"]
+        C3["Grouping Proposal<br/>.agent/context/grouping/<br/>Reversible draft; no new gate"]
+        C0 -->|New MEUs| C1 --> C2 --> C3
+        C0 -->|Already registered: skip A| C2
     end
 
     subgraph PHASE_4["📝 Phase 4: Implementation Planning"]
-        D1["/create-plan or<br/>/next-project"]
+        D1["/create-plan<br/>Use proposed MEU bundle<br/>Ordered runs if split"]
         D2["Spec Sufficiency Gate<br/>(source-backed)"]
         D3["Research Open Questions<br/>(/pre-build-research)"]
         D4["Write implementation-plan.md<br/>+ task.md"]
@@ -108,6 +109,8 @@ flowchart TD
     classDef review fill:#f7dc6f,stroke:#333,color:#333
     class E6,I1,I3 human
     class E1,E3,G1,G3 review
+    style PHASE_3 fill:#e4f6f1,stroke:#188474,stroke-width:2px
+    style C2 fill:#bce9df,stroke:#188474,stroke-width:2px
 ```
 
 ---
@@ -185,24 +188,28 @@ docs/build-plan/
 
 ---
 
-## Phase 3: MEU Registration
+## Phase 3: MEU Registration & Session Grouping
 
-**Purpose:** Break build plan specs into Manageable Execution Units (MEUs) — the atomic unit of work that goes through the full TDD lifecycle.
+**Purpose:** Turn build-plan phases, review findings, recommendations, or triaged issues into registered Manageable Execution Units (MEUs), then group them into dependency-ordered work sessions before implementation planning.
 
-**Human involvement:** 🟡 Agent proposes MEU breakdown; human reviews via plan approval.
+**Human involvement:** 🟡 Agent drafts the grouping; the existing plan-review and plan-to-execution gates remain in Phases 5–6. `/session-grouping` is planning-only, reversible, and non-gating: it never approves work, dispatches a review, or adds a turn-ender.
 
 ### Process
 
-1. **Agent reads build plan** and proposes MEU decomposition via `/next-project` or `/create-plan`
-2. **MEUs registered** in the MEU registry with slug, matrix reference, description, and status
-3. **Dependency graph** established (which MEUs must complete before others can start)
-4. **BUILD_PLAN.md** updated with MEU references and status tracking
+1. **Work intake** — invoke `/session-grouping <source>` for a build-plan phase, findings document, or recommendations. Prefer `triage-output.yaml` from `/issue-triage` when available; otherwise consult `known-issues.yaml` and the named source.
+2. **Stage A: findings → MEUs** — decompose, number, source-label, and register MEUs in `meu-status.yaml`; give them a build-plan home where needed, then render and check `meu-registry.md`. Skip Stage A when the source's MEUs are already registered.
+3. **Stage B: MEUs → sessions** — always derive dependencies, the critical path, and parallel tiers; bundle related work into sequential sessions with one project per session. Calibrate size against named prior sessions and flag split candidates.
+4. **Write the grouping proposal** to `.agent/context/grouping/{phase-id|YYYY-MM-DD}-{slug}-session-grouping.md`, including scope/traceability, the dependency graph, session rationale, and exact plan-creation pathway.
+5. **Hand off to `/create-plan`** — default to one plan per phase. Multi-session fan-out is an explicitly documented exception: list ordered session slugs and run `/create-plan` once per session block. Without a proposal, `/create-plan` still groups scope inline; this workflow is an optional preparation step, not an extra gate.
 
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| [`.agent/context/meu-registry.md`](https://{{REPO_URL}}/blob/main/.agent/context/meu-registry.md) | Master MEU registry (all phases) |
+| [`.agent/workflows/session-grouping.md`](../workflows/session-grouping.md) | Two-stage grouping workflow and proposal contract |
+| [`.agent/context/meu-status.yaml`](../context/meu-status.yaml) | MEU source of truth |
+| [`.agent/context/meu-registry.md`](https://{{REPO_URL}}/blob/main/.agent/context/meu-registry.md) | Generated MEU registry (all phases) |
+| [`.agent/context/grouping/`](../context/grouping/README.md) | Canonical grouping proposals feeding `/create-plan` |
 | [`docs/BUILD_PLAN.md`](https://{{REPO_URL}}/blob/main/docs/BUILD_PLAN.md) | Status tracking per MEU |
 | [`docs/build-plan/build-priority-matrix.md`](https://{{REPO_URL}}/blob/main/docs/build-plan/build-priority-matrix.md) | MEU ordering |
 
@@ -230,7 +237,7 @@ docs/build-plan/
 
 ### Process
 
-1. **Agent invokes** `/create-plan` or `/next-project` → [create-plan.md](https://{{REPO_URL}}/blob/main/.agent/workflows/create-plan.md)
+1. **Agent invokes** `/create-plan` (directly or through `/next-project`) → [create-plan.md](https://{{REPO_URL}}/blob/main/.agent/workflows/create-plan.md). Read the grouping proposal when present and use its MEU bundle, slug, and build-plan sections; otherwise group inline. For declared multi-session fan-out, plan each session block in dependency order.
 2. **Spec Sufficiency Gate** — every behavior must be tagged with a source:
    - `Spec` — explicit in build plan
    - `Local Canon` — in another canonical doc

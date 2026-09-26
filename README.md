@@ -8,8 +8,11 @@
 
 ![Development lifecycle overview](core/.agent/docs/diagrams/development-lifecycle-overview.png)
 
-The nine-phase delivery loop — research → plan → independent review → implement → validate →
-human-gated commit. ([SVG source](core/.agent/docs/diagrams/development-lifecycle-overview.svg) ·
+The nine-phase delivery loop — research → build specs → register MEUs and group sessions →
+plan → independent review → implement → validate → human-gated commit.
+Session grouping turns findings, phases, and triaged issues into dependency-ordered sessions;
+its proposal feeds `/create-plan` without adding an approval gate.
+([SVG](core/.agent/docs/diagrams/development-lifecycle-overview.svg) ·
 full write-up in [`development-lifecycle.md`](core/.agent/docs/development-lifecycle.md))
 
 ---
