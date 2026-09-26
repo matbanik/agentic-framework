@@ -2,7 +2,7 @@
 
 **Source:** first install of this package into a net-new repo `P:/fw-adopt-probe`, walked as a consuming Cursor agent through ADOPTION-GUIDE Steps 0–8 plus a Step 9 dry walk (plan + task write, no MEU implementation, no live review dispatch, no git commit).
 **Audience:** maintainers of `P:/agentic-framework`.
-**Companion evidence:** Zorivest adopter gaps in [2026-09-18-zorivest-evidence-framework-gaps.md](2026-09-18-zorivest-evidence-framework-gaps.md). This note is the *first-install* half of that picture.
+**Companion evidence:** Source Project adopter gaps in [2026-09-18-source-project-evidence-framework-gaps.md](2026-09-18-source-project-evidence-framework-gaps.md). This note is the *first-install* half of that picture.
 **Friction log (frozen):** `P:/fw-adopt-probe/_probe/adopter-friction-log.md` (SHA-256 `1CCFC346…BE9D80`, IDs F001–F036). Method limitations: `P:/fw-adopt-probe/_probe/METHOD-AND-FREEZE.md`. Receipts: `C:/Temp/fw-adopt-probe/` (`RECEIPTS-INDEX.md`).
 
 Every item below states what the consuming agent hit, the evidence, and what the framework should change. No patches were made to this package in this exercise.
@@ -43,7 +43,7 @@ Priority: cost first, then how often a naive agent would hit it.
 ### 2.3 `Invoke-CodexDispatch.ps1` does not parse on Windows PowerShell 5.1  [high]
 
 - **What happened.** ADOPTION-GUIDE Step 2a allows “PowerShell 5.1+ or pwsh”. A4d names the `.ps1` as canonical. `powershell.exe -File` on the instantiated wrapper: **ParserError** on UTF-8 em-dashes. `pwsh` 7.6.6 parses and exits 1 on missing PromptText (usage only; no live dispatch).
-- **Evidence.** F021; `C:/Temp/fw-adopt-probe/codex-wrapper-help.txt`. Packaged and adopted files: **no UTF-8 BOM**, first bytes `5b 43 6d`, **10 em-dashes**. Same defect as Zorivest 4.2.
+- **Evidence.** F021; `C:/Temp/fw-adopt-probe/codex-wrapper-help.txt`. Packaged and adopted files: **no UTF-8 BOM**, first bytes `5b 43 6d`, **10 em-dashes**. Same defect as Source Project 4.2.
 - **Could the agent have known?** No. The guide presents 5.1 as supported.
 - **Framework change.** ASCII-only `.ps1` **or** UTF-8 BOM. Packaging test: every `.ps1` is ASCII or has a BOM. State in ADOPTION-GUIDE that the wrapper requires `pwsh` until that test exists.
 
@@ -103,9 +103,9 @@ Priority: cost first, then how often a naive agent would hit it.
 
 ### 2.13 Shipped task/plan examples still use `pwsh -Command {` and `rtk`/`uv`  [medium]
 
-- **What happened.** TASK-TEMPLATE.md and create-plan discovery cells wrap work in `rtk proxy pwsh -NoProfile -Command { ... }`. lint_task_contract **accepts** scriptblocks (`scriptblock-is-not-a-placeholder-ok`). Nested backticks in the intended H1-1 unchecked-row probe split the table cell (F035); the naive agent weakened the command so lint would pass. Zorivest 2.4: those cells break under a bash outer harness.
+- **What happened.** TASK-TEMPLATE.md and create-plan discovery cells wrap work in `rtk proxy pwsh -NoProfile -Command { ... }`. lint_task_contract **accepts** scriptblocks (`scriptblock-is-not-a-placeholder-ok`). Nested backticks in the intended H1-1 unchecked-row probe split the table cell (F035); the naive agent weakened the command so lint would pass. Source Project 2.4: those cells break under a bash outer harness.
 - **Evidence.** F034, F035; [core/templates/TASK-TEMPLATE.md](../../core/templates/TASK-TEMPLATE.md) H1-1/H1-7/H2-3/H2-4/H2-5; lint selftest arm name.
-- **Framework change.** Template validation cells: one-line commands or `.ps1`/`.sh` paths. Lint should **refuse** `-Command {` and `\|` in cells (Zorivest 2.4), not bless scriptblocks. H1-1 must be expressible without nested backticks.
+- **Framework change.** Template validation cells: one-line commands or `.ps1`/`.sh` paths. Lint should **refuse** `-Command {` and `\|` in cells (Source Project 2.4), not bless scriptblocks. H1-1 must be expressible without nested backticks.
 
 ### 2.14 Copy-step PowerShell footguns are undocumented  [low, first-session cost]
 
@@ -132,7 +132,7 @@ Priority: cost first, then how often a naive agent would hit it.
 
 ---
 
-## 3. Zorivest overlay
+## 3. Source Project overlay
 
 | Gap | First-install? | Notes |
 |-----|----------------|-------|
@@ -140,7 +140,7 @@ Priority: cost first, then how often a naive agent would hit it.
 | **4.2** PS 5.1 / em-dash / no BOM | **Hit** | Identical bytes: `5b 43 6d`, 10 em-dashes, ParserError (F021). |
 | **4.6** adopter tool drift | **Not reproduced** | Fresh copy from this package. Remains a mature-adopter / refresh problem (`sync --check`). |
 | **1.1** gate truncates failures | **Not reproduced as a run** | `validate_codebase.py` is **not shipped**; it is still the registered command (2.6). Origin-only until D6 is replaced. |
-| **1.2** closeout rules missing from templates | **Not reproduced** | No handoff written. Packaged `validate_closeout_artifacts.py` requires `## Acceptance Criteria` + `## Evidence` and derives reflection headings from the template — not the extra Zorivest mechanical rules (`### Delta:`, exact `## Corrections Applied`, `findings_per_round`). Those look like **adopter-side validator drift** (feeds 4.6) rather than this package’s first-install closeout. |
+| **1.2** closeout rules missing from templates | **Not reproduced** | No handoff written. Packaged `validate_closeout_artifacts.py` requires `## Acceptance Criteria` + `## Evidence` and derives reflection headings from the template — not the extra Source Project mechanical rules (`### Delta:`, exact `## Corrections Applied`, `findings_per_round`). Those look like **adopter-side validator drift** (feeds 4.6) rather than this package’s first-install closeout. |
 | **2.4** `pwsh -Command {` | **Hit in templates** | Still shipped; linter allows scriptblocks; naive agent avoided them by guessing (F035). |
 | **2.1** census sweep | Not exercised | No new tables/ports. |
 | **2.2** RED pyright | Not exercised | No RED row implementation. |
@@ -177,11 +177,11 @@ Rules a naive agent needed and did not get. Confirmations from the live walk are
 ## 5. Suggested order (report only — do not patch in this exercise)
 
 1. **2.1 + 2.2 + 2.4** — without these, no adopter gets a working registry or a green preflight. Align A10, locate order, INSTANTIATE copy list, and preflight.
-2. **2.3 (Zorivest 4.2)** — PS 5.1 parse failure on the canonical dispatcher.
+2. **2.3 (Source Project 4.2)** — PS 5.1 parse failure on the canonical dispatcher.
 3. **2.5 + 2.9 + 2.7** — template paths, `current-focus.md` seed, instantiate `--root` required. These unblock create-plan without guesses.
 4. **2.6** — registered D6 must be a shipped command; drop `/mcp-audit` and `packages/` from the default command card.
-5. **2.13 (Zorivest 2.4)** — template cells and lint must agree; refuse scriptblocks.
+5. **2.13 (Source Project 2.4)** — template cells and lint must agree; refuse scriptblocks.
 6. **2.10, 2.12, 2.8, 2.11, 2.14–2.16** — slash commands, PROFILE SSOT, filename instantiate, link repair, copy recipe, remaining residue.
-7. Zorivest **4.6** (`sync --check`) remains the mature-adopter follow-on; this mock did not age the tree.
+7. Source Project **4.6** (`sync --check`) remains the mature-adopter follow-on; this mock did not age the tree.
 
 Keep `P:/fw-adopt-probe` as the reproduction fixture. Do not add it as a submodule of this package.

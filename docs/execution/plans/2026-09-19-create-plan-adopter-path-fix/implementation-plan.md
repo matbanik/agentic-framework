@@ -75,7 +75,7 @@ Rolling review: `.agent/context/handoffs/2026-09-19-create-plan-adopter-path-fix
 | PROFILE is a create-plan prerequisite | Spec | ADOPTION-QUESTIONS “every workflow reads this file”; findings 2.12 | yes | Absent profile → stop, run ADOPTION-GUIDE Step 1 |
 | Missing `current-focus.md` is not a stop | Spec | findings 2.9 / F028 | yes | Write <30-line stub and continue |
 | Zero MEUs: hand-edit YAML then render | Local Canon | session-grouping A4; findings 2.9 / F027 | yes | CLI has no `add` |
-| Discovery/review/stamp cells omit FORBIDDEN_CREATE_PLAN_FORMS | Spec | output-evidence-policy no-RTK layer; Zorivest 2.4; findings 2.13 / F034 | yes | One-line `python … *> receipt`; see named predicate |
+| Discovery/review/stamp cells omit FORBIDDEN_CREATE_PLAN_FORMS | Spec | output-evidence-policy no-RTK layer; Source Project 2.4; findings 2.13 / F034 | yes | One-line `python … *> receipt`; see named predicate |
 | Graphify/Headroom/GUI indexes: skip if absent | Spec | MANIFEST excluded; findings F036 | yes | `not_applicable` / `gui-refs-not-shipped` |
 | OpenAPI / session-digest: skip if unshipped | Spec | MANIFEST planned/excluded tools | yes | Record skip basis |
 | Block C/E stop is not SIGN 1 | Spec | findings 2.16/F031; ADOPTION-QUESTIONS C/E | yes | Named human reviewer; no self-review |

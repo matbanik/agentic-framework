@@ -1,12 +1,12 @@
-# Framework gaps: evidence from Zorivest (2026-09-18)
+# Framework gaps: evidence from Source Project (2026-09-18)
 
-**Source:** Zorivest (`P:/zorivest`), which adopted this framework. Most of the evidence comes from the SP-4 project (`2026-09-16-sp4-ai-review-stored-report-walking-skeleton`: MEU-578, MEU-581, MEU-586). The rest comes from the SP-2 and SP-3 closeouts that came before it.
+**Source:** Source Project (`P:/source-project`), which adopted this framework. Most of the evidence comes from the SP-4 project (`2026-09-16-sp4-ai-review-stored-report-walking-skeleton`: MEU-578, MEU-581, MEU-586). The rest comes from the SP-2 and SP-3 closeouts that came before it.
 **Audience:** maintainers of `P:/agentic-framework`.
-**Scope:** only defects in the framework's templates, tools, skills and workflows, plus the adopter-sync problems they cause. Zorivest product defects are not included.
+**Scope:** only defects in the framework's templates, tools, skills and workflows, plus the adopter-sync problems they cause. Source Project product defects are not included.
 
 Every item below states what happened, the evidence (a file, commit or receipt), and what the framework should change. The items are in priority order: cost first, then how often the problem recurs.
 
-Evidence paths without a prefix are relative to `P:/zorivest`. Receipts under `C:/Temp/zorivest/` are local to the Zorivest machine.
+Evidence paths without a prefix are relative to `P:/source-project`. Receipts under `C:/Temp/source-project/` are local to the Source Project machine.
 
 ---
 
@@ -16,7 +16,7 @@ Evidence paths without a prefix are relative to `P:/zorivest`. Receipts under `C
 - **What happened.** The scoped MEU gate (`tools/validate_codebase.py --scope meu`) runs pyright and pytest across the whole repo and takes 38–42 minutes. On a failure it printed only the **first** pyright error (19 existed), plus pytest progress dots with no test ids. Getting the real failures took a separate 11-minute `pytest tests/unit` run. SP-3 had already recorded the same truncation and it was not fixed. SP-4 ran the gate six times.
 - **Evidence.**
   - Reflection, Friction Log item 1: `docs/execution/reflections/2026-09-16-sp4-ai-review-stored-report-walking-skeleton-reflection.md`.
-  - The Zorivest fix is commit `e2882142` (`fix(tooling): print full pyright/pytest failure detail from the MEU gate`), with 317 lines of tests in `tests/unit/test_validate_codebase_check_messages.py`.
+  - The Source Project fix is commit `e2882142` (`fix(tooling): print full pyright/pytest failure detail from the MEU gate`), with 317 lines of tests in `tests/unit/test_validate_codebase_check_messages.py`.
 - **Framework change.**
   - Any gate the framework ships or describes (`quality-gate` skill, `preflight.sh`, the gate contract in the docs) must print **every** failing diagnostic id and every `FAILED`/`ERROR` test id.
   - It must also say which checks ran repo-wide and which ran scoped.
@@ -76,7 +76,7 @@ Evidence paths without a prefix are relative to `P:/zorivest`. Receipts under `C
 - **Framework change.** Add a FIC/plan checklist line: any named statement that compares database rows must state NULL semantics (IS vs =).
 
 ### 2.4 `pwsh -Command { … }` task cells cannot run from a bash harness  [medium, recurring]
-- **What happened.** Validation cells written as `pwsh -NoProfile -Command { … }` are mangled when the outer shell is bash. That is Claude Code's Bash tool, and Zorivest's `pwsh-scriptblock-echoed` memory records it. SP-3 and SP-4 both had to extract every such cell to a `.ps1` file.
+- **What happened.** Validation cells written as `pwsh -NoProfile -Command { … }` are mangled when the outer shell is bash. That is Claude Code's Bash tool, and Source Project's `pwsh-scriptblock-echoed` memory records it. SP-3 and SP-4 both had to extract every such cell to a `.ps1` file.
 - **More friction from task and plan cells:**
   - Escaped `\|` in regex cells is ambiguous: the H2-3a extracted regexes lost their escapes and had to be repaired by hand.
   - Literal 64-hex hashes in plan command cells trip `detect-secrets` at commit. In commit `7f332cd5` this needed a trailing `# pragma: allowlist secret` on `implementation-plan.md:716`.
@@ -113,7 +113,7 @@ Evidence paths without a prefix are relative to `P:/zorivest`. Receipts under `C
 
 ## 4. Adopter sync and tooling-test failures
 
-Zorivest's `tests/tooling` suite had **12 failures** on 2026-09-17 (`C:/Temp/zorivest/tooling-fix-tooling-dir.txt`: 12 failed, 1036 passed). One was the engine census, fixed in Zorivest. The other 11 trace to framework packaging:
+Source Project's `tests/tooling` suite had **12 failures** on 2026-09-17 (`C:/Temp/source-project/tooling-fix-tooling-dir.txt`: 12 failed, 1036 passed). One was the engine census, fixed in Source Project. The other 11 trace to framework packaging:
 
 ### 4.1 Registry lookup moved to an env var that adopters don't set  [high, 5 tests]
 - **What happened.** A 2026-09-07 change moved registry resolution to `AGENT_MODEL_REGISTRY_HOME`. Nothing sets it on the adopter machine, and the `P:/.agent/ModelRegistry.psm1` copy is older than the one packaged at `.agent/tools/ModelRegistry.psm1`.
@@ -140,8 +140,8 @@ Zorivest's `tests/tooling` suite had **12 failures** on 2026-09-17 (`C:/Temp/zor
 
 ### 4.3 Autogen agent-file checks are fragile  [medium, 2 tests]
 - **What happened.**
-  - `test_drift_is_clean_on_the_real_tree` expects exactly four generated agent files. Zorivest added a fifth, `.cursor/agents/zorivest-opus.md`, deliberately marked "not autogenerated", and the drift check still counts it.
-  - `test_sync_is_idempotent_on_the_real_tree` failed on a CRLF checkout and cleared after the sync rewrote the files as LF. That left five line-ending-only modified files in the Zorivest status, which had to be excluded from every commit.
+  - `test_drift_is_clean_on_the_real_tree` expects exactly four generated agent files. Source Project added a fifth, `.cursor/agents/source-project-opus.md`, deliberately marked "not autogenerated", and the drift check still counts it.
+  - `test_sync_is_idempotent_on_the_real_tree` failed on a CRLF checkout and cleared after the sync rewrote the files as LF. That left five line-ending-only modified files in the Source Project status, which had to be excluded from every commit.
   - The framework `.gitattributes` pins `eol=lf` for `*.sh` only.
 - **Framework change.**
   - The drift check should honour the "not autogenerated" marker instead of a fixed count.
@@ -156,7 +156,7 @@ Zorivest's `tests/tooling` suite had **12 failures** on 2026-09-17 (`C:/Temp/zor
 - **Framework change.** Document the scope in the checker's docstring and `model-classes.md`, or restore template coverage behind a flag.
 
 ### 4.6 Adopter tool copies drift from the framework  [medium]
-- **What happened.** Zorivest's `tools/issue_triage.py` crashed on `--help` on a cp1252 console (U+2192 in a help string). The framework's `core/tools/issue_triage.py` already had the `stream.reconfigure(encoding="utf-8", errors="replace")` fix at L389–393, but the adopter copy had never received it. Zorivest re-fixed it independently in `e2882142`. `validate_closeout_artifacts.py` also differs between the two trees.
+- **What happened.** Source Project's `tools/issue_triage.py` crashed on `--help` on a cp1252 console (U+2192 in a help string). The framework's `core/tools/issue_triage.py` already had the `stream.reconfigure(encoding="utf-8", errors="replace")` fix at L389–393, but the adopter copy had never received it. Source Project re-fixed it independently in `e2882142`. `validate_closeout_artifacts.py` also differs between the two trees.
 - **Framework change.**
   - Ship a `sync --check` (or add it to `preflight.sh`) that hashes each adopted tool against the framework version and reports drift.
   - Record the framework version each tool was copied from in a header line.
@@ -164,7 +164,7 @@ Zorivest's `tests/tooling` suite had **12 failures** on 2026-09-17 (`C:/Temp/zor
 ## 5. E2E harness (Electron, Windows)
 
 ### 5.1 Redirecting `USERPROFILE` aborts Electron on Windows  [medium]
-- **What happened.** The walking-skeleton E2E died at `electron.launch` with exit `0x80000003` and no output. A six-way environment reproduction outside Playwright isolated it: redirecting `USERPROFILE` alone aborts the Electron main process (EA-6). The fix redirects `LOCALAPPDATA`, `APPDATA`, `HOME` and the app's `ZORIVEST_CONFIG_DIR` to a temp tree and leaves `USERPROFILE` real (`ui/tests/e2e/explore-sample-walking-skeleton.spec.ts` L135; plan `E2E_REAL_LAUNCH` and EA-6).
+- **What happened.** The walking-skeleton E2E died at `electron.launch` with exit `0x80000003` and no output. A six-way environment reproduction outside Playwright isolated it: redirecting `USERPROFILE` alone aborts the Electron main process (EA-6). The fix redirects `LOCALAPPDATA`, `APPDATA`, `HOME` and the app's `SOURCE_PROJECT_CONFIG_DIR` to a temp tree and leaves `USERPROFILE` real (`ui/tests/e2e/explore-sample-walking-skeleton.spec.ts` L135; plan `E2E_REAL_LAUNCH` and EA-6).
 - **Framework change.** The `e2e-testing` guidance should say: never redirect `USERPROFILE`/`HOME` to isolate an Electron app on Windows; use the app's data-dir override. It should also keep the "isolate one env variable per run" diagnosis recipe (reflection, Patterns to KEEP #1).
 
 ## 6. Commit-time hook friction (recurring in every closeout)
@@ -182,3 +182,6 @@ Zorivest's `tests/tooling` suite had **12 failures** on 2026-09-17 (`C:/Temp/zor
 2. Items 1.1 and 1.2: highest recurring cost per project.
 3. Items 2.1, 2.2 and 2.4: template and lint changes that remove classes of amendments.
 4. The rest.
+
+
+Source identity and source-machine paths in this historical report have been generalized. Source paths are illustrative references, not live local links.

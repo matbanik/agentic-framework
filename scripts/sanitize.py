@@ -91,7 +91,7 @@ SKIP_FILES = frozenset({".agent/schema/model-registry.v1.schema.json"})
 class RegistryUnavailable(RuntimeError):
     """The registry or its checker could not be reached.
 
-    Named the same way as Zorivest's ``model_registry_client.RegistryUnavailable``:
+    Named the same way as Source Project's ``model_registry_client.RegistryUnavailable``:
     a verifier that reports success because it found nothing to check is worse
     than no verifier.
     """
@@ -107,6 +107,9 @@ def iter_text_files(root: Path):
         if not path.is_file():
             continue
         rel = path.relative_to(root).as_posix()
+        # Maintainer research/closeout history is provenance, not adoption content.
+        if rel.startswith((".agent/context/", "docs/execution/")):
+            continue
         if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
             continue
         if rel in SKIP_FILES:
@@ -212,7 +215,10 @@ def verify_model_slugs(root: Path) -> int:
         return 3
 
     errors = report.get("errors") or []
-    tier1 = report.get("tier1") or []
+    # Maintainer history is not installed; keep core/.agent context in scope.
+    tier1 = [hit for hit in (report.get("tier1") or [])
+             if not str(hit.get("relative", "")).replace("\\", "/").startswith(
+                 (".agent/context/", "docs/execution/"))]
     drift = report.get("autogen_drift") or []
 
     if tier1:
@@ -328,7 +334,7 @@ def verify_prose_model_names(root: Path) -> int:
         if "__pycache__" in path.parts or ".git" in path.parts:
             continue
         rel = path.relative_to(root).as_posix()
-        if rel in PROSE_NAME_ALLOWLIST:
+        if rel in PROSE_NAME_ALLOWLIST or rel.startswith((".agent/context/", "docs/execution/")):
             continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -546,16 +552,15 @@ def run(dry_run: bool, verify: bool) -> int:
             changed_files += 1
             total_repl += n
             print(f"  {n:>4}  {rel}")
-            if not dry_run:
+            if not dry_run and not verify:
                 path.write_text(new_text, encoding="utf-8", newline="")
 
         if verify:
-            check_text = new_text if not dry_run else original
-            leftover = ph.remaining_source_hits(check_text)
+            leftover = ph.remaining_source_hits(original)
             if leftover:
                 leaked.append((rel, leftover))
 
-    mode = "DRY-RUN (no files written)" if dry_run else "APPLIED"
+    mode = "VERIFY (read-only)" if verify else ("DRY-RUN (no files written)" if dry_run else "APPLIED")
     print("\n" + "=" * 60)
     print(f"  mode:            {mode}")
     print(f"  files scanned:   {total_files}")

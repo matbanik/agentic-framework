@@ -91,7 +91,8 @@ placeholders in place:
 
 ```
 python scripts/sanitize.py --dry-run     # preview
-python scripts/sanitize.py --verify       # apply, then assert 0 raw slugs remain
+python scripts/sanitize.py                # apply substitutions
+python scripts/sanitize.py --verify       # read-only checks; never rewrites files
 ```
 
 Both scripts skip `scripts/` itself (so the rule table is never rewritten), `.git`,

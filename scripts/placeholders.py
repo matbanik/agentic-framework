@@ -9,16 +9,16 @@ Keeping the rules in one place guarantees the two directions can never drift apa
 Design notes
 ------------
 * FORWARD rules are applied *in order*, longest / most-specific first, so that a path
-  like ``C:/Temp/zorivest`` becomes ``{{RECEIPTS_DIR}}`` and is NOT later mangled into
+  like ``C:/Temp/source-project`` becomes ``{{RECEIPTS_DIR}}`` and is NOT later mangled into
   ``C:/Temp/{{PROJECT_NAME}}`` by the bare-word rule.
-* No placeholder token contains the source word ``zorivest``, so a forward pass can
+* No placeholder token contains the source word ``source-project``, so a forward pass can
   never re-match its own output (the substitution is stable / idempotent).
 * The six placeholder tokens are mutually non-overlapping as literal strings, so the
   reverse pass order does not matter; we still sort longest-first for safety.
 
-The original project this framework was extracted from used the slug ``zorivest``.
-That is the ONLY project-specific token hard-coded here, by necessity -- it is what we
-are sanitizing away. Everything downstream is parameterized.
+The forward rules use a generic ``source-project`` fixture. Customize these rules
+when sanitizing another source project. Adopter values are supplied separately to
+the reverse pass; everything downstream is parameterized.
 """
 
 from __future__ import annotations
@@ -26,9 +26,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# The slug of the project the framework was extracted from. This is the one value we
-# are erasing; it appears here only as the thing to search for.
-SOURCE_SLUG = "zorivest"
+# Generic source fixture and its prose/environment-identifier forms.
+SOURCE_SLUG = "source-project"
+# A distinct example proper name avoids matching ordinary "source project" prose.
+SOURCE_TITLE = "ExampleSourceProject"
+SOURCE_UPPER = "SOURCE_PROJECT"
 
 # Canonical ordered list of placeholder tokens (longest first). Adopter-facing docs
 # reference these exact spellings.
@@ -57,15 +59,15 @@ class ForwardRule:
 # ORDER MATTERS. Compound / pathed forms first; bare case-variants last.
 FORWARD_RULES: list[ForwardRule] = [
     # 1. Repository URL (captures the owner too: github.com/<owner>/<slug>).
-    ForwardRule(False, "github.com/matbanik/zorivest", "{{REPO_URL}}"),
+    ForwardRule(False, "github.com/example/source-project", "{{REPO_URL}}"),
     # 2. Receipts / redirect directory, both slash conventions, case-tolerant on C:/Temp.
-    ForwardRule(True, r"[Cc]:[\\/][Tt]emp[\\/]zorivest", "{{RECEIPTS_DIR}}"),
-    # 3. Project root on any drive, either slash. Drive letter is part of the root value.
-    ForwardRule(True, r"[Pp]:[\\/]zorivest", "{{PROJECT_ROOT}}"),
+    ForwardRule(True, r"[Cc]:[\\/][Tt]emp[\\/]source-project", "{{RECEIPTS_DIR}}"),
+    # 3. Example project root, either slash. Drive letter is part of the root value.
+    ForwardRule(True, r"[Pp]:[\\/]source-project", "{{PROJECT_ROOT}}"),
     # 4-6. Bare word, case-sensitive so the three forms are independent and non-overlapping.
-    ForwardRule(False, "ZORIVEST", "{{PROJECT_NAME_UPPER}}"),
-    ForwardRule(False, "Zorivest", "{{PROJECT_NAME_TITLE}}"),
-    ForwardRule(False, "zorivest", "{{PROJECT_NAME}}"),
+    ForwardRule(False, SOURCE_UPPER, "{{PROJECT_NAME_UPPER}}"),
+    ForwardRule(False, SOURCE_TITLE, "{{PROJECT_NAME_TITLE}}"),
+    ForwardRule(False, SOURCE_SLUG, "{{PROJECT_NAME}}"),
 ]
 
 
@@ -254,4 +256,5 @@ def remaining_source_hits(text: str) -> int:
 
     Used by sanitize.py --verify to prove zero leakage.
     """
-    return len(re.findall(re.escape(SOURCE_SLUG), text, flags=re.IGNORECASE))
+    pattern = "|".join(re.escape(value) for value in (SOURCE_SLUG, SOURCE_TITLE, SOURCE_UPPER))
+    return len(re.findall(pattern, text, flags=re.IGNORECASE))

@@ -137,7 +137,7 @@ DISCLOSURE_WINDOW = 2
 #: adopter's repo root or the package root. ``.agent/INSTANTIATE.md`` says
 #: "``tools/ModelRegistry.psm1``" meaning ``<home>/tools/...``; the shipped template
 #: of that home is the package-root ``.agent/``, so that is a third resolution root.
-REGISTRY_HOME_DOCS = ("UPDATE-CHECKLIST.md",)
+REGISTRY_HOME_DOCS = ("UPDATE-CHECKLIST.md", "core/.agent/INSTANTIATE.md")
 
 #: Exact paths the *adopter* creates and the package must not ship. Narrower than
 #: RUNTIME_TREES (which is prefix-based) because each of these is one named file
@@ -197,15 +197,13 @@ RUNTIME_TREES = (
 #: Keyed by ``file:line -> ref`` so an exemption cannot silently widen: if the line
 #: moves, the gate fails again and a human re-reads it.
 NOT_A_PROMISE = {
+    (".agent/context/2026-09-18-source-project-evidence-framework-gaps.md", 143, ".cursor/agents/source-project-opus.md"): (
+        "Historical source-repository finding about an explicitly non-AUTOGEN agent; not adoption content."
+    ),
     ("core/.agent/workflows/plan-critical-review.md", 197, "tools/generate.go"): (
         "Cited *as* an example of a mid-path false positive the reviewer should "
         "expect from the sweep regex ('tui/tools/generate.go reported as "
         "tools/generate.go'). Naming it is the instruction, not a claim it exists."
-    ),
-    ("UPDATE-CHECKLIST.md", 367, "tools/validate_codebase.py"): (
-        "A scrub-rationale row quoting what the SOURCE repo's warning named, as the "
-        "reason that content was replaced by a portable lesson. It is a citation of "
-        "another repo's file, not a path this package offers."
     ),
 }
 
@@ -254,6 +252,10 @@ def tool_name(raw: str) -> str:
 #:                     why it will not run
 TOOL_CLASS_KINDS = ("registry-home", "source-repo-only", "adopter-supplied", "not-shipped")
 TOOL_CLASSES: dict[str, tuple[str, str]] = {
+    "core/tools/preflight.ps1": ("not-shipped", "Historical proposal; only the POSIX preflight ships."),
+    "core/tools/validate_codebase.py": ("adopter-supplied", "Historical proposal; bind the project's PROFILE D6 command instead."),
+    "tools/user-script.py": ("not-shipped", "Historical example filename, never a packaged gate."),
+    "tools/x.py": ("not-shipped", "Labeled bad-command example in terminal preflight."),
     "tools/ModelRegistry.psm1": (
         "registry-home",
         "The PowerShell resolver module, loaded from <registry-home>/tools/. "
@@ -316,6 +318,9 @@ TOOL_CLASSES: dict[str, tuple[str, str]] = {
 PATH_ALIASES = {
     ".agent/context/handoffs/TEMPLATE.md": "core/templates/HANDOFF-TEMPLATE.md",
     ".agent/context/handoffs/REVIEW-TEMPLATE.md": "core/templates/REVIEW-TEMPLATE.md",
+    ".agent/templates": "core/templates",
+    **{f".agent/templates/{name}-TEMPLATE.md": f"core/templates/{name}-TEMPLATE.md"
+       for name in ("PLAN", "TASK", "HANDOFF", "REVIEW", "REFLECTION")},
 }
 
 
@@ -397,6 +402,7 @@ def normalize(ref: str) -> str | None:
     # ``file.md:120-134`` cites a location *in* a file; the file itself must exist,
     # so drop the citation and check the path.
     ref = LINE_CITATION.sub("", ref)
+    ref = re.sub(r":\w+\($", "", ref)  # source-code symbol citation
     for tail in GLOB_TAILS:
         if ref.endswith(tail):
             ref = ref[: -len(tail)] + "/"
@@ -443,7 +449,9 @@ def normalize_link(raw: str, referrer: str) -> str | None:
     bare = LINE_CITATION.sub("", ref)
     if not (bare.endswith(LINK_SUFFIXES) or bare.endswith("/")):
         return None
-    joined = posixpath.normpath(posixpath.join(posixpath.dirname(referrer), bare))
+    # Templates are installed at TEMPLATE_HOME (.agent/templates), not core/templates.
+    base = ".agent/templates" if referrer.startswith("core/templates/") else posixpath.dirname(referrer)
+    joined = posixpath.normpath(posixpath.join(base, bare))
     # A target that climbs *past* the package root was written from somewhere this
     # package is not: ``core/templates/TASK-TEMPLATE.md`` links
     # ``../../../.agent/docs/output-evidence-policy.md``, which is correct from
@@ -978,7 +986,7 @@ def _tool_selftest_arms(
         # permit: the entry now excuses nothing and nobody re-reads it.
         (
             "classified-name-now-shipped",
-            lambda m: m.create(f"core/{classified}", "# selftest placeholder\n"),
+            lambda m: m.create(classified if classified.startswith("core/") else f"core/{classified}", "# selftest placeholder\n"),
             True,
         ),
         # The last reference to a classified name goes away. The entry survives and

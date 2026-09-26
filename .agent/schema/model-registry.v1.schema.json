@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://zorivest.local/schema/model-registry.v1.schema.json",
+  "$id": "https://source-project.local/schema/model-registry.v1.schema.json",
   "title": "Model Capability Registry v1",
   "description": "Closed contract for the machine-global model capability registry. Classes are capability contracts; the catalog holds per-snapshot facts; bindings are the current decisions. Every object is closed (additionalProperties: false) so a typo is a validation failure rather than a silently ignored field.",
   "type": "object",

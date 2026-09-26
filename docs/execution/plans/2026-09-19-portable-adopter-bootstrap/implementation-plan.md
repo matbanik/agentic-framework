@@ -19,7 +19,7 @@ template_version: "2.0"
 
 A naive consuming agent can install this package into an empty repo, finish ADOPTION-GUIDE Steps 0–9 through plan+task write, and get a green `--phase build` preflight without inventing snapshot ids, overwriting the instruction tree, or guessing template/D6/dispatch paths.
 
-Source of truth for *what* and *how*: `.agent/context/2026-09-19-adopter-findings-fix-proposal.md` (GPT-6 Astra high, 2026-09-19). Evidence: `.agent/context/2026-09-19-adopter-mock-deploy-findings.md` (F001–F036) and `.agent/context/2026-09-18-zorivest-evidence-framework-gaps.md`. Reproduction fixture: `P:/fw-adopt-probe` (read-only).
+Source of truth for *what* and *how*: `.agent/context/2026-09-19-adopter-findings-fix-proposal.md` (GPT-6 Astra high, 2026-09-19). Evidence: `.agent/context/2026-09-19-adopter-mock-deploy-findings.md` (F001–F036) and `.agent/context/2026-09-18-source-project-evidence-framework-gaps.md`. Reproduction fixture: `P:/fw-adopt-probe` (read-only).
 
 This project does **not** execute until a human says proceed (`plan_to_exec_gate: human`).
 
@@ -183,7 +183,7 @@ Defined once. Every AC and task row that mentions them uses these names.
 
 | AC | Type | Description | Source | Negative Test |
 |----|------|-------------|--------|---------------|
-| AC-WP2-1 | unit | Every shipped `.ps1` is ASCII or begins with UTF-8 BOM | Spec 2.3 / Zorivest 4.2 | Planted BOM-less em-dash file passes the gate |
+| AC-WP2-1 | unit | Every shipped `.ps1` is ASCII or begins with UTF-8 BOM | Spec 2.3 / Source Project 4.2 | Planted BOM-less em-dash file passes the gate |
 | AC-WP2-2 | integration | Instantiated wrapper parses under `powershell.exe` (5.1) and `pwsh` without execution; missing PromptText reaches usage, not ParserError | Spec F021 | Current 10 em-dash wrapper still ParserError on 5.1 |
 
 **Control binding AC-WP2-1:** observable = packaging-test exit. Call chain = UPDATE-CHECKLIST / test runner invoked from task row → scan `core/**/*.ps1`. Negative oracle = fixture with U+2014 and no BOM exits 0.
@@ -267,7 +267,7 @@ Absorbs superseded plan AC-1, AC-2, AC-5, AC-6 (template/focus/forbidden forms i
 | AC-WP4-1 | unit | commands.md / quality-gate / AGENTS / testing-strategy / lifecycle / validation-review / create-plan refer to D6_ADOPTER_ARGV, not a required `tools/validate_codebase.py` | Spec 2.6 | Registered command is the unshipped origin gate |
 | AC-WP4-2 | unit | `/mcp-audit` removed from workflows/README; output-evidence-policy is not labeled MANIFEST-EXCLUDED; D3-only `docs/BUILD_PLAN.md` can plan without `docs/build-plan/` | Spec F016, F030 | create-plan mandates build-priority-matrix.md |
 | AC-WP4-3 | integration | Isolated minimal Python adopter registers `python -m pytest test_hello.py` and reaches D6; a second argv proves pytest is not a new universal default; missing exe / failing child fail | Proposal §1 HD-04 | Toy pytest becomes mandatory for all adopters |
-| AC-WP4-4 | integration | Registered failing child with multiple diagnostic ids + FAILED/ERROR test ids: all ids survive on the receipt with nonzero status (overlay 1.1 contract, not a port of Zorivest’s gate) | Spec overlay 1.1 | Compact display drops all but first error |
+| AC-WP4-4 | integration | Registered failing child with multiple diagnostic ids + FAILED/ERROR test ids: all ids survive on the receipt with nonzero status (overlay 1.1 contract, not a port of Source Project’s gate) | Spec overlay 1.1 | Compact display drops all but first error |
 
 **Control binding AC-WP4-4:** observable = receipt file contents + child exit. Call chain = quality-gate skill / commands.md registered D6 invocation → P0 redirect. Negative oracle = receipt missing a planted second diagnostic id while exit is 0. Runner: `python scripts/tests/test_adoption_contract.py --case d6` (two argv fixtures, missing exe, failing child, no `validate_codebase.py`, no `/mcp-audit`).
 
@@ -368,8 +368,8 @@ No `meu-status.yaml` product grouping in this origin tree, so nothing is `deferr
 
 | Item | Kind | Deferred-to MEU | Basis |
 |------|------|-----------------|-------|
-| Zorivest 4.6 hash sync / version-stamp adopter refresh | out-of-scope | — | Proposal §4; findings §5 item 7; not reproduced on first install |
-| Zorivest extra closeout rules (`### Delta:`, exact Corrections Applied, mandatory findings_per_round) | out-of-scope | — | Proposal §4; packaged validator does not require them; adopter-side drift |
+| Source Project 4.6 hash sync / version-stamp adopter refresh | out-of-scope | — | Proposal §4; findings §5 item 7; not reproduced on first install |
+| Source Project extra closeout rules (`### Delta:`, exact Corrections Applied, mandatory findings_per_round) | out-of-scope | — | Proposal §4; packaged validator does not require them; adopter-side drift |
 | Ship `.cursor/commands/` / `.claude/commands/` adapters | out-of-scope | — | Proposal §1 HD-07; proposal §4 |
 | Native `preflight.ps1` twin | out-of-scope | — | Proposal §1 HD-06; proposal §4 |
 | Adopter-facing scratch/fake catalog | out-of-scope | — | Proposal §1 HD-02; proposal §4 |
@@ -501,7 +501,7 @@ HD-03 is `Human-decision-required` only if the human wants live compile in *this
 
 - `.agent/context/2026-09-19-adopter-findings-fix-proposal.md`
 - `.agent/context/2026-09-19-adopter-mock-deploy-findings.md`
-- `.agent/context/2026-09-18-zorivest-evidence-framework-gaps.md`
+- `.agent/context/2026-09-18-source-project-evidence-framework-gaps.md`
 - ADOPTION-GUIDE.md, ADOPTION-QUESTIONS.md, `.agent/INSTANTIATE.md`
 - `docs/execution/plans/2026-09-19-create-plan-adopter-path-fix/` (superseded)
 - G19 (failing test first), G24 (decision tables), G28 (system messages ≠ approval)
