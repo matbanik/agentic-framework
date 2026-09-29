@@ -281,6 +281,22 @@ def validate(data: dict[str, Any]) -> list[str]:
                 # decided_by: must be str
                 if "decided_by" in enr and not isinstance(enr["decided_by"], str):
                     errors.append(f"{prefix}.enrichment.decided_by: must be a string")
+                # decision_log: the durable home of human-decision-protocol entries
+                # (autonomous or human-ruled scoping decisions); must be a list of
+                # mappings so it survives triage-output regeneration intact.
+                if "decision_log" in enr:
+                    log = enr["decision_log"]
+                    if not isinstance(log, list):
+                        errors.append(
+                            f"{prefix}.enrichment.decision_log: must be a list of mappings"
+                        )
+                    else:
+                        for idx, item in enumerate(log):
+                            if not isinstance(item, dict):
+                                errors.append(
+                                    f"{prefix}.enrichment.decision_log[{idx}]: "
+                                    "must be a mapping"
+                                )
 
         # Duplicate ID check
         issue_id = issue.get("id")

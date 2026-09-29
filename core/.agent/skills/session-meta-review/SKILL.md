@@ -45,12 +45,14 @@ Five categories with detection signals and mitigation strategies:
 | Human rephrased the same request 2+ times | Medium | Add "Clarify scope before Planning" rule |
 | Scope changed mid-EXECUTION (new `HUMAN_PROMPT` that altered task) | High | Add pre-task clarification checklist to workflow |
 | Implementation plan was rejected and required 2+ revisions | High | Add "State constraints upfront" example to workflow |
-| Agent asked > 2 clarifying questions in one session | Medium | Compress questions; batch into one `notify_user` |
+| Agent asked > 2 clarifying questions in one session | Medium | Run `human-decision-protocol.md` first (sweep → research → obviousness test); decide the obvious ones and log them, batch the rest into one Decision Brief |
 
 **Mitigation template:**
 ```
 BEFORE: Agent immediately entered PLANNING without confirming scope.
-AFTER:  Agent lists 3 assumptions and asks for confirmation in a single notify_user before planning.
+AFTER:  Agent runs the human-decision-protocol.md sweep → research → obviousness test on each assumption,
+        decides the obvious ones (logged in the plan's Decision Log) and presents the rest as one Decision Brief
+        — recommendation first, alternatives compared — in a single notify_user before planning.
 ```
 
 ---

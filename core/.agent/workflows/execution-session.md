@@ -61,7 +61,7 @@ The orchestrating agent will:
 4. Resolve under-specified requirements via local canonical docs + targeted web research before finalizing the FIC
 5. Generate `implementation-plan.md` and `task.md` in the project folder
 6. Auto-dispatch `/plan-critical-review` via the independent-reviewer chain (cross-vendor primary → surface-only secondary → **human**; `.agent/docs/model-routing.md`)
-7. Loop corrections until APPROVED (or HARD STOP at 3-round cap)
+7. Loop corrections until APPROVED (or HARD STOP at the 3-round cap, presented as a Decision Brief — recommendation first — per `create-plan.md` §5 round-cap block and `.agent/docs/human-decision-protocol.md` §5)
 8. On `approved`: continue to Step 4 per your harness's `plan_to_exec_gate` flag (`.agent/docs/harness-profiles.md`) — `reviewer-auto` continues immediately; `plan_to_exec_gate: human` (the primary-driver default) ends the turn and waits for the user's explicit next chat message before Step 4 (`create-plan.md` §5c, `GUARDRAILS.md` SIGN 1)
 
 > **Note:** The `/create-plan` workflow now auto-dispatches plan critical review.
@@ -191,8 +191,13 @@ When every machine rung is rate-limited or unavailable, this loop does not fall 
   (`ROUND_BUDGETS`, execution = 6), token budget (`TOKEN_BUDGETS`), a mechanism at `MECHANISM_LIMIT`,
   scaffolding, or instrument drift. The ledger printed `STOP_READOUT`: intent first, the exact
   `continue` command last. What happens next depends only on who is present:
-  - **attended** — a human is in this chat: show the `STOP_READOUT` verbatim, **end the turn**, and
-    wait for the human's sentence. Then record it — their words, never a paraphrase — and re-dispatch:
+  - **attended** — a human is in this chat: show the `STOP_READOUT` verbatim, then frame it as a
+    Decision Brief per `.agent/docs/human-decision-protocol.md` §5 — the recommendation first
+    (`continue` with the rounds the readout needs, stop the loop, or hand the blocking finding to
+    the human as its own decision), the alternatives compared against it, reversibility, and the
+    default if unanswered — **end the turn**, and wait for the human's sentence. The readout text
+    itself is never edited (`review_ledger.py` prints it; the brief is the agent's framing around
+    it). Then record it — their words, never a paraphrase — and re-dispatch:
     `python tools/review_ledger.py continue --loop-id <loop-id> --rounds 1 [--tokens N] [--relieve-mechanism SLUG] --said "<the human's sentence, 20+ non-ws chars>" --by <name> --at <ISO8601>`
     `continue` is **uncapped** and lifts every stop active at that moment; the loop then runs until
     `approved` or the next stop, where the same exchange happens again. One human sentence per stop.
@@ -216,7 +221,7 @@ When every machine rung is rate-limited or unavailable, this loop does not fall 
 > AI attribution trailers or generated-by statements in proposed commit text.
 
 **Edge cases** (same as `create-plan.md` §5e):
-- Reviewer asks questions → auto-answer from local canon or HARD STOP for human
+- Reviewer asks questions → `human-decision-protocol.md` §2–§4 (precedent sweep, research, obviousness test): auto-answer and log, or HARD STOP with a Decision Brief (recommendation first) for the human
 - Rate limit mid-loop → fallback reviewer or HARD STOP with timer
 - Session crash → review file on disk is the resumption checkpoint
 

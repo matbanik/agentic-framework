@@ -74,7 +74,7 @@ Rules:
 Output exactly one ```yaml ... ``` block in the `## Instruction Coverage` section.
 No prose around the YAML block itself. The reflection file MUST still follow
 the full template structure from `docs/execution/reflections/TEMPLATE.md` —
-the YAML block is section 7 of 7, not the entire file.
+the YAML block is only the final `## Instruction Coverage` section, not the entire file.
 
 ## Durable evidence ownership
 

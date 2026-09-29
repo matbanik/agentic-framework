@@ -87,7 +87,7 @@ Confirm the drift check passes.
 | 5 | Prerequisite gate (blocked-on / can-begin-now) | optional |
 | 6 | Session summary roll-up table | optional |
 | 7 | Token calibration sources | optional |
-| 8 | Open decisions for the human (feeds `/create-plan` Step 2B) | optional |
+| 8 | Open decisions for the human (feeds `/create-plan` Step 2B) — each D-row is a Decision Brief per `.agent/docs/human-decision-protocol.md` §5: precedent sweep + research done, recommendation first, alternatives compared; decisions that pass the protocol's obviousness test are recorded as `autonomous`, not asked. When present, the section is `## 8. Open Decisions` and its body is exactly `None.` or the canonical table `\| ID \| Question \| Resolution \| Chosen \| Source tag \| Reasoning (why this; why the alternatives lost) \| Human ref \|` (the reflection's Decisions Log row without Stage; Resolution ∈ `autonomous` / `human` / `open`; the brief itself goes in the Reasoning cell). **Carry-forward rule:** every D-row — decided or still `open` — must appear in the consuming session's reflection `### Decisions Log` with stage `grouping` (an `open` row lands there as `human` once ruled); the closeout validator reads this table and refuses an ad-hoc shape, so a table it cannot read is a table that cannot be carried forward | optional |
 
 > The required core is the union all prior proposals (p13–p15c, issue-triage) actually share. Do not invent sections an agent later can't fill.
 

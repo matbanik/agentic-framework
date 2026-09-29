@@ -64,6 +64,7 @@ across both layers — never pick one monolithic row.**
 | `end_turn_signal` | mechanism | How this harness ends a turn / signals "blocked on user" (stop-by-not-calling-tools, `notify_user(BlockedOnUser:false)`, process-exit, etc.) |
 | `default_classes` | capability class name(s) | Which **class** fills this harness's role. The class → snapshot binding is per-harness and lives in the live registry home you instantiate ([`INSTANTIATE.md`](../INSTANTIATE.md)); resolve it (`Resolve-AgentModel -Class <class> -Harness <harness>`) rather than reading a slug out of this table. See [`model-routing.md`](model-routing.md) |
 | `context_compaction` | mechanism \| `none` | How this harness compacts the **transcript** at a durable-state boundary. Drives the per-MEU compaction step (`create-plan.md` §6, `execution-session.md`) and compaction continuation rule (`AGENTS.md` §Execution Contract). `none` ⇒ the ~50% checkpoint reverts to a save-state hand-back. Full rules: [`context-compression.md`](context-compression.md) §Context Compaction |
+| `web_search_tool` | mechanism \| `none` | The web-research surface `human-decision-protocol.md` §3 and `create-plan.md` §2B use, resolved at session start down the ladder: a registered research MCP (e.g. Pomera `pomera_web_search`, `tavily`/`exa`, preferred) → harness-native search (`WebSearch` in Claude Code, `search_web` in Antigravity, the equivalent elsewhere) → Codex `--search` via `cli-dispatch` `-UseSearch` → `none`. `none` is a provenance stamp (`research: unavailable`), never a licence to present an unresearched question |
 | `fresh_worker` | mechanism \| `none` | Whether the active tool surface exposes an authorized fresh-context worker. `isolated` task metadata requires a concrete mechanism; `none`, missing authority, or uncertainty degrades to `compact_continue`. Metadata never grants delegation permission. |
 
 ---
@@ -91,6 +92,11 @@ across both layers — never pick one monolithic row.**
 - **`n/a` marks a flag inapplicable to that harness's role** (e.g. a pure `reviewer` does not
   drive planning, so its `plan_to_exec_gate` is `n/a`). Never merge an `n/a` into a resolved
   profile as if it were a value — the driver layer supplies that flag.
+- **`web_search_tool` is resolved from the active tool surface once per session**, walking the
+  ladder in the flag table and recording the rung reached. Every Decision Log entry stamps that
+  rung as `research.engine`, one of the enum values `tavily | exa | native | codex-search | none`
+  (research-MCP tavily → `tavily`, research-MCP exa → `exa`, any native web-search tool →
+  `native`, Codex `--search` → `codex-search`, no rung → `none`).
 - **`fresh_worker` is resolved from the active tool surface, not inferred from a product
   name.** Record the concrete spawn/delegation mechanism only when it is present and
   authorized. Otherwise resolve it to `none`; any `isolated` row executes as
@@ -129,6 +135,7 @@ the literal tool**:
 |---|---|---|
 | `view_file` | `read_tool` | `Read` |
 | `run_command` | `shell_tool` | `Bash` |
+| `search_web` | `web_search_tool` | `WebSearch` (or a registered research MCP's search tool when present) |
 | `task_boundary` | (mode marker — informational only) | no-op; track mode in your own working notes |
 | `notify_user(BlockedOnUser:false)` | `end_turn_signal` (turn complete, not blocked) | end the turn by not calling more tools |
 | `notify_user(BlockedOnUser:true)` | `end_turn_signal` (blocked on human) | end the turn and state what you need from the user |
@@ -145,6 +152,7 @@ do not block on the literal name.
 - [`../../AGENTS.md`](../../AGENTS.md) §Authority and Approval — `plan_to_exec_gate`
 - [`../../AGENTS.md`](../../AGENTS.md) §Output and Evidence (P0) — `native_shell`
 - [`../workflows/create-plan.md`](../workflows/create-plan.md) §5c — `plan_to_exec_gate`
+- [`human-decision-protocol.md`](human-decision-protocol.md) §3 and [`../workflows/create-plan.md`](../workflows/create-plan.md) §2B — `web_search_tool`
 - [`../skills/cli-dispatch/SKILL.md`](../skills/cli-dispatch/SKILL.md) — `can_dispatch_external_reviewer`, `role`
 - [`../skills/subagent-delegation/SKILL.md`](../skills/subagent-delegation/SKILL.md) — `fresh_worker` (resolves the Cursor `.cursor/agents/` and Claude Code `.claude/agents/` mechanisms into concrete in-harness dispatches)
 - [`../skills/completion-preflight/SKILL.md`](../skills/completion-preflight/SKILL.md), [`../workflows/execution-session.md`](../workflows/execution-session.md), and the create-plan Completion Gate — `read_tool`, `end_turn_signal`

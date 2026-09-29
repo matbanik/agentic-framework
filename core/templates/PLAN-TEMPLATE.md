@@ -178,16 +178,46 @@ rtk proxy uv run python tools/export_openapi.py -o openapi.committed.json *> {{R
 
 ---
 
-## Open Questions
+## Decision Log
 
 > [!WARNING]
-> {Any clarifying or design questions for the user that will impact the implementation.}
+> {Every design decision the spec left open — the ones the planner resolved AND the ones that
+> still need the human — per `.agent/docs/human-decision-protocol.md`.}
 >
-> **Research each one first (create-plan §2B) and present it as a Decision Options Table with a
-> recommended option — never a bare question that stops the turn.** Only mark a question
-> `Human-decision-required` (and route it through the §5 review loop's human-gate exit) when it is
-> genuine product preference that research cannot resolve. An unresolved question is not, by itself,
-> a reason to halt before dispatching review.
+> **Precedent sweep and web research first (create-plan §2B), then the obviousness test.**
+> A question that passes the test is decided here (`resolution: autonomous`, tagged `Local Canon`
+> or `Research-backed`) with its reasoning — it is never asked. A question that fails it is a
+> **Decision Brief**: recommendation first with why, then the alternatives compared against it
+> (pros/cons relative, not free-standing), sources, reversibility, and the default if unanswered.
+> Never a bare question that stops the turn. Only mark a brief `Human-decision-required` (and
+> route it through the §5 review loop's human-gate exit) when it is a one-way door, a product
+> preference, a source conflict, or a governance value. An unresolved brief is not, by itself, a
+> reason to halt before dispatching review.
+
+```yaml
+decision_log:
+  - id: D-1
+    stage: planning
+    question: "{one line}"
+    resolution: autonomous | human
+    class: two-way | one-way-door | product-preference | source-conflict | governance-value | externally-blocked
+    chosen: "{option}"
+    source_tag: Local Canon | Research-backed | Human-approved
+    precedents: ["{path:line — what it decided}"]
+    research: { engine: tavily | exa | native | codex-search | none, sources: ["{URL — takeaway}"] }
+    reasoning: "{why this option; why the alternatives lost}"
+    human_message_reference: "{USER_EXPLICIT YYYY-MM-DD '<quote>' — human-resolved entries only; omit otherwise}"
+```
+
+### D-{n} — {human-gated question}
+
+**Recommendation:** {Option A} — {why it is the right call}. **Reversibility:** {two-way | one-way-door}. **Default if unanswered:** {option}.
+**Precedents:** {path:line — what it decided}. **Research:** {engine}; {source — takeaway} (or `unavailable — <reason>`).
+
+| Option | Source | Pros (vs. rec.) | Cons (vs. rec.) | Verdict |
+|--------|--------|-----------------|-----------------|---------|
+| {Option A} (recommended) | {precedent path:line / URL} | — | — | ✅ |
+| {Option B} | {URL} | {what it does better than A} | {what it costs against A} | ⚠️ / ❌ |
 
 ---
 

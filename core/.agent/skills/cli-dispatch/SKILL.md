@@ -409,7 +409,7 @@ state. Effort flags do not buy independence.
 0. **If PROFILE forbids egress (C1/C2/C3b or E5):** stop for B4's named human reviewer. Do not write `<provider>-web-prompt.md` and do not request manual external submission. Skip the rest of this section.
 1. **Advance to the next eligible cross-vendor reviewer rung** (surface-only rungs stay surface-only).
 2. **If all cross-vendor rungs are exhausted:** Save the prompt to a file at `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`.
-3. **Present to user (HARD STOP):** Inform them all rungs are rate-limited and offer manually submitting to a web interface or setting a timer to retry.
+3. **Present to user (HARD STOP):** Inform them all rungs are rate-limited, as a Decision Brief (`.agent/docs/human-decision-protocol.md` §5): recommendation first (manual web submission of the saved prompt, or a timed retry — whichever the evidence favours, with why), the other option compared against it, and the default if unanswered.
 4. **Collect results:** User pastes the web response into `{{RECEIPTS_DIR}}/dispatch/<provider>-web-response.md`.
 
 ### 4. Capability and Round-Cap Constraints

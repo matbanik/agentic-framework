@@ -99,15 +99,27 @@ For each finding, capture:
 For every finding, verify it against live file state:
 
 1. **Read the exact line(s)** cited in the finding
-2. **Confirm or refute** the issue still exists
+2. **Assign one of three dispositions:**
+   - **Confirmed** — the defect exists at current bytes → fix it (Steps 3–5).
+   - **Stale** — already resolved by an earlier correction → record which edit resolved it.
+   - **Refuted (dismissal-by-evidence)** — the finding is wrong on the merits. A finding dies
+     only by **DISAGREE_EVIDENCE**: quote the specific plan/spec/code text (`file:line`) that
+     refutes the claim, in the correction log, where the next review round will read it.
+     Disagreement without a citation — judgment, taste, "we consider this out of scope" — is
+     **DISAGREE_CONCERN** and cannot dismiss a finding: fix it, or escalate it as a
+     human-decision item — through `.agent/docs/human-decision-protocol.md` (precedent sweep,
+     research, obviousness test; if it passes, decide and log instead of escalating; if not,
+     escalate as a Decision Brief with the recommendation first). A finding that violates the review's Threat Model
+     (`plan-critical-review.md` — e.g., "this fix artifact is authored by the implementing
+     agent and could be forged") is refuted by citing that boundary itself.
 3. **Check for related issues** the reviewer may have missed
 
 Use `rg` and file reads — do not trust the review's line numbers blindly.
 
 Output a verified findings table:
 
-| # | Severity | Verified? | Current Line(s) | Notes |
-|---|----------|-----------|-----------------|-------|
+| # | Severity | Disposition | Refuting Evidence (if dismissed) | Current Line(s) | Notes |
+|---|----------|-------------|----------------------------------|-----------------|-------|
 
 ### Step 2b: Categorize and Generalize (Tester)
 

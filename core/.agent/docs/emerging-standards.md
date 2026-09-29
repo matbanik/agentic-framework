@@ -837,7 +837,7 @@ const { showModal, guardedSelect, handleCancel, handleDiscard, handleSaveAndCont
   | Tax year persistence | Default to current year (no persist) | TurboTax/TaxAct — year-scoped product model | Prevents wrong-year data errors | User must re-select for prior year | ✅ |
   | | Persist via localStorage | QuickBooks multi-year pattern | Convenience for power users | Risk of stale-year confusion | ⚠️ |
   ```
-- **Workflow integration:** Enforced by `/create-plan` Step 2B (Research Open Design Questions). The reviewer can approve with the agent's recommendation or override.
+- **Workflow integration:** Enforced by `/create-plan` Step 2B (Research Open Design Questions) and generalised to every workflow stage by `.agent/docs/human-decision-protocol.md` (2026-09-29): precedent sweep of prior project decisions before web research, an obviousness test that lets the agent decide and log two-way-door questions instead of asking, and a Decision Brief that leads with the recommendation and compares each alternative against it. The reviewer or human can approve with the agent's recommendation or override; autonomous decisions surface in the reflection's `### Decisions Log`.
 
 ### G25 — Multi-Surface Feature Parity Verification
 

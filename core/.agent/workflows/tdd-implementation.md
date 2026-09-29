@@ -28,7 +28,7 @@ Run cheap static checks, then the affected targeted tests. Preserve Green comman
 
 Refactor while maintaining behavior, then rerun affected static/targeted checks. Scope includes shared fixtures, configuration, contracts and generated inputs. Later stages blocked by an earlier failure are not_run with a reason. Coverage/runtime budgets and integration selection follow D6; no product prefixes, timeout constants or --scope flags are assumed.
 
-Update completed implementation rows only with durable evidence. Do not mark unfinished code blocked. An external error, missing prerequisite or human decision needs the shared B-row evidence contract.
+Update completed implementation rows only with durable evidence. Do not mark unfinished code blocked. An external error, missing prerequisite or human decision needs the shared B-row evidence contract. An execution-time fork (an AC unreachable as written, two plausible implementations, a bound that must move) follows `.agent/docs/human-decision-protocol.md`: precedent sweep, web research, obviousness test — decide and log it in the MEU handoff when the test passes; otherwise hold the row `[B]` with a Decision Brief (recommendation first) as its `Decision:` line and keep working the other rows. Holding the row stages the brief; it is *presented* at the next sanctioned gate (the MEU handoff / closeout human-decision exit, `AGENTS.md` §Execution Contract), where the turn ends per protocol §5 — never by ending the turn mid-execution.
 
 ## 5. H1: prepare final review
 

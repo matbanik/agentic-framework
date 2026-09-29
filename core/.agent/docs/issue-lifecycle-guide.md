@@ -140,32 +140,47 @@ The agent classifies every active issue using this taxonomy:
 | `DEFER` | Low priority, defer | Backlog |
 | `CLOSE` | Won't fix | Archive |
 
-### Step 4 — Interactive Enrichment (🧑 Human Input)
+### Step 4 — Enrichment (🤖 protocol first; 🧑 human only where it is not obvious)
 
-For issues classified as `MEU-NEW`, `MEU-EXPAND`, or `ARCH-DECISION`, the agent
-asks the human **targeted questions** — not open-ended "what do you think?" prompts:
+For issues classified as `MEU-NEW`, `MEU-EXPAND`, or `ARCH-DECISION`, the agent runs
+`.agent/docs/human-decision-protocol.md` §2–§4 on every scoping question BEFORE anything is
+asked: precedent sweep (grouping §8 rulings, earlier `enrichment.decision_log` entries, plans,
+reflections, ADRs), web research via the harness `web_search_tool` ladder, then the obviousness
+test.
+
+- **Obvious** (precedents converge, two-way door, no product fork, no governance number): the
+  agent decides, records it under the issue's `enrichment.decision_log` with `decided_by: "agent"`
+  (`issue-triage.md` §3.5), and asks nothing. The human reads it afterwards in the session
+  reflection's `### Decisions Log`.
+- **Not obvious**: the agent asks a **Decision Brief** — the recommendation first, with why, then
+  the alternatives compared against it — never an open-ended "what do you think?" prompt and
+  never a bare option list:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ Issue MCP-ZODSTRIP: MCP server strips trailing zeros    │
-│                                                         │
-│ How should this be scoped?                              │
-│                                                         │
-│  ○ Create new MEU in MCP Server phase                   │
-│  ○ Expand existing MEU-308 (MCP data fidelity)          │
-│  ○ Needs architecture decision first                    │
-│  ○ Defer to later phase                                 │
-│                                                         │
-│                              [Submit]    [Skip]         │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ Issue MCP-ZODSTRIP: MCP server strips trailing zeros             │
+│                                                                  │
+│ Recommendation: expand MEU-308 (MCP data fidelity) — the         │
+│ 2026-05 grouping ruled that fidelity fixes ride the owning MEU;  │
+│ two-way door. Default if unanswered: the recommendation.         │
+│                                                                  │
+│  ○ Expand existing MEU-308 (recommended)                         │
+│  ○ Create new MEU in MCP Server phase   (+ own gate / − 2nd MEU) │
+│  ○ Needs architecture decision first    (+ settles X / − delay)  │
+│  ○ Defer to later phase                 (+ nothing / − bug ages) │
+│                                                                  │
+│                                       [Submit]    [Skip]         │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-The agent also surfaces relationships:
-- *"These 3 issues share the same component — one MEU or separate?"*
-- *"Issue X blocks Y — escalate from Medium to High?"*
-- *"Workaround for Z has been in place 3 months — still acceptable?"*
+Relationships are surfaced the same way — recommendation first, alternative compared:
+- *"These 3 issues share the same component — recommendation: one MEU (precedent: the 2026-08 grouping); separate MEUs cost three gates for one fix."*
+- *"Issue X blocks Y — recommendation: escalate to High; keeping Medium leaves Y's MEU unschedulable."*
+- *"Workaround for Z has been in place 3 months — recommendation: keep it; the fix is a one-way schema change."*
 
-The human answers 5-10 targeted questions. This takes ~2 minutes, not 20.
+Only the non-obvious questions reach the human, so the count is whatever survives the
+obviousness test — often none. Every answer, and every autonomous decision, lands in
+`enrichment.decision_log` and in the reflection's `### Decisions Log`.
 
 ### Step 5 — Agent Groups Issues into MEU Batches
 
@@ -452,7 +467,9 @@ dismissed          workaround → mitigated → resolved
 │       │                                                         │
 │       ▼                                                         │
 │  👤 INTERACTIVE ENRICHMENT (Step 3.5)                           │
-│  └── Agent asks targeted questions:                             │
+│  └── Agent runs human-decision-protocol.md per issue:           │
+│      precedent sweep → research → obviousness test; decides     │
+│      the obvious (enrichment.decision_log), briefs the rest:    │
 │      "One MEU or three?" / "Escalate?" / "Still blocked?"       │
 │       │                                                         │
 │       ▼                                                         │
@@ -504,7 +521,7 @@ dismissed          workaround → mitigated → resolved
 | # | When | What the Human Does | Time Required |
 |---|------|---------------------|---------------|
 | 1 | **Report** | Describes the problem | 30 seconds |
-| 2 | **Enrichment** | Answers 5-10 targeted questions | 2-3 minutes |
+| 2 | **Enrichment** | Answers only the Decision Briefs that survive the obviousness test (often none) | 0-3 minutes |
 | 3 | **Approve Plan** | Reviews implementation plan | 5-10 minutes |
 | 4 | **Approve Commit** | Reviews changes, approves push | 2-5 minutes |
 

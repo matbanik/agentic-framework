@@ -91,14 +91,14 @@ When Step 6 (artifact structural compliance) fires, run these checks on each art
 Required markers — grep the file for each. **ALL must match or the reflection is non-compliant:**
 
 ```powershell
-rtk proxy pwsh -NoProfile -Command { $path='<reflection-file>'; $patterns=@('Friction Log|Execution Trace','Pattern Extraction|Patterns to KEEP','Next Session Design Rules|RULE-','Efficiency Metrics','Rule Adherence','Instruction Coverage|schema: v1','sections:','loaded:','decisive_rules:'); foreach ($pattern in $patterns) { if (-not (Select-String -Path $path -Pattern $pattern -Quiet)) { Write-Error ('missing reflection pattern: '+$pattern); exit 1 } }; 'PASS: reflection markers' } *> {{RECEIPTS_DIR}}/reflection-structure.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/reflection-structure.txt; exit $code
+rtk proxy pwsh -NoProfile -Command { $path='<reflection-file>'; $patterns=@('Friction Log|Execution Trace','Pattern Extraction|Patterns to KEEP','Decisions Log','Next Session Design Rules|RULE-','Efficiency Metrics','Rule Adherence','Instruction Coverage|schema: v1','sections:','loaded:','decisive_rules:'); foreach ($pattern in $patterns) { if (-not (Select-String -Path $path -Pattern $pattern -Quiet)) { Write-Error ('missing reflection pattern: '+$pattern); exit 1 } }; 'PASS: reflection markers' } *> {{RECEIPTS_DIR}}/reflection-structure.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/reflection-structure.txt; exit $code
 ```
 
 > [!NOTE]
 > Token counts, environment, and implementor-model fields are retired (2026-07-21) — do not emit or validate them.
 
 > [!CAUTION]
-> **Hard gate — not advisory.** If ANY marker above returns 0 matches, the reflection is structurally non-compliant. Execute: read (your harness `read_tool`) `docs/execution/reflections/TEMPLATE.md`, then rewrite the reflection using the full 7-section template structure. The YAML block alone is NOT a valid reflection — it is section 7 of 7.
+> **Hard gate — not advisory.** If ANY marker above returns 0 matches, the reflection is structurally non-compliant. Execute: read (your harness `read_tool`) `docs/execution/reflections/TEMPLATE.md`, then rewrite the reflection using the full template structure (every heading — 6 `##` + 9 `###`, incl. `### Decisions Log`). The YAML block alone is NOT a valid reflection — it is only the final `## Instruction Coverage` section.
 
 > [!CAUTION]
 > **If the exact reflection-marker receipt reports no `sections:` match, the Instruction Coverage YAML is missing.** This means Step 7.5 of `tdd-implementation.md` was skipped. Execute it now: read (your harness `read_tool`) `.agent/schemas/reflection.v1.yaml`, then emit the YAML block in the reflection file.
@@ -160,7 +160,7 @@ Before writing ANY closeout artifact, confirm:
 
 After writing each closeout artifact, verify:
 
-- [ ] **Reflection quality gate**: File size > 2,000 bytes AND all 11 template sections have substantive answers (not `_Answer here_` or single-sentence responses for complex questions)
+- [ ] **Reflection quality gate**: File size > 2,000 bytes AND every template heading (6 `##` + 9 `###`, incl. the Decisions Log — every autonomous decision with its reasoning, or "None.") have substantive answers (not `_Answer here_` or single-sentence responses for complex questions). H2-2's `--decision-source` flags reconcile the Decisions Log against the plan's, each handoff's, the grouping's §8 and the closed issue's decision logs: a decision recorded there without a matching row here — or a row with a blank question, chosen option or reasoning — fails the gate
 - [ ] **Handoff quality gate**: All 7 scored sections are populated with concrete evidence, not "pending" or "N/A" for blocking gates
 - [ ] **Metrics row verified**: the exact metrics-tail receipt shows a row with today's date and all columns populated
 

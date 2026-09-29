@@ -150,33 +150,64 @@ Update the `meu_links` field in `known-issues.yaml` for issues with identified M
 > `MEU-NEW`, `MEU-EXPAND`, or `ARCH-DECISION`. All other categories proceed
 > without human input.
 
-For each issue in the enrichment-eligible categories, present targeted questions
-to the human reviewer:
+For each issue in the enrichment-eligible categories, run `.agent/docs/human-decision-protocol.md`
+§2–§4 BEFORE anything is asked: precedent sweep (grouping §8 rulings, earlier
+`enrichment.decision_log` entries, plans, reflections, ADRs, `emerging-standards.md`), web
+research via the harness `web_search_tool` ladder, then the obviousness test.
+
+- **Obvious** (precedent or sources converge, two-way door, no product fork, no governance
+  number): decide it and do not ask. Record it under the issue's `enrichment.decision_log` in
+  `known-issues.yaml` with `resolution: autonomous` and `decided_by: "agent"`.
+- **Not obvious**: present it as a Decision Brief (protocol §5) — recommendation first with why,
+  then the alternatives compared against it, sources, reversibility, and the default if
+  unanswered. The option list is ordered recommendation first.
 
 **If your harness has a question-prompt tool** (e.g. Antigravity's `ask_question`
-modal), use it; otherwise ask the user directly in chat, for
-structured yes/no and multiple-choice questions:
+modal), use it; otherwise ask the user directly in chat. Either way the question carries the
+brief — never a bare choice:
 
 ```
 ask_question:
-  question: "Issue {ID}: {title} — How should this be scoped?"
+  question: |
+    Issue {ID}: {title} — scoping.
+    Recommendation: create new MEU in {build-plan-section} — {why: precedent path:line; research takeaway}.
+    Reversibility: two-way. Default if unanswered: the recommendation.
+    Alternatives vs. the recommendation: expand MEU-{ID} (+{pro} / −{con}); architecture decision first (+ / −); defer (+ / −).
   options:
-    - "Create new MEU in {build-plan-section}"
+    - "Create new MEU in {build-plan-section} (recommended)"
     - "Expand existing MEU-{ID}"
     - "Needs architecture decision first"
     - "Defer to later phase"
 ```
 
 **In Claude CLI / Codex CLI dispatches**: Use `request_user_input` or inline
-numbered choice lists.
+numbered choice lists, recommendation first.
 
-After receiving answers, write the enrichment data to the YAML SSOT:
+After the decision (autonomous or human), write it to the YAML SSOT. `enrichment` is the only
+per-issue field that `issue_triage.py triage` carries into the regenerated `triage-output.yaml`
+(`tools/issue_triage/triage.py` `_make_entry`), so `decision_log` lives under it — never in
+`triage-output.yaml` directly, which is overwritten on every run:
 
 ```python
 issue["enrichment"] = {
-    "questions_asked": ["How should this be scoped?"],
+    "questions_asked": ["How should this be scoped?"],   # human-gated decisions only
     "answers": ["Create new MEU in section X"],
-    "decided_by": "human",
+    "decided_by": "human",                                # "agent" for autonomous decisions
+    "decision_log": [
+        {
+            "id": "D-1",
+            "stage": "triage",
+            "question": "How should this be scoped?",
+            "resolution": "human",                        # or "autonomous"
+            "class": "product-preference",
+            "chosen": "Create new MEU in section X",
+            "source_tag": "Human-approved",
+            "precedents": ["{path:line — what it decided}"],
+            "research": {"engine": "tavily", "sources": ["{URL — takeaway}"]},
+            "reasoning": "why this option; why the alternatives lost",
+            "human_message_reference": "USER_EXPLICIT {YYYY-MM-DD} '<quote>'",  # human only
+        }
+    ],
 }
 ```
 
@@ -262,7 +293,12 @@ Present the triage results with:
 1. State: **"Issue triage complete. Awaiting your review before plan generation."**
 2. Summarize verification findings from Step 1 (deep verify results)
 3. List the proposed MEU batches from Step 5 with their priorities
-4. Highlight any architecture decisions requiring human input
+4. Present each architecture decision that still requires human input as a Decision Brief per
+   `.agent/docs/human-decision-protocol.md` §5 — precedent sweep and web research done,
+   recommendation first with why, alternatives compared against it. Decisions that pass the
+   protocol's obviousness test are decided here, recorded in the issue's `enrichment.decision_log`
+   in `known-issues.yaml` (§3.5; carried into the regenerated `triage-output.yaml`) and in the
+   session reflection's `### Decisions Log`, and not asked
 5. Reference the generated `triage-output.yaml` path
 6. **END YOUR TURN.**
 

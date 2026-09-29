@@ -38,6 +38,7 @@ Example: `.agent/context/handoffs/2026-04-25-pipeline-capabilities-MEU-101-hando
 > - AC table has source labels for every criterion
 > - `<!-- CACHE BOUNDARY -->` marker separates the stable prefix from variable content
 > - Evidence section has FAIL_TO_PASS table and Commands Executed table
+> - `## Decision Log` carries every `.agent/docs/human-decision-protocol.md` decision made during the MEU as a fenced `decision_log:` YAML block, or exactly `None.` — the closeout validator reconciles it with the reflection's `### Decisions Log` (protocol §6)
 > - Codex Validation Report section is left blank for the reviewer
 
 ### Context Compression Rules (v2.1)

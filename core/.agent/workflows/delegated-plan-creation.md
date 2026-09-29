@@ -343,7 +343,7 @@ uv run python tools/render_review_verdict.py `
 
 ### 5d. Round Cap — HARD STOP
 
-If 3 rounds without approval, present TL;DR and wait for human direction.
+If 3 rounds without approval, present the round-cap TL;DR as a Decision Brief — recommendation first, the alternatives (continue the loop / execute with guarded rows / answer the human-decision items / stop) compared against it, reversibility, default if unanswered — per `create-plan.md` §5 round-cap block and `.agent/docs/human-decision-protocol.md` §5, then wait for human direction.
 
 ---
 

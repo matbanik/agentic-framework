@@ -259,7 +259,11 @@ git commit --no-verify -m "..."
 ```
 
 **If the hook is genuinely misconfigured** (e.g., it blocks commits to main unconditionally),
-call `notify_user` and ask the user if they want to bypass — never decide unilaterally.
+present a Decision Brief per `.agent/docs/human-decision-protocol.md` §5 and end the turn:
+the recommendation first (default: do **not** bypass — fix the hook configuration and re-run),
+the bypass compared against it with exactly which checks `--no-verify` skips, and the evidence
+that the hook is misconfigured. Bypassing a hook is never decided unilaterally: a `--no-verify`
+commit needs the human's explicit reply, as every commit already does (§Commit Policy).
 
 ### Lint Failures (Ruff)
 

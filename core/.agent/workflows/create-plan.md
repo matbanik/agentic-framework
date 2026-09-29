@@ -102,7 +102,7 @@ Rules:
 - Do not create FIC acceptance criteria from unsourced intuition.
 - Do not silently narrow the contract because the build plan is thin.
 - If local docs are insufficient, run `.agent/workflows/pre-build-research.md` or equivalent targeted web research before Step 3.
-- Ask the human only when materially different product behaviors remain plausible, sources conflict, or the decision is irreversible/high-risk.
+- Ask the human only when materially different product behaviors remain plausible, sources conflict, or the decision is irreversible/high-risk — and only after the precedent sweep, web research, and obviousness test of `.agent/docs/human-decision-protocol.md`. A question that passes the obviousness test is decided by the planner and logged, never asked.
 
 For any MEU that accepts external input, the sufficiency table must include a **Boundary Inventory Row** per write surface:
 
@@ -117,9 +117,11 @@ When Steps 2–2A surface design questions where the spec is silent or ambiguous
 
 **Trigger:** Any behavior classified as `unresolved` in the sufficiency table, or any design fork where two or more plausible approaches exist and no spec/local-canon source resolves it.
 
-**Process:**
+**Process** (the planning instance of `.agent/docs/human-decision-protocol.md` §2–§6):
 
-1. **Web search** each open question using `search_web`. Target queries at how production apps, established UX patterns (NNG, Material Design, industry-specific tools), or framework docs handle the same decision. Aim for 2–3 searches per question.
+0. **Precedent sweep** the codebase first (protocol §2): grouping §8 decision tables, prior plans' Decision Logs, reflections' Decisions Logs, handoffs, the ADR directory, `emerging-standards.md`, known-issues, and any harness memory. Record every hit as `path:line — what was decided — by whom`.
+
+1. **Web search** each surviving question using the harness `web_search_tool` (protocol §3 ladder: research MCP such as Pomera `tavily`/`exa` → native `WebSearch`/`search_web` → Codex `--search` → `research: unavailable`). Target queries at how production apps, established UX patterns (NNG, Material Design, industry-specific tools), or framework docs handle the same decision, plus one query for recent AI-era approaches. Aim for 2–3 searches per question and record the engine used.
 
 2. **Sequential thinking** to evaluate the research findings against project-specific constraints:
    ```
@@ -132,22 +134,32 @@ When Steps 2–2A surface design questions where the spec is silent or ambiguous
    ```
    Consider: project architecture, existing patterns (Local Canon), user workflows, risk of wrong default, reversibility.
 
-3. **Document** findings as a **Decision Options Table** in the plan's "Open Questions" section:
+3. **Apply the obviousness test** (protocol §4). A question the planner decides itself — precedent or sources converge, two-way door, no product fork, no new governance number — is resolved now: tag the acceptance criterion `Local Canon` or `Research-backed` in the sufficiency table and write an `autonomous` entry in the plan's `## Decision Log`. It does not appear as a question anywhere.
 
-   | Question | Option | Source | Pros | Cons | Recommendation |
-   |----------|--------|--------|------|------|----------------|
-   | {question} | Option A | {URL or doc} | {pros} | {cons} | ✅ / ⚠️ / ❌ |
-   | | Option B | {URL or doc} | {pros} | {cons} | ✅ / ⚠️ / ❌ |
+4. **Document** every remaining (human-gated) question as a **Decision Brief** in the plan's `## Decision Log` section — the complete protocol §5 shape, recommendation first, then the alternatives compared against it:
 
-   Each option must cite at least one external source (URL, doc path, or standard ID). The agent marks its recommended option with ✅ but the reviewer makes the final call.
+   ```markdown
+   ### D-{n} — {question}
+   **Recommendation:** {Option A} — {why it is the right call}. **Reversibility:** {two-way | one-way-door}. **Default if unanswered:** {option}.
+   **Precedents:** {path:line — what it decided}. **Research:** {engine}; {source — takeaway} (or `unavailable — <reason>`).
+
+   | Option | Source | Pros (vs. rec.) | Cons (vs. rec.) | Verdict |
+   |--------|--------|-----------------|-----------------|---------|
+   | A (recommended) | {precedent path:line, URL or doc} | — | — | ✅ |
+   | B | {URL or doc} | {what it does better than A} | {what it costs against A} | ⚠️ / ❌ |
+   ```
+
+   Each option must cite at least one source (precedent `path:line`, URL, doc path, or standard ID); pros and cons are stated relative to the recommendation, never as free-standing bullets. The human makes the final call at the §5c gate (or the reviewer, where the question is review-scoped and `plan_to_exec_gate` is `reviewer-auto`).
 
 **Rules:**
-- Do not present questions with zero research. If a question cannot be researched (e.g., pure product preference), mark it as `Human-decision-required` and explain why research was insufficient.
-- The reviewer should be able to make an informed decision by reading the table alone — no additional research should be needed.
-- If research resolves the question definitively (e.g., all sources agree on one approach), promote the resolution to `Research-backed` in the sufficiency table and remove it from Open Questions.
-- Reference `emerging-standards.md` — if an existing standard (e.g., UX2, G23) already resolves the question, cite it instead of re-researching.
+- Do not present questions with zero precedent sweep or research. If a question cannot be researched (e.g., pure product preference), mark it `Human-decision-required` with class `product-preference`, still lead with a recommendation, and say why research was insufficient. No search tool available → stamp `research: unavailable — <reason>`; never skip the sweep or the brief.
+- The reader should be able to decide from the brief alone — no additional research should be needed.
+- Reference `emerging-standards.md` — if an existing standard (e.g., UX2, G23, G24) already resolves the question, cite it as the precedent instead of re-researching.
+- Every autonomous resolution is carried into the closeout reflection's `### Decisions Log` (Step 6 item 7) so the human reads the reasoning after the fact.
 
 ### 3. Reason About Project Scope
+
+If the project is scoped from a session-grouping file, carry its `## 8. Open Decisions` rows forward: every D-row (decided or `open`) becomes a row of the closeout reflection's `### Decisions Log` with stage `grouping`, and H2-2's reflection check passes that same file as `--decision-source {grouping-file}` — the validator refuses to reconcile a plan that declares a real `grouping_source` without it (`session-grouping.md` row 8 carry-forward rule).
 
 Use sequential thinking to group the next set of pending MEUs into a coherent **project**. Apply these principles:
 
@@ -333,7 +345,10 @@ Get-Content .agent/context/handoffs/{plan-folder-name}-plan-critical-review.md *
 1. Read findings from the review file
 2. Classify each finding:
    - **Auto-resolvable** (doc fixes, task table corrections, validation command specificity) → Apply inline
-   - **Human-decision-required** (different product behaviors plausible) → Queue for HARD STOP
+   - **Human-decision-required** (different product behaviors plausible) → run
+     `human-decision-protocol.md` §2–§4 first; if the obviousness test now passes, decide it,
+     log it, and treat the finding as auto-resolved. Otherwise queue a Decision Brief
+     (protocol §5) for the HARD STOP — never a bare question
 3. Apply `/plan-corrections` inline (orchestrator fixes docs — no code changes). Its
    **Step 5c blast-radius census** is mandatory and its receipt goes into the resubmission —
    roughly a quarter of historical review rounds existed only to catch a defect the previous
@@ -428,9 +443,16 @@ At the round cap:
    - Remaining unresolved: {list}
    - Remaining-risk classification: {N findable-by-reading | N findable-only-by-executing | N human-decision | N externally-blocked}
 
-   Human decision required. Your options: (a) "continue review loop" for more rounds,
-   (b) direct execution with the open risks carried as guarded task rows, (c) answer the
-   human-decision items and resume, (d) stop. Recommendation below is advisory only.
+   Human decision required.
+
+   ## Recommendation: {a|b|c|d} — {why it is the right call here}
+   Alternatives compared against the recommendation (protocol §5), each with its pros / cons
+   relative to it: (a) "continue review loop" for more rounds — {+ / −}; (b) direct execution
+   with the open risks carried as guarded task rows — {+ / −}; (c) answer the human-decision
+   items and resume — {+ / −}; (d) stop — {+ / −}. Reversibility: {two-way | one-way-door}.
+   Default if unanswered: {option}. The human decides; the recommendation never self-executes.
+
+   ## Decision Briefs (one per human-decision item, protocol §5)
    ```
 
    **Classify the remaining risk — this is what turns the cap into a decision point rather than
@@ -444,6 +466,12 @@ At the round cap:
    open risk into execution as a guarded task row** (a row whose validation command exercises
    that risk), rather than more review rounds — additional reading cannot resolve what only
    execution can observe, and that is the shape of a loop that runs long.
+
+   Every `human-decision` item in the TL;DR is presented as a Decision Brief per
+   `.agent/docs/human-decision-protocol.md` §5 — precedent sweep and research already done,
+   recommendation first, alternatives compared against it. Items that pass the protocol's
+   obviousness test are not human-decision items: decide them, log them, and drop them from the
+   count.
 
    **The recommendation is non-authorizing.** This is a HARD STOP: present it, end the turn, and
    act only on the user's next explicit chat message. A recommendation to proceed is not
@@ -471,9 +499,9 @@ At the round cap:
 - After two consecutive unrecognized verdicts → HARD STOP, surface raw reviewer output to human
 
 **Reviewer asks questions (not just findings):**
-- Check if answerable from local canon (docs, specs, ADRs, prior decisions)
-- If yes → auto-answer in the next submission prompt
-- If no → HARD STOP with question surfaced to human
+- Run `human-decision-protocol.md` §2–§4: precedent sweep (docs, specs, ADRs, prior decisions), web research, obviousness test
+- If the test passes → answer in the next submission prompt and log the decision (`resolution: autonomous`)
+- If not → HARD STOP with a Decision Brief (protocol §5) surfaced to the human — recommendation first, never the bare question
 
 **Rate limit hit mid-loop:**
 - Attempt the next reviewer rung (see §5a priority chain: cross-vendor primary → surface-only secondary → **human**)
@@ -544,7 +572,7 @@ After all MEU TDD cycles and handoffs are complete, **continue immediately** wit
    ```
    > **Why two steps?** `--check` provides drift evidence and catches accidental route changes. CI runs `--check` mode — if you forget to regenerate after a real change, CI catches it. Blindly regenerating with `-o` loses this safety net. Run step 2 only when step 1 reported drift.
 6. **Auto-dispatch `/execution-critical-review`** and loop corrections until APPROVED (see §6a below). This is NOT optional and is NOT a human gate — a standalone `/create-plan` run owns its own execution review (it does *not* hand off to `/execution-session`). The review now sees the final state (items 1–5). Do not write the reflection/metrics or report completion until the implementation review returns `approved` (or hits the round cap). If the correction loop changes code/tests, re-run the MEU gate (and re-touch items 2–5 if affected) before re-dispatching.
-7. Create reflection file at `docs/execution/reflections/` (see `execution-session.md` §5) — it must record the execution-review rounds/verdict from item 6.
+7. Create reflection file at `docs/execution/reflections/` (see `execution-session.md` §5) — it must record the execution-review rounds/verdict from item 6 and, in its `### Decisions Log`, every decision the session resolved autonomously under `human-decision-protocol.md` §4 with its reasoning, plus every human-gated one with its `human_message_reference`.
 8. Update metrics table in `docs/execution/metrics.md`
 10. Prepare proposed commit messages with no AI attribution trailers or generated-by statements
 
@@ -560,7 +588,7 @@ Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/execution-critical-re
 1. Detect billing mode + compute routing signals; dispatch via the independent-reviewer chain (cross-vendor primary → surface-only secondary → **human**; canonical in [`.agent/docs/model-routing.md`](../docs/model-routing.md)).
 2. Write the verdict to the canonical `.agent/context/handoffs/{plan-folder-name}-implementation-critical-review.md` (rolling file).
 3. **If `changes_required`:** apply code/test corrections via `/execution-corrections`, re-run the MEU gate, re-dispatch. **If `approved`:** continue to the remaining deliverables.
-4. **Round cap: 6 rounds** → HARD STOP with a TL;DR; resume on the user's "continue review loop".
+4. **Round cap: 6 rounds** → HARD STOP with a TL;DR in the Decision-Brief form of the §5 round-cap block (recommendation first, alternatives compared against it); resume on the user's "continue review loop".
 5. Do NOT auto-commit after approval — present proposed commit messages with no AI attribution trailers or generated-by statements, then wait for explicit human direction.
 
 > The Step 6 execution-review loop is an **atomic non-stop region** (same as the Step 5 plan-review loop): the only valid exits are (1) `approved`, (2) all reviewer rungs rate-limited, (3) reviewer asks a human-decision-required question, (4) round cap reached.

@@ -148,6 +148,26 @@ _Optional. Skip this section if no items are deferred._
 
 ---
 
+## Decision Log
+
+<!-- Every .agent/docs/human-decision-protocol.md decision made during this MEU, autonomous or human-ruled, as ONE fenced decision_log: YAML block with the plan's entry shape, or exactly `None.` (delete the example below in that case). This comment may stay; any other prose here is refused. The closeout validator reconciles every entry with the reflection's Decisions Log; an example left unfilled is refused, not ignored. -->
+
+```yaml
+decision_log:
+  - id: D-{n}
+    stage: execution
+    question: "{one line}"
+    resolution: autonomous | human
+    class: two-way | one-way-door | product-preference | source-conflict | governance-value | externally-blocked
+    chosen: "{option}"
+    source_tag: Local Canon | Research-backed | Human-approved
+    precedents: ["{path:line — what it decided}"]
+    research: { engine: tavily | exa | native | codex-search | none, sources: ["{URL — takeaway}"] }
+    reasoning: "{why this option; why the alternatives lost}"
+```
+
+---
+
 ## History
 
 | Event | Date | Agent | Detail |

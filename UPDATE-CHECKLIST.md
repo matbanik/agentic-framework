@@ -79,6 +79,7 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 | `.agent/docs/claude-cli-fallback-lessons.md` | `core/.agent/docs/` |
 | `.agent/docs/macos-setup.md` | `core/.agent/docs/` | package-authored; hardware smoke pending |
 | `.agent/docs/context-tool-decision-gate.md` | `core/.agent/docs/` | if present in source |
+| `.agent/docs/human-decision-protocol.md` | `core/.agent/docs/` | generalise the precedent-sweep table (ADR dir, memory examples) and the research-MCP name; see the scrub ledger |
 | `.agent/docs/triage-meu-loop.md` | `core/.agent/docs/` | issue→MEU learning loop diagram |
 | `.agent/docs/diagrams/development-lifecycle-overview.svg` | `core/.agent/docs/diagrams/` | (if present) |
 
@@ -234,7 +235,7 @@ any more) plus one must-pass arm naming a tool that really is shipped.
 - [ ] `refcheck.py --selftest` and `sanitize.py --selftest` both exit 0
 - [ ] `sanitize.py --verify` exits 0 (all five gates)
 - [ ] The two closeout gates pass **and** report their must-OK counts:
-      `python core/tools/validate_closeout_artifacts.py --selftest` (59 arms, 19 must-OK)
+      `python core/tools/validate_closeout_artifacts.py --selftest` (174 arms, 45 must-OK)
       and `python core/tools/lint_task_contract.py --selftest` (49 arms, 14 must-OK)
 - [ ] `python core/tools/review_ledger.py selftest` (55 arms, 25 must-OK). One of those
       arms asserts `evaluate` still prints `mode=`; the dispatch wrappers read the dispatch
@@ -369,6 +370,7 @@ rtk proxy uv run python tools/_fw_hashdiff.py --ledger *> {{RECEIPTS_DIR}}/fw-le
 | `.agent/docs/model-routing.md` | scrub | Isolated-worker rungs rewritten to `claude -p` only; the 'not an independent-reviewer substitute' rule is kept. **Superseded 2026-09-07:** the same-vendor review rung is now removed outright, not relabelled — see §Independent-reviewer chain. Do not restore it from this row. |
 | `.agent/docs/commands.md` | scrub | Drops the ┬ºCursor Agent CLI smoke and ┬ºSerena server lifecycle sections and rewrites the CLI Dispatch row; the row itself is kept because the skill ships. |
 | `.agent/docs/context-tool-decision-gate.md` | scrub | `eligible_tools` and the token-savings prose drop Serena (excluded MCP). |
+| `.agent/docs/human-decision-protocol.md` | scrub | Precedent-sweep table names a generic ADR directory instead of the source's `docs/adrs/` + `docs/decisions/`, drops the Graphify/Serena sentence and the product-specific memory examples, and calls the search MCP "a registered research MCP (e.g. Pomera)"; the protocol, obviousness test, brief format and log schema are verbatim. |
 | `.agent/docs/testing-strategy.md` | authored | The source's `QA-PYRIGHT-SCOPE-GAP` warning is a live product known-issue investigation (names `tools/validate_codebase.py`, a source line number, this repo's `packages/` layout, and a domain type). Replaced by a portable TIP carrying the transferable lesson: make the gate and the pre-commit hook agree on which trees they type-check, and write the scope down. |
 | `.agent/workflows/README.md` | scrub | `/cli-dispatch` executor cell drops the Cursor Agent CLI route. |
 | `.agent/workflows/create-plan.md` | scrub | Context-tool inventory drops Serena (2 mentions). |

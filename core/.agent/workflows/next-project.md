@@ -216,7 +216,7 @@ Present the recommendation with:
 
 1. State: **"Next project recommendation ready. Awaiting your review before plan generation."**
 2. Summarize the recommended project and its rationale
-3. List runner-up candidates for comparison
+3. Present the runner-up candidates as a Decision Brief (`.agent/docs/human-decision-protocol.md` §5): each compared against the recommendation with its pros and cons relative to it, the precedents and research behind the ranking, and the default if unanswered (the recommendation)
 4. Highlight any spec gaps or pre-build research needs
 5. **END YOUR TURN.**
 

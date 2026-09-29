@@ -261,8 +261,8 @@ docs/build-plan/
 | Decision | When | Why |
 |----------|------|-----|
 | **Plan approval** | Branches on `plan_to_exec_gate` after reviewer `approved` (Step 5c) | `human` gate: ensures agent's understanding matches human intent; `reviewer-auto`: auto-continues |
-| **Open question resolution** | During plan review | When multiple valid approaches exist |
-| **Threshold sign-off** | When plan proposes novel numeric values | Governance values need human confirmation |
+| **Open question resolution** | During plan review | When multiple valid approaches exist **and** the question survives `.agent/docs/human-decision-protocol.md` (precedent sweep → web research → obviousness test); presented as a Decision Brief, recommendation first. Questions the test settles are decided by the agent and logged in the plan's Decision Log and the reflection's Decisions Log |
+| **Threshold sign-off** | When plan proposes novel numeric values | Governance values need human confirmation (protocol §4 test 4 — never resolved autonomously) |
 
 ### 🔄 Adaptability Notes
 

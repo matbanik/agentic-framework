@@ -59,6 +59,17 @@ template_version: "2.0"
     <!-- Delegation via `.agent/skills/subagent-delegation/SKILL.md` ({{PROJECT_NAME}}-builder / {{PROJECT_NAME}}-verifier). -->
     _Answer here_
 
+### Decisions Log
+
+<!-- Every decision this session made under .agent/docs/human-decision-protocol.md — the ones
+     resolved autonomously (obviousness test passed) AND the ones the human ruled on. This is the
+     only place the human sees the decisions the agent did not stop for: reasoning is mandatory,
+     a later reviewer may contest any entry. Empty session → write "None." -->
+
+| ID | Stage | Question | Resolution | Chosen | Source tag | Reasoning (why this; why the alternatives lost) | Human ref |
+|----|-------|----------|------------|--------|------------|--------------------------------------------------|-----------|
+| D-1 | planning / plan-review / execution / closeout / triage / grouping | _{one line}_ | autonomous / human | _{option}_ | Local Canon / Research-backed / Human-approved | _{precedent path:line; research engine + takeaway; the deciding factor}_ | _{USER_EXPLICIT date + quote, or —}_ |
+
 ---
 
 ## Pattern Extraction
