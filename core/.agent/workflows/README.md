@@ -26,6 +26,7 @@ your harness's own command mapping.
 | `meu-handoff` | `.agent/workflows/meu-handoff.md` | current_agent |
 | `issue-triage` | `.agent/workflows/issue-triage.md` | current_agent |
 | `next-project` | `.agent/workflows/next-project.md` | current_agent |
+| `build-plan-authoring` | `.agent/workflows/build-plan-authoring.md` | current_agent (PLANNING-only; derives phases from the project's own architecture → hub + phase specs + priority matrix; open choices go through `.agent/docs/human-decision-protocol.md`; hands off to `/session-grouping`; no new gate) |
 | `session-grouping` | `.agent/workflows/session-grouping.md` | current_agent (PLANNING-only; findings/phase → MEUs → sessions; hands off to `/create-plan`; non-gating, no turn-ender) |
 | `inspiration-research` | `.agent/workflows/inspiration-research.md` | current_agent (procedure in `.agent/skills/deep-research-prompting/SKILL.md`; Step 0 Pomera MCP preflight is a HARD GATE — on failure notify the human and end the turn, never silently fall back to native search) |
 | `skill-optimize` | `.agent/workflows/skill-optimize.md` | current_agent (dispatches the cross-vendor judge per cli-dispatch; stages for human adoption — never auto-merges) |

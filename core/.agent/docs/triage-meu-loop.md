@@ -130,7 +130,7 @@ After execution, handoff, and independent review, closeout writes a reflection w
 
 1. Copy `core/tools/` and the two skills into the project.
 2. Copy empty `.agent/context/` seeds (not live product data).
-3. Copy `templates/BUILD_PLAN-STUB.md` → your Spec/build-plan path with AUTOGEN markers.
+3. Copy `templates/BUILD_PLAN-STUB.md` → your Spec/build-plan path with AUTOGEN markers. Fill the rest of the build plan with `/build-plan-authoring bootstrap`.
 4. Edit `tools/issue_triage/model.py` → `VALID_COMPONENTS` (and skill ID-prefix table) for your domain.
 5. Install Python deps: `pyyaml`, `jsonschema`.
 6. Smoke: `python tools/issue_triage.py stats` and `python tools/meu_status.py stats`.

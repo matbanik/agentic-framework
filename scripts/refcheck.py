@@ -320,7 +320,9 @@ PATH_ALIASES = {
     ".agent/context/handoffs/REVIEW-TEMPLATE.md": "core/templates/REVIEW-TEMPLATE.md",
     ".agent/templates": "core/templates",
     **{f".agent/templates/{name}-TEMPLATE.md": f"core/templates/{name}-TEMPLATE.md"
-       for name in ("PLAN", "TASK", "HANDOFF", "REVIEW", "REFLECTION")},
+       for name in ("PLAN", "TASK", "HANDOFF", "REVIEW", "REFLECTION",
+                    "PHASE-SPEC", "BUILD-PRIORITY-MATRIX")},
+    ".agent/templates/BUILD_PLAN-STUB.md": "core/templates/BUILD_PLAN-STUB.md",
 }
 
 

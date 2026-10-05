@@ -28,6 +28,7 @@
 | Subagents + nesting depth (A6) | | |
 | Standing policy against spawning? (A6b) | `yes` \| `no` | **default `yes`** — treat spawning as forbidden until confirmed |
 | `context_compaction` (A7) | | `none` ⇒ ~50% checkpoint becomes a hand-back |
+| `web_search_tool` | research MCP \| native \| `codex-search` \| `none` | surface for `human-decision-protocol.md` §3; `none` needs a reason (e.g. Block C forbids it) |
 | `plan_to_exec_gate` (A8) | `human` \| `reviewer-auto` | **default `human`** |
 | Builder/verifier classes (A9) | | only if A6 is yes; bind in the A10 registry |
 | Registry home + deferral (A10) | path \| `deferred` | default `<project>/.agent-registry/` via **session-scoped** `AGENT_MODEL_REGISTRY_HOME`; `deferred` forbids dispatch until compiled JSON exists |

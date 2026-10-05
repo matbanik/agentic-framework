@@ -53,7 +53,9 @@ core/.claude/agents/    → <project>/.claude/agents/     (Claude Code Agent/Tas
 ```
 
 Also copy `core/templates/BUILD_PLAN-STUB.md` → your Spec path (default `docs/BUILD_PLAN.md`)
-so `meu_status.py render` has AUTOGEN markers when D9 = yes.
+so `meu_status.py render` has AUTOGEN markers when D9 = yes. The stub is also the hub template:
+run `/build-plan-authoring bootstrap` to derive phases from your own architecture and write the
+hub, the phase specs (`PHASE-SPEC-TEMPLATE.md`), and the priority matrix.
 
 `core/MANIFEST.md` lists every file and its purpose, plus what was deliberately **excluded** as
 project-specific.
@@ -192,6 +194,9 @@ Open `.agent/docs/harness-profiles.md`.
    builder/verifier **classes** in the registry you instantiate in Step 4 (A9/A10),
    and fill `verification-log.md` after a live smoke (readonly verifier first; builder
    write-route before claiming write-capable delegation).
+7. Set `web_search_tool`: the web-research surface the human decision protocol uses
+   (Step 4c). Record the highest rung of that doc's ladder your driver can actually reach;
+   `none` is a valid value.
 
 > **The rule that makes this portable: branch on a capability flag, never on a harness name.**
 > If you catch yourself writing "if the harness is X", replace it with the flag X's row sets.
@@ -253,7 +258,8 @@ If D9 = yes (default for multi-session work):
    `.agent/skills/issue-triage/SKILL.md` per **D8**. The shipped prefix map stays until
    you customize it; do not silently remap origin defaults.
 4. Replace the starter phase in `meu-status.yaml` with your real phases (or leave it until the
-   first `/session-grouping` run registers MEUs).
+   first `/session-grouping` run registers MEUs). Your real phases come from the build plan:
+   see Step 9.
 5. Smoke: `python tools/issue_triage.py stats` and `python tools/meu_status.py stats`.
 6. Read `.agent/docs/triage-meu-loop.md` — that is the loop diagram for report → triage →
    group → plan → reflect → design rules / new issues.
@@ -263,12 +269,40 @@ keep `/create-plan` + reflections only.
 
 ---
 
+## Step 4c — Set up the human decision protocol
+
+`.agent/docs/human-decision-protocol.md` governs every point where a workflow would hand a
+question to the human: a precedent sweep of earlier project decisions, then web research, then
+an obviousness test. Obvious choices are made by the agent and logged; the rest reach the human
+as a Decision Brief that leads with a recommendation. It arrives with the Step 2 copy and the
+workflows already call it, so there is nothing to install. It never loosens a hard gate
+(Block E). Setting it up means four things:
+
+1. **Read it once**, human and agent both. The human should know what a Decision Brief looks
+   like (§5) and that autonomous decisions are listed for them at closeout (§6).
+2. **Give it a search surface.** The `web_search_tool` you recorded in Step 3 is resolved down
+   the ladder in §3: a research MCP → the harness's native web search → Codex `--search` →
+   `none`. No extra provider is required: native search is enough, and with `none` the protocol
+   still runs, stamping each brief `research: unavailable`. A search query leaves the machine,
+   so if your Block C answers forbid sending project detail to a search provider, record `none`
+   and give that as the reason.
+3. **Keep the Decision Log sections** when you adapt the plan, handoff, and reflection templates
+   in Step 5. The precedent sweep reads them in later sessions, and the closeout validator
+   rejects a handoff without `## Decision Log`. §6 lists where each stage records its decisions.
+4. **Know that a new project starts with no precedents.** An empty sweep is a normal result;
+   expect more briefs in the first sessions and fewer as the logs fill.
+
+---
+
 ## Provider substitution — Pomera MCP (manual adopter edit)
 
 > **Not provider-neutral.** The shipped `/inspiration-research` workflow and
 > `.agent/skills/deep-research-prompting/SKILL.md` **hard-gate on Pomera MCP** as the search
 > surface (Tavily + Exa via `pomera_system` diagnose + `pomera_web_search` live probe). There is
 > no silent fallback to native WebSearch unless a **human** explicitly waives the gate.
+
+This gate covers `/inspiration-research` only. The human decision protocol (Step 4c) is
+provider-neutral and falls back down its own ladder without any edit.
 
 If you do **not** use Pomera:
 
@@ -333,6 +367,7 @@ Do not declare adoption complete until all of these are true:
 - [ ] If subagents are enabled: agent-def filenames match `name:` frontmatter; verification-log has a real smoke receipt (not directory presence alone).
 - [ ] The reviewer chain is configured **or** external dispatch is disabled with a human reviewer named.
 - [ ] Every irreversible action (E1) has an explicit human gate.
+- [ ] `web_search_tool` is recorded (a ladder rung or `none` with a reason), and the plan, handoff, and reflection templates still carry their Decision Log sections.
 - [ ] Domain guardrails (E3/E5) are written as SIGNs.
 - [ ] The validation checks (D6) are real, runnable, and named in the quality gate.
 - [ ] If D9=yes: `issue_triage.py stats` and `meu_status.py stats` succeed; `VALID_COMPONENTS` matches D8.
@@ -363,6 +398,16 @@ Do not declare adoption complete until all of these are true:
   follow-on work with separate negative tests.
 
 ## Step 9 — First run
+
+**Before the first plan, write the Spec it will be planned against.** If your D3 source of truth
+is a build plan and none exists yet, run `/build-plan-authoring bootstrap`
+(`.agent/workflows/build-plan-authoring.md`). It derives the phases from your own architecture
+and dependency rule — the framework ships no phase list — and writes the hub, one spec per phase,
+and the priority matrix, handing open choices to the human as Decision Briefs.
+`.agent/docs/build-plan-patterns.md` holds illustrative decompositions; they are inspiration,
+not requirements. Check the result with `python tools/validate_build_plan.py`, have the human
+review it, then continue below. Skip this if D3 points at an existing external source
+(a statute, a protocol, a contract).
 
 1. (Optional but recommended) Capture a real defect with `issue_triage.py add`, then run
    `/issue-triage` → `/session-grouping` so the first plan is grounded in registered MEUs.

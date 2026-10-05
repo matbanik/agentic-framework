@@ -65,7 +65,7 @@ core/
                        closeout and Task-Table gates the templates call)
   .cursor/agents/      AUTOGEN templates: {{PROJECT_NAME}}-builder / -verifier
   .claude/agents/      AUTOGEN templates (same pair)
-  templates/           plan, task, handoff, review, reflection, BUILD_PLAN-STUB
+  templates/           plan, task, handoff, review, reflection, build-plan hub/phase-spec/matrix
 scripts/
   instantiate.py       fill {{PLACEHOLDER}} tokens with your project's values (adopters run this)
   sanitize.py          the authoring tool that produced the placeholders (audit/re-gen).

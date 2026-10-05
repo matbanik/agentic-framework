@@ -54,7 +54,7 @@ rtk rg -o "MEU-[0-9]+" .agent/context/meu-status.yaml --no-filename *> {{RECEIPT
 ```
 Take `max + 1`. Give each a kebab-case `slug`.
 
-**A3. Build-plan home (if needed).** If the findings are not already covered by a `docs/build-plan/NN-*.md` section, author or extend one (e.g. a `NNx-*.md` remediation/feature doc) with source-labeled acceptance criteria per MEU (`Spec` / `Local Canon` / `Research-backed` / `Human-approved`). This is the canonical home the MEUs reference.
+**A3. Build-plan home (if needed).** If the findings are not already covered by a `docs/build-plan/NN-*.md` section, author or extend one (e.g. a `NNx-*.md` remediation/feature doc) with source-labeled acceptance criteria per MEU (`Spec` / `Local Canon` / `Research-backed` / `Human-approved`). Use `/build-plan-authoring add-phase` (or `amend` to extend an existing spec) and `.agent/templates/PHASE-SPEC-TEMPLATE.md` for this. This is the canonical home the MEUs reference.
 
 **A4. Register.** Add a phase entry (if new) and one `meus:` entry per MEU to `.agent/context/meu-status.yaml` (follow the existing entry schema: `row_key, id, slug, phase, band, matrix_item, build_ref, description, status: pending, status_labels, dependencies_raw, …`). Then regenerate the registry:
 ```

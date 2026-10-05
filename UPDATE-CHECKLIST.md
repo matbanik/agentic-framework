@@ -129,6 +129,11 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 | _(package)_ | `core/.agent/context/{known-issues.md,known-issues-archive.md,meu-registry.md,grouping/README.md,triage-output.EXAMPLE.yaml}` |
 | _(package)_ | `core/.agent/docs/triage-meu-loop.md` |
 | _(package)_ | `core/templates/BUILD_PLAN-STUB.md` |
+| _(package)_ | `core/templates/PHASE-SPEC-TEMPLATE.md` |
+| _(package)_ | `core/templates/BUILD-PRIORITY-MATRIX-TEMPLATE.md` |
+| _(package)_ | `core/.agent/workflows/build-plan-authoring.md` |
+| _(package)_ | `core/.agent/docs/build-plan-patterns.md` |
+| _(package)_ | `core/tools/validate_build_plan.py` |
 
 Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 

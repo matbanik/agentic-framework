@@ -23,7 +23,7 @@ flowchart TD
     end
 
     subgraph PHASE_2["📋 Phase 2: Build Plan Authoring"]
-        B1["Build Plan Spec<br/>(docs/build-plan/)"]
+        B1["Phase Specs<br/>(/build-plan-authoring → docs/build-plan/)"]
         B2["Domain Model Reference<br/>(domain-model-reference.md)"]
         B3["Build Priority Matrix<br/>(build-priority-matrix.md)"]
         B4["BUILD_PLAN.md Hub<br/>(docs/BUILD_PLAN.md)"]
@@ -151,40 +151,48 @@ flowchart TD
 
 **Purpose:** Translate research and product requirements into structured, phase-ordered build specifications that agents can implement.
 
-**Human involvement:** 🔴 Heavy — human authors or deeply reviews all build plan documents. These are the product specification.
+**Human involvement:** 🔴 Heavy — human authors or deeply reviews all build plan documents. These are the product specification. An agent may draft them with `/build-plan-authoring`; the draft is not the Spec until the human accepts it.
 
 ### Process
 
-1. **Human writes or reviews build plan specs** in `docs/build-plan/` (one file per phase/feature area)
-2. **Agent may assist** with formatting, research, and consistency checks
-3. **Priority matrix** orders all work across phases
-4. **BUILD_PLAN.md** serves as the hub/index linking all plan files
+Run `/build-plan-authoring` ([workflow](../workflows/build-plan-authoring.md)). The agent drafts; the human reviews and owns the result.
+
+1. **Derive the phases from the project's own architecture** — name the building blocks, state the dependency rule, draw the graph, and cut foundation and slice phases from it. The framework ships no phase list.
+2. **Decide what must be decided** — every open choice runs through [`human-decision-protocol.md`](human-decision-protocol.md); obvious ones are logged, the rest reach the human as Decision Briefs.
+3. **Write the hub** (`BUILD_PLAN.md`) — purpose, architecture and dependency rule, phase table, golden rules, index. Status regions are rendered, never typed.
+4. **Write one spec per phase** in `docs/build-plan/` — goal, scope and out-of-scope, work breakdown with source-labeled acceptance criteria, exit criteria.
+5. **Order all work** in the priority matrix.
+6. **Validate** with `tools/validate_build_plan.py`, then the human reviews the draft.
+
+Later phases and corrections use the same workflow's `add-phase` and `amend` modes.
 
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| [`docs/build-plan/`](https://{{REPO_URL}}/blob/main/docs/build-plan) | 68 phase-specific plan files |
-| [`docs/build-plan/build-priority-matrix.md`](https://{{REPO_URL}}/blob/main/docs/build-plan/build-priority-matrix.md) | Global priority ordering |
-| [`docs/build-plan/domain-model-reference.md`](https://{{REPO_URL}}/blob/main/docs/build-plan/domain-model-reference.md) | Entity/value object reference |
+| [`.agent/workflows/build-plan-authoring.md`](../workflows/build-plan-authoring.md) | The authoring procedure and required-core sections |
+| [`.agent/docs/build-plan-patterns.md`](build-plan-patterns.md) | Illustrative decompositions and optional sections — inspiration, not requirements |
+| `.agent/templates/BUILD_PLAN-STUB.md`, `PHASE-SPEC-TEMPLATE.md`, `BUILD-PRIORITY-MATRIX-TEMPLATE.md` | Hub, phase spec, and matrix templates |
+| `tools/validate_build_plan.py` | Structural checks: links, markers, numbering, required sections |
 | [`docs/BUILD_PLAN.md`](https://{{REPO_URL}}/blob/main/docs/BUILD_PLAN.md) | Hub index linking all plans |
+| [`docs/build-plan/`](https://{{REPO_URL}}/blob/main/docs/build-plan) | One spec per phase, plus reference files |
+| [`docs/build-plan/build-priority-matrix.md`](https://{{REPO_URL}}/blob/main/docs/build-plan/build-priority-matrix.md) | Global priority ordering |
 
 ### Build Plan File Naming Convention
 
 ```
 docs/build-plan/
-├── 00-overview.md              # Project overview
-├── 01-domain-layer.md          # Phase 1 spec
-├── 01a-logging.md              # Phase 1A sub-spec
-├── 02-infrastructure.md        # Phase 2 spec
+├── 00-overview.md              # Cross-phase overview (recommended)
+├── NN-kebab-name.md            # Phase spec, numbered in dependency order
+├── NNx-kebab-name.md           # Sub-phase spec (letter suffix), links to NN-…
 │   ...
 ├── build-priority-matrix.md    # Cross-phase priority ordering
-└── domain-model-reference.md   # Entity definitions
+└── {topic}.md                  # Other reference files, only when a reader needs them
 ```
 
 ### 🔄 Adaptability Notes
 
-> Build plan structure is fully project-specific. For a non-application project (like workflow automation), you can create plan files in a different location (e.g., `docs/execution/plans/`) and skip the standard phase numbering. The key requirement is: **one canonical spec document per feature area with enough detail for an agent to implement without guessing.**
+> Build plan structure is fully project-specific. Phase names and counts come from your architecture: a layered application, a data pipeline, a library, and a documentation set all cut differently (see `build-plan-patterns.md`). For a non-application project you can keep plan files elsewhere (e.g., `docs/execution/plans/`) and pass the location to the validator with `--hub` / `--plan-dir`. The key requirement is: **one canonical spec document per feature area with enough detail for an agent to implement without guessing.**
 
 ---
 
@@ -537,6 +545,7 @@ flowchart LR
 | [create-plan.md](https://{{REPO_URL}}/blob/main/.agent/workflows/create-plan.md) | 4 | `/create-plan` |
 | [next-project.md](https://{{REPO_URL}}/blob/main/.agent/workflows/next-project.md) | 3-4 | `/next-project` |
 | [pre-build-research.md](https://{{REPO_URL}}/blob/main/.agent/workflows/pre-build-research.md) | 1 | `/pre-build-research` |
+| [build-plan-authoring.md](https://{{REPO_URL}}/blob/main/.agent/workflows/build-plan-authoring.md) | 2 | `/build-plan-authoring` |
 | [plan-critical-review.md](https://{{REPO_URL}}/blob/main/.agent/workflows/plan-critical-review.md) | 5 | `/plan-critical-review` |
 | [plan-corrections.md](https://{{REPO_URL}}/blob/main/.agent/workflows/plan-corrections.md) | 5 | `/plan-corrections` |
 | [tdd-implementation.md](https://{{REPO_URL}}/blob/main/.agent/workflows/tdd-implementation.md) | 6 | `/tdd-implementation` |
@@ -877,7 +886,7 @@ This is the formal, evidence-gated successor to the manual "elevate stable refle
 
 | Component | Why It's Universal | Adaptation Needed |
 |-----------|-------------------|-------------------|
-| Workflow files (19 workflows) | Process logic, not domain logic | Update file paths only |
+| Workflow files (20 workflows) | Process logic, not domain logic | Update file paths only |
 | Skill files (13 skills) | Tool orchestration patterns | Update tool paths |
 | TDD discipline | Language-agnostic principle | Works for any testable code |
 | Convergence caps (3 plan / 6 impl) | Empirical governance thresholds | May adjust after data collection |
@@ -895,7 +904,7 @@ To bootstrap this process for a new project, create these in order:
 1. **`AGENTS.md`** — Fork from {{PROJECT_NAME_TITLE}}, customize rules
 2. **`.agent/workflows/`** — Copy all 19 workflows, update paths
 3. **`.agent/skills/`** — Copy relevant skills (cli-dispatch, quality-gate, git-workflow, terminal-preflight, timestamp)
-4. **`docs/build-plan/`** — Write initial specs (even if lightweight)
+4. **`docs/build-plan/`** — Write initial specs with `/build-plan-authoring bootstrap` (even if lightweight)
 5. **`.agent/context/meu-registry.md`** — Create empty registry
 6. **`.agent/context/current-focus.md`** — Initial focus state
 7. **`docs/execution/plans/`** — Create with PLAN-TEMPLATE.md and TASK-TEMPLATE.md
