@@ -2,8 +2,8 @@
 
 > **Purpose.** The governance surface (`AGENTS.md`, `GUARDRAILS.md`, `create-plan.md`,
 > the skills) must behave correctly no matter which agentic harness is driving the
-> session — Claude Code today, possibly Cursor tomorrow, Antigravity as the current
-> host, Codex/Gemini as delegated CLIs. Historically the workflows hard-branched on
+> session — Claude Code as the driver, Antigravity or Cursor as a possible IDE host,
+> Codex and headless `claude -p` as delegated CLIs. Historically the workflows hard-branched on
 > the harness **name** ("if Antigravity … if Claude Code …"). That is brittle: every
 > new or renamed harness silently falls into an undefined bucket.
 >
@@ -54,10 +54,10 @@ across both layers — never pick one monolithic row.**
 
 | Flag | Values | What it drives |
 |---|---|---|
-| `role` | `primary-driver` \| `host` \| `reviewer` \| `surface-orchestrator` \| `isolated-worker` | Which slot this harness fills in the routed stack (see [model-routing.md](model-routing.md)) |
+| `role` | `primary-driver` \| `host` \| `reviewer` \| `isolated-worker` | Which slot this harness fills in the routed stack (see [model-routing.md](model-routing.md)) |
 | `plan_to_exec_gate` | `human` \| `reviewer-auto` | Who authorizes the plan→execution transition after `approved`. `human` = pause for an explicit user chat message; `reviewer-auto` = auto-continue. Drives `create-plan.md` §5c, `AGENTS.md` §Authority and Approval, `GUARDRAILS.md` SIGN 1 |
 | `injects_auto_approval` | `yes` \| `no` | Does the harness inject system/ephemeral messages that claim a plan was "approved" (e.g. an IDE review-policy auto-approval)? Drives `GUARDRAILS.md` SIGN 3 — when `yes`, be maximally strict about message provenance |
-| `can_dispatch_external_reviewer` | `yes` \| `no` | Can this harness shell out to a reviewer CLI (Codex/Gemini/headless-claude)? When `no`, follow the no-dispatch fallback in `cli-dispatch/SKILL.md` |
+| `can_dispatch_external_reviewer` | `yes` \| `no` | Can this harness shell out to a reviewer CLI (Codex/headless-claude)? When `no`, follow the no-dispatch fallback in `cli-dispatch/SKILL.md` |
 | `native_shell` | `powershell` \| `bash` \| `posix-sh` | Redirect-to-file form for the P0 terminal rule (`*>` for PowerShell; `> f 2>&1` for bash/posix). See `AGENTS.md` §Output and Evidence. On macOS/Linux also read [`.agent/docs/macos-setup.md`](macos-setup.md) for `pwsh`, Seatbelt, and receipts-dir `writable_roots`. |
 | `read_tool` | tool name | The file-read tool to substitute wherever a workflow says "read this file" (`Read`, `view_file`, etc.) |
 | `shell_tool` | tool name | The command-run tool (`Bash`, `run_command`, sandboxed `exec`, etc.) |
@@ -66,27 +66,27 @@ across both layers — never pick one monolithic row.**
 | `context_compaction` | mechanism \| `none` | How this harness compacts the **transcript** at a durable-state boundary. Drives the per-MEU compaction step (`create-plan.md` §6, `execution-session.md`) and compaction continuation rule (`AGENTS.md` §Execution Contract). `none` ⇒ the ~50% checkpoint reverts to a save-state hand-back. Full rules: [`context-compression.md`](context-compression.md) §Context Compaction |
 | `web_search_tool` | mechanism \| `none` | The web-research surface `human-decision-protocol.md` §3 and `create-plan.md` §2B use, resolved at session start down the ladder: a registered research MCP (e.g. Pomera `pomera_web_search`, `tavily`/`exa`, preferred) → harness-native search (`WebSearch` in Claude Code, `search_web` in Antigravity, the equivalent elsewhere) → Codex `--search` via `cli-dispatch` `-UseSearch` → `none`. `none` is a provenance stamp (`research: unavailable`), never a licence to present an unresearched question |
 | `fresh_worker` | mechanism \| `none` | Whether the active tool surface exposes an authorized fresh-context worker. `isolated` task metadata requires a concrete mechanism; `none`, missing authority, or uncertainty degrades to `compact_continue`. Metadata never grants delegation permission. |
+| `advisor` | `opus` \| `none` | The harness-native second-opinion surface the coordinator may consult before an irreversible or architecture decision (Claude Code: `/advisor`, the `advisorModel` setting). Advisory input to the coordinator only — never a review verdict, never human approval, never a substitute for the `independent_reviewer`. `none` ⇒ no advisor surface; escalate through the `peer_reviewer` class, or `architect` when the grouping row flags architecture risk. See [`model-delegation.md`](model-delegation.md) §How to delegate | <!-- model-slug-ok: `opus` is the value set of Claude Code's own advisor surface (`/advisor opus`, `advisorModel`), a harness enum, not a routing pin -->
 
 ---
 
 ## Harness profile table
 
-| Harness | `role` | `plan_to_exec_gate` | `injects_auto_approval` | `can_dispatch_external_reviewer` | `native_shell` | `read_tool` / `shell_tool` / `end_turn_signal` | `context_compaction` | `fresh_worker` | `default_classes` |
-|---|---|---|---|---|---|---|---|---|---|
-| **Claude Code** (current primary driver; plugin in Antigravity, CLI/IDE) | `primary-driver` | `human` | `no` | `yes` | `powershell` (Windows host) or `bash` (Bash tool) | `Read` / `Bash` (aka `run_command`) / stop-by-not-calling-tools | `/compact` (manual, at boundary) + microcompaction (automatic, `compact-2026-01-12` beta); auto-compact threshold in `settings.json` | `Agent/Task tool + .claude/agents/` (`model: sonnet\|opus\|haiku\|inherit`; `tools` allowlist; `skills:` preload) | `coordinator` (reasoning/plan/troubleshoot/deep-infra) + `builder` (build/bulk) | <!-- model-slug-ok: the alias list is Claude Code's own `.claude/agents/` frontmatter schema — the literal set of values that file format accepts, not a routing choice. Rewriting it to class names would misdocument the format. The registry records the same mapping as harness_ids.claude-code-agents. -->
-| **Cursor IDE** (current primary driver/host) | `primary-driver` | `human` | `yes` | `yes` | OS-dependent (Windows → `powershell`) | `Read` / `Shell` / stop-by-not-calling-tools | native summarizer | Assistant-addressable Cursor `Task` tool (`{{PROJECT_NAME}}-builder` / `{{PROJECT_NAME}}-verifier`) + `.cursor/agents/` — autonomous `fresh_worker` (also reads `.claude/agents/`; `.cursor/` wins conflicts). | `coordinator` + `builder` (delegated via the `Task` tool) |
-| **Antigravity IDE** — as **host** (current plugin container) | `host` | *(n/a as host — see note)* | `yes` *(Review-Policy auto-approval — the SIGN 3 incident)* | `yes` | `powershell` | `view_file` / `run_command` / `notify_user(BlockedOnUser:false)` | own summarizer | *(n/a as host — the driver layer supplies the worker)* | hosts Claude Code; contributes injection-risk + shell, not the gate |
-| **Antigravity IDE** — as legacy **driver** (its own bundled model, dormant) | `primary-driver` | `reviewer-auto` | `yes` | `yes` | `powershell` | `view_file` / `run_command` / `notify_user(BlockedOnUser:false)` | own summarizer | `none` | The only profile that realizes `reviewer-auto`. **Currently dormant** — Antigravity's own bundled driver model is retired; retained for reactivation and as the canonical `reviewer-auto` example |
-| **Codex CLI** (secondary reviewer / secondary executor) | `reviewer` | n/a *(does not drive planning)* | `no` | n/a *(it **is** the reviewer)* | `posix-sh` *(sandbox)* | `read` / sandboxed `exec` (read-only for review) / process-exit | own compaction (per-invocation; reviews are short-lived) | n/a *(reviewer, not an in-harness dispatcher)* | `independent_reviewer` (also `checklist_validator` for the cheap route, and `image_generator` / `translator_prose` where those apply) |
-| **Surface orchestrator harness** (`surface_orchestrator` only) | `surface-orchestrator` | `human` | `yes` if hosted in Antigravity, else `no` | `yes` | OS-dependent | harness-native / harness-native / harness-native | harness-native | `none` | `surface_orchestrator` — **surface work only**, never troubleshooting or deep-infra |
-| **headless `claude -p`** (isolated worker / reviewer fallback) | `isolated-worker` | `human` *(unless the invoking script supplies direction)* | `no` | `yes` *(each spawn is an isolated main agent with the full Task tool + a fresh nesting-depth budget)* | `bash` / `posix-sh` | `Read` / `Bash` / process-exit | auto-compact via SDK/config; each spawn starts with a fresh context anyway | `none` *(each spawn is itself the fresh worker)* | `coordinator` or `isolated_worker` (per task tier); `creative_prose` where voice matters |
-| **UNKNOWN** (no row matched — fail safe) | `primary-driver` | **`human`** | **`yes`** | `no` | `posix-sh` | assume generic; translate tool names conservatively | **`none`** *(⇒ ~50% checkpoint reverts to a save-state hand-back)* | **`none`** *(no authorized worker ⇒ every `isolated` row degrades to `compact_continue`)* | conservative |
+| Harness | `role` | `plan_to_exec_gate` | `injects_auto_approval` | `can_dispatch_external_reviewer` | `native_shell` | `read_tool` / `shell_tool` / `end_turn_signal` | `context_compaction` | `fresh_worker` | `advisor` | `default_classes` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **Claude Code** (current primary driver; plugin in Antigravity, CLI/IDE) | `primary-driver` | `human` | `no` | `yes` | `powershell` (Windows host) or `bash` (Bash tool) | `Read` / `Bash` (aka `run_command`) / stop-by-not-calling-tools | `/compact` (manual, at boundary) + microcompaction (automatic, `compact-2026-01-12` beta); auto-compact threshold in `settings.json` | `Agent/Task tool + .claude/agents/` (`model: sonnet\|opus\|haiku\|fable\|inherit`; `effort: low\|medium\|high\|xhigh\|max`; `tools` allowlist; `skills:` preload) | `opus` *(the harness-native advisor; see [`model-delegation.md`](model-delegation.md))* | `coordinator` (reasoning/plan/troubleshoot/deep-infra) + `builder` (build/bulk) | <!-- model-slug-ok: the alias list is Claude Code's own `.claude/agents/` frontmatter schema — the literal set of values that file format accepts, not a routing choice. Rewriting it to class names would misdocument the format. The registry records the same mapping as harness_ids.claude-code-agents. -->
+| **Cursor IDE** — as **host** (an IDE the repo may be opened in; drives nothing) | `host` | *(n/a as host — the driver layer sets the gate)* | `yes` | `yes` | OS-dependent (Windows → `powershell`) | `Read` / `Shell` / stop-by-not-calling-tools | native summarizer | `none` *(IDE host only — no agent definitions; the driver layer supplies any worker)* | `none` | hosts the driver; contributes shell + OS, not the gate, the role, or a worker |
+| **Antigravity IDE** — as **host** (current plugin container) | `host` | *(n/a as host — see note)* | `yes` *(Review-Policy auto-approval — the SIGN 3 incident)* | `yes` | `powershell` | `view_file` / `run_command` / `notify_user(BlockedOnUser:false)` | own summarizer | *(n/a as host — the driver layer supplies the worker)* | `none` | hosts Claude Code; contributes injection-risk + shell, not the gate |
+| **Antigravity IDE** — as legacy **driver** (its own bundled model, dormant) | `primary-driver` | `reviewer-auto` | `yes` | `yes` | `powershell` | `view_file` / `run_command` / `notify_user(BlockedOnUser:false)` | own summarizer | `none` | `none` | The only profile that realizes `reviewer-auto`. **Currently dormant** — Antigravity's own bundled driver model is retired; retained for reactivation and as the canonical `reviewer-auto` example |
+| **Codex CLI** (secondary reviewer / secondary executor) | `reviewer` | n/a *(does not drive planning)* | `no` | n/a *(it **is** the reviewer)* | `posix-sh` *(sandbox)* | `read` / sandboxed `exec` (read-only for review) / process-exit | own compaction (per-invocation; reviews are short-lived) | n/a *(reviewer, not an in-harness dispatcher)* | `none` | `independent_reviewer` (also `checklist_validator` for the cheap route, and `image_generator` / `translator_prose` where those apply) |
+| **headless `claude -p`** (isolated worker / reviewer fallback) | `isolated-worker` | `human` *(unless the invoking script supplies direction)* | `no` | `yes` *(each spawn is an isolated main agent with the full Task tool + a fresh nesting-depth budget)* | `bash` / `posix-sh` | `Read` / `Bash` / process-exit | auto-compact via SDK/config; each spawn starts with a fresh context anyway | `none` *(each spawn is itself the fresh worker)* | `none` | `coordinator` or `isolated_worker` (per task tier); `creative_prose` where voice matters |
+| **UNKNOWN** (no row matched — fail safe) | `primary-driver` | **`human`** | **`yes`** | `no` | `posix-sh` | assume generic; translate tool names conservatively | **`none`** *(⇒ ~50% checkpoint reverts to a save-state hand-back)* | **`none`** *(no authorized worker ⇒ every `isolated` row degrades to `compact_continue`)* | `none` | conservative |
 
 ### Resolving multi-valued and `n/a` cells
 
 - **`native_shell` must resolve to exactly one enum value** (`powershell` | `bash` | `posix-sh`)
   before you use it for the P0 redirect rule. Where the table shows two options (Claude Code
-  `powershell`/`bash`) or an OS-dependent value (Cursor, Gemini), resolve at session start to
+  `powershell`/`bash`) or an OS-dependent value (Cursor), resolve at session start to
   the single value your **active tool + OS** uses: PowerShell host → `powershell`; a POSIX
   shell / Git-Bash tool → `bash`; a Linux/macOS-native or sandboxed shell → `posix-sh`.
 - **`n/a` marks a flag inapplicable to that harness's role** (e.g. a pure `reviewer` does not
@@ -110,18 +110,14 @@ across both layers — never pick one monolithic row.**
   Because Claude Code now runs *inside* Antigravity as a plugin, confirm at session
   start whether you are reading Antigravity-injected messages (host) or driving as
   Claude Code (plugin). When in doubt, apply the stricter `yes`.
-- **`plan_to_exec_gate: human` for the primary driver** is intentional: Claude Code /
-  Cursor sessions are run more autonomously end-to-end, so the human's explicit
+- **`plan_to_exec_gate: human` for the primary driver** is intentional: Claude Code
+  sessions are run more autonomously end-to-end, so the human's explicit
   "proceed" after an `approved` plan is the last checkpoint before code changes. The
   gate is a **driver-layer** flag — a `host` never sets it (`n/a`). Only a `primary-driver`
   profile with `reviewer-auto` auto-continues, and the sole such profile is the **legacy
   Antigravity driver** (its own bundled model, currently dormant). The Antigravity *host* row does not
   and cannot auto-continue; when Claude Code drives inside the Antigravity host, the merge
   yields `human` (driver) — the host only contributes `injects_auto_approval: yes`.
-- **Gemini is capability-scoped, not just named.** It orchestrates only work the
-  routing doc classifies as surface-level (low reasoning/awareness). Any troubleshooting,
-  deep-infra, or correctness-critical work routes back to the primary driver even if
-  Gemini initiated the session.
 
 ---
 
@@ -154,7 +150,7 @@ do not block on the literal name.
 - [`../workflows/create-plan.md`](../workflows/create-plan.md) §5c — `plan_to_exec_gate`
 - [`human-decision-protocol.md`](human-decision-protocol.md) §3 and [`../workflows/create-plan.md`](../workflows/create-plan.md) §2B — `web_search_tool`
 - [`../skills/cli-dispatch/SKILL.md`](../skills/cli-dispatch/SKILL.md) — `can_dispatch_external_reviewer`, `role`
-- [`../skills/subagent-delegation/SKILL.md`](../skills/subagent-delegation/SKILL.md) — `fresh_worker` (resolves the Cursor `.cursor/agents/` and Claude Code `.claude/agents/` mechanisms into concrete in-harness dispatches)
+- [`../skills/subagent-delegation/SKILL.md`](../skills/subagent-delegation/SKILL.md) — `fresh_worker` (resolves the Claude Code `.claude/agents/` mechanism into concrete in-harness dispatches)
 - [`../skills/completion-preflight/SKILL.md`](../skills/completion-preflight/SKILL.md), [`../workflows/execution-session.md`](../workflows/execution-session.md), and the create-plan Completion Gate — `read_tool`, `end_turn_signal`
 
 See [model-routing.md](model-routing.md) for which **class** fills each `role`.

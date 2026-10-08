@@ -4,7 +4,10 @@ Use this when the originating project's governance or subagent flows change and 
 need `_transfer-out/agentic-framework/` to match again. The package is **not** critical
 runtime data — use selective contract merges for divergent files; recopy only files whose behavior still matches, then re-sanitize.
 
-Last refreshed: **2026-09-07** (package-root `.agent/` registry-home template, class-based
+Last refreshed: **2026-10-07** (Cursor worker templates and the Gemini review rung
+retired; `scout` and `peer_reviewer` classes and agent templates added, `effort:` pinned in
+every agent template; the single-shot architecture class renamed `architect`; the verifier owns a
+cheap contract). Previous: **2026-09-07** (package-root `.agent/` registry-home template, class-based
 routing, Codex dispatch resolves from the live registry, sanitize `--verify` slug gate;
 then the merge pass — bounded review ledger, v2 verdict schema, the two closeout gates,
 `refcheck.py`'s reference + tool-command gates, dispatch `-Kind` and the execution-review
@@ -21,7 +24,7 @@ Refresh if **any** of these land in the source repo:
 |---|---|
 | `fresh_worker` / harness-profile row changes | Adopters branch on capability flags |
 | `.agent/skills/subagent-delegation/**` changes | Delegation gate is the portable contract |
-| `.cursor/agents/*` or `.claude/agents/*` changes | Builder/verifier guardrails. Shipped files are AUTOGEN templates |
+| `.claude/agents/*` changes | Builder, verifier, scout and peer_reviewer guardrails. Shipped files are AUTOGEN templates |
 | `TASK-TEMPLATE.md` / reflection template gain columns or `delegate_to` rules | Plan/task shape drift |
 | `create-plan.md` / `execution-session.md` delegation steps change | Orchestrator behavior |
 | New portable skill/workflow added under `.agent/` that is **not** product-specific | Package completeness |
@@ -144,14 +147,15 @@ Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 
 | Source | Destination (temp name) | After sanitize |
 |---|---|---|
-| `.cursor/agents/<source-slug>-builder.md` | `core/.cursor/agents/<source-slug>-builder.md` | rename → `{{PROJECT_NAME}}-builder.md` |
-| `.cursor/agents/<source-slug>-verifier.md` | `core/.cursor/agents/<source-slug>-verifier.md` | rename → `{{PROJECT_NAME}}-verifier.md` |
 | `.claude/agents/<source-slug>-builder.md` | `core/.claude/agents/<source-slug>-builder.md` | rename → `{{PROJECT_NAME}}-builder.md` |
 | `.claude/agents/<source-slug>-verifier.md` | `core/.claude/agents/<source-slug>-verifier.md` | rename → `{{PROJECT_NAME}}-verifier.md` |
+| `.claude/agents/<source-slug>-scout.md` | `core/.claude/agents/<source-slug>-scout.md` | rename → `{{PROJECT_NAME}}-scout.md` |
+| `.claude/agents/<source-slug>-peer_reviewer.md` | `core/.claude/agents/<source-slug>-peer_reviewer.md` | rename → `{{PROJECT_NAME}}-peer_reviewer.md` |
 
-Keep / refresh `core/.cursor/agents/README.md` and `core/.claude/agents/README.md`.
+Keep / refresh `core/.claude/agents/README.md`. Set `model: inherit` and the package's
+stand-in comment in each shipped file; keep its `effort:` pin.
 
-The shipped `.cursor/agents` / `.claude/agents` files are **AUTOGEN templates**
+The shipped `.claude/agents` files are **AUTOGEN templates**
 generated from a registry, not hand-maintained pins. Refresh when guardrail prose
 changes. Do not recopy the package to move a `model:` value.
 
@@ -202,8 +206,9 @@ rtk proxy python scripts/sanitize.py --verify *> {{RECEIPTS_DIR}}/agentic-framew
 # capture $LASTEXITCODE before reading the receipt; must be 0
 
 # rename agent files (source-slug filenames → placeholder filenames)
-# <source-slug>-{builder,verifier}.md  →  {{PROJECT_NAME}}-{builder,verifier}.md
-# under both core/.cursor/agents/ and core/.claude/agents/
+# <source-slug>-{builder,verifier,scout,peer_reviewer}.md
+#   →  {{PROJECT_NAME}}-{builder,verifier,scout,peer_reviewer}.md
+# under core/.claude/agents/
 ```
 
 `--verify` runs five gates and reports all of them before exiting, so one round of
@@ -343,7 +348,7 @@ any more) plus one must-pass arm naming a tool that really is shipped.
 
 - [ ] `core/MANIFEST.md` — new/removed files, §5b AUTOGEN agent templates, package-root `.agent/`
 - [ ] `README.md` — tree diagram matches on-disk layout (includes package-root `.agent/`)
-- [ ] `ADOPTION-GUIDE.md` — copy paths for `.cursor/agents` / `.claude/agents`; `fresh_worker` steps; Step 4 points at `.agent/INSTANTIATE.md`
+- [ ] `ADOPTION-GUIDE.md` — copy paths for `.claude/agents`; `fresh_worker` steps; Step 4 points at `.agent/INSTANTIATE.md`
 - [ ] `ADOPTION-QUESTIONS.md` — A6/A9 (or current lettering) cover assistant-addressable workers; registry instantiation points at `INSTANTIATE.md`
 - [ ] `.agent/INSTANTIATE.md` — §6 bump sequence still matches the live registry's `README.md`; §2 copy table lists every template file; no snapshot ids
 - [ ] `.agent/model-registry.template.yaml` — new/changed class contracts merged; `catalog`, `bindings`, `pins` still empty; no `forbid` / `eval_gate` values
@@ -366,25 +371,23 @@ rtk proxy uv run python tools/_fw_hashdiff.py --ledger *> {{RECEIPTS_DIR}}/fw-le
 # capture $LASTEXITCODE before reading; paste or reconcile the table below
 ```
 
-**Current ledger (2026-08-05 refresh, post R1 corrections):**
+**Current ledger (2026-08-05 refresh, post R1 corrections; Cursor rows reconciled 2026-10-07):**
 
 | File | Class | Why the package differs |
 |---|---|---|
-| `AGENTS.md` | scrub | `plan_to_exec_gate == human` harness list drops the Cursor Agent CLI example; the carve-out rule itself is preserved verbatim. |
-| `.agent/docs/harness-profiles.md` | scrub | Cursor Agent CLI profile row removed ΓÇö the wrapper does not ship, so a resolvable row would point adopters at an absent tool. |
-| `.agent/docs/model-routing.md` | scrub | Isolated-worker rungs rewritten to `claude -p` only; the 'not an independent-reviewer substitute' rule is kept. **Superseded 2026-09-07:** the same-vendor review rung is now removed outright, not relabelled — see §Independent-reviewer chain. Do not restore it from this row. |
-| `.agent/docs/commands.md` | scrub | Drops the ┬ºCursor Agent CLI smoke and ┬ºSerena server lifecycle sections and rewrites the CLI Dispatch row; the row itself is kept because the skill ships. |
+| `.agent/docs/harness-profiles.md` | scrub | The source's `context_window` flag and column are not ported: its 1M-per-row protocol rests on the source's own measured window economics and a user-level toggle skill that does not ship. The `advisor` flag is ported. The Cursor host row keeps `injects_auto_approval: yes` (conservative). |
+| `.agent/docs/model-routing.md` | scrub | Isolated-worker rungs rewritten to `claude -p` only; the 'not an independent-reviewer substitute' rule is kept. **Superseded 2026-09-07:** the same-vendor review rung is now removed outright, not relabelled — see §Independent-reviewer chain. Do not restore it from this row. **Superseded again 2026-10-07:** the rung returns as the conditional `fallback_reviewer` (rate-limit receipt, fresh process, tier floor, flagged verdict); port it from `model-routing.md` in that form only. |
+| `.agent/docs/commands.md` | scrub | Drops the §Serena server lifecycle section and rewrites the CLI Dispatch row to point at the model-routing chain; the row itself is kept because the skill ships. |
 | `.agent/docs/context-tool-decision-gate.md` | scrub | `eligible_tools` and the token-savings prose drop Serena (excluded MCP). |
 | `.agent/docs/human-decision-protocol.md` | scrub | Precedent-sweep table names a generic ADR directory instead of the source's `docs/adrs/` + `docs/decisions/`, drops the Graphify/Serena sentence and the product-specific memory examples, and calls the search MCP "a registered research MCP (e.g. Pomera)"; the protocol, obviousness test, brief format and log schema are verbatim. |
 | `.agent/docs/testing-strategy.md` | authored | The source's `QA-PYRIGHT-SCOPE-GAP` warning is a live product known-issue investigation (names `tools/validate_codebase.py`, a source line number, this repo's `packages/` layout, and a domain type). Replaced by a portable TIP carrying the transferable lesson: make the gate and the pre-commit hook agree on which trees they type-check, and write the scope down. |
-| `.agent/workflows/README.md` | scrub | `/cli-dispatch` executor cell drops the Cursor Agent CLI route. |
 | `.agent/workflows/create-plan.md` | scrub | Context-tool inventory drops Serena (2 mentions). |
 | `.agent/workflows/execution-session.md` | scrub | Context-tool inventory drops Serena (1 mention). |
 | `.agent/workflows/execution-critical-review.md` | scrub | ┬ºElectron / GUI E2E evidence routing removed ΓÇö product-specific, and the e2e-testing skill is in MANIFEST ┬ºEXCLUDED. |
-| `.agent/workflows/cli-dispatch.md` | scrub | Cursor Agent CLI route removed; the decision-tree branch is re-pointed at 'your harness's headless builder CLI' and the review-stays-on-Codex rule kept. |
+| `.agent/workflows/cli-dispatch.md` | scrub | The isolated-worker decision-tree branch points at 'your harness's headless builder CLI' and the review-stays-on-Codex rule is kept. |
 | `.agent/skills/README.md` | authored | Package-authored 'Packaged Skills' table lists exactly what ships, replacing the repo's product-specific planned-skills table. |
-| `.agent/skills/cli-dispatch/SKILL.md` | scrub | Cursor Agent auth-gate paragraphs and route removed; Codex wrapper docs (timeout/process-tree defaults) taken from live source; package adds ┬ºCross-Platform Dispatch (pwsh / macos-setup link) with no live-source twin. |
-| `.agent/skills/cli-dispatch/tests/Test-CliDispatch.ps1` | scrub | Cursor Agent auth/ask tests removed; `[ValidateSet]` narrowed; package adds `wrapper-contract` suite that exercises Invoke-CodexDispatch.ps1 without false-pass length checks on bare `codex exec`, plus the review-loop and dispatch-kind arms (which open real ledger loops in a temp `RECEIPTS_DIR`). |
+| `.agent/skills/cli-dispatch/SKILL.md` | scrub | Codex wrapper docs (timeout/process-tree defaults) taken from live source; package adds ┬ºCross-Platform Dispatch (pwsh / macos-setup link) with no live-source twin. |
+| `.agent/skills/cli-dispatch/tests/Test-CliDispatch.ps1` | scrub | Package adds `wrapper-contract` suite that exercises Invoke-CodexDispatch.ps1 without false-pass length checks on bare `codex exec`, plus the review-loop and dispatch-kind arms (which open real ledger loops in a temp `RECEIPTS_DIR`). |
 | `tools/Invoke-CodexDispatch.ps1` / `.sh` | package-authored | `-Kind` / `--Kind` + the execution-review timeout floor are package additions with no live-source twin: the kind is read from the ledger's `mode=`, not from the flag, so the two wrappers and `review_ledger.py` move as one unit. Porting either wrapper alone will exit 3 (`ledger_mode_unavailable`) or silently drop the floor. |
 | `tools/preflight.sh` | package-authored | No live-source twin. The source repo carried these facts as always-loaded prose caveats; the package turns them into eight checks with a `--selftest`. Ship it with the ┬ºEnvironment Pre-Flight section of `terminal-preflight/SKILL.md` and step 9 of `macos-setup.md` ┬ºAdopter smoke checklist ΓÇö the file alone is a script nobody is told to run. |
 | `.agent/skills/terminal-preflight/SKILL.md` | authored | Package-only macOS/Linux note + link to `.agent/docs/macos-setup.md` after the `native_shell: powershell` paragraph ΓÇö no live-source twin (macos-setup is package-authored). Package also adds ┬ºEnvironment Pre-Flight (`tools/preflight.sh`, once per session ΓÇö explicitly *not* per command, which is what the rest of the skill governs). |

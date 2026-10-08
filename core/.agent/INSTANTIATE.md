@@ -155,13 +155,13 @@ it. `--check-compiled` fails if YAML and JSON drift.
 
 **Run `sync` before you enforce, and run it after you have copied `core/` into
 place — not against the staging tree.** The four AUTOGEN-marked agent
-definitions under `core/.cursor/agents/` and `core/.claude/agents/` ship stamped
+definitions under `core/.claude/agents/` ship stamped
 with the registry SHA of the machine that packaged them. Yours hashes
 differently the moment you fill in your own catalog and bindings, so those four
 files report `autogen_drift` until they are regenerated. That is an expected
 consequence of the stamp, not a fault in your registry.
 
-`sync` looks for `.cursor/agents/*.md` and `.claude/agents/*.md` **relative to
+`sync` looks for `.claude/agents/*.md` **relative to
 the root you give it**, so it only finds those files once they sit at your repo
 root with `{{PROJECT_NAME}}` substituted — the copy step in
 `ADOPTION-GUIDE.md`. In that layout `sync` rewrites all four and the drift count
@@ -337,7 +337,7 @@ both the human's; every other step below is delegable to an agent.
    roots you just synced. Sync first — an unsynced AUTOGEN file correctly reports
    `autogen_drift`. The count that must be zero is **Tier-1 failures**; Tier-2
    prose names warn and never change the exit code. `sync` discovers agent
-   definitions at `<root>/.cursor/agents/` and `<root>/.claude/agents/` only, so a
+   definitions at `<root>/.claude/agents/` only, so a
    repo that keeps them nested deeper is not a sync target and reports nothing
    written — while the checker still scans those depths. An AUTOGEN stamp records not
    the registry file's own hash but the SHA the compiled artifact *would* carry if

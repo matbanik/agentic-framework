@@ -45,7 +45,7 @@ context_tool_decision:
 > (`Resolve-AgentModel -Class builder -Harness <harness> -Project <project-root>`), because which snapshot
 > serves a class is the live registry's business (see `.agent/INSTANTIATE.md`)
 > and changes without touching this plan.
-> `architecture_single_shot` is reserved for its own shape and is never a builder.
+> `architect` is reserved for its own shape and is never a builder.
 
 | # | Task | Owner | Deliverable | Validation | Depends on | Context strategy | Durable outputs | builder_model | Status |
 |---|---|---|---|---|---|---|---|---|---|

@@ -12,7 +12,7 @@ After independent approval, follow `plan_to_exec_gate` in `.agent/docs/harness-p
 
 Planning may run a **plan-local read-only verifier** writing only under `{{RECEIPTS_DIR}}`, without repo mutation or product-suite execution. Prove its negative case. Remove unrunnable gate claims rather than refine untested prose; see `.agent/docs/verification-principles.md` V4.
 
-Honor review-ledger limits and human-continuation semantics. Do not evade caps or unavailability via a new ledger or same-vendor self-review rung.
+Honor review-ledger limits and human-continuation semantics. Do not evade caps or unavailability via a new ledger or a self-review by the authoring session; the same-vendor `fallback_reviewer` rung runs only on a rate-limit receipt (`model-routing.md`).
 
 Provenance: 2026-05-13 premature execution; 2026-06-13 review-first correction; 2026-07-13 capability split; 2026-09-07 runnable verifier. Procedure: `.agent/workflows/create-plan.md` Step 5.
 

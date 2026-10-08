@@ -60,7 +60,7 @@ The orchestrating agent will:
 3. Scope the next project from pending build-plan MEUs
 4. Resolve under-specified requirements via local canonical docs + targeted web research before finalizing the FIC
 5. Generate `implementation-plan.md` and `task.md` in the project folder
-6. Auto-dispatch `/plan-critical-review` via the independent-reviewer chain (cross-vendor primary → surface-only secondary → **human**; `.agent/docs/model-routing.md`)
+6. Auto-dispatch `/plan-critical-review` via the independent-reviewer chain (`independent_reviewer` → `fallback_reviewer` (headless `claude -p`, only on a rate-limit receipt, flagged same-vendor) → **human**; `.agent/docs/model-routing.md`)
 7. Loop corrections until APPROVED (or HARD STOP at the 3-round cap, presented as a Decision Brief — recommendation first — per `create-plan.md` §5 round-cap block and `.agent/docs/human-decision-protocol.md` §5)
 8. On `approved`: continue to Step 4 per your harness's `plan_to_exec_gate` flag (`.agent/docs/harness-profiles.md`) — `reviewer-auto` continues immediately; `plan_to_exec_gate: human` (the primary-driver default) ends the turn and waits for the user's explicit next chat message before Step 4 (`create-plan.md` §5c, `GUARDRAILS.md` SIGN 1)
 
@@ -90,8 +90,7 @@ the named durable output, compacts, then re-reads `task.md` followed by that out
 `fresh_worker` mechanism. Otherwise it degrades to `compact_continue`. Metadata is not
 permission to spawn. Do not reload completed independent rows wholesale after recovery.
 
-> **In-harness delegation.** When `fresh_worker` resolves (Cursor `.cursor/agents/` or Claude Code
-> `.claude/agents/`), route the `isolated`/mechanical/verification decision through
+> **In-harness delegation.** When `fresh_worker` resolves (Claude Code `.claude/agents/`), route the `isolated`/mechanical/verification decision through
 > [`.agent/skills/subagent-delegation/SKILL.md`](../skills/subagent-delegation/SKILL.md) — it owns
 > the detection, decision table (incl. the never-delegate categories), dispatch-prompt contract,
 > and result-acceptance rules for `{{PROJECT_NAME}}-builder`/`{{PROJECT_NAME}}-verifier`.

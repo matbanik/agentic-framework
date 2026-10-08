@@ -461,7 +461,7 @@ Workflows reference **roles** (orchestrator, coder, tester, reviewer), not speci
 | Role | Current Assignment | Could Be |
 |------|-------------------|----------|
 | Planner/Executor (primary driver) | the `coordinator` / `builder` classes per tier | Any model with extended thinking |
-| Validator/Reviewer (external reviewer) | `independent_reviewer` (primary, cross-vendor); `surface_orchestrator` (surface-only); then a **human** — no same-vendor rung | Any model with code execution, from a different vendor than the author |
+| Validator/Reviewer (external reviewer) | `independent_reviewer` (primary, cross-vendor); `fallback_reviewer` (headless `claude -p`, only on a rate-limit receipt, flagged same-vendor); then a **human** | Any model with code execution, from a different vendor than the author unless rung 1 is limited |
 | Researcher | Multiple (Gemini, ChatGPT, Claude) | Any model with web search |
 
 Reflection-based calibration captures what changes when models upgrade, feeding adjustments back into AGENTS.md.

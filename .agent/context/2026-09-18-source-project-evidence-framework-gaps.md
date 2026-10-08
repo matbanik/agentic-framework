@@ -108,7 +108,7 @@ Evidence paths without a prefix are relative to `P:/source-project`. Receipts un
 - **Framework change.** `subagent-delegation` should document resume-over-restart for rate-limited lanes. It should also require a lane to write its partial state (files written, receipt pending) before long steps.
 
 ### 3.4 `subagent-delegation/SKILL.md` alias list is stale  [low]
-- **What happened.** During SP-4 the skill's alias list was flagged as stale against the capability-class routing that framework commit `49ad5f0` introduced. Line 18 still lists `model: sonnet|opus|haiku|inherit|<id>` under a `model-slug-ok` exemption, while the body routes by class (`builder`, correctness class). This was not re-verified line by line for this note.
+- **What happened.** During SP-4 the skill's alias list was flagged as stale against the capability-class routing that framework commit `49ad5f0` introduced. Line 18 still lists `model: sonnet|opus|haiku|inherit|<id>` under a `model-slug-ok` exemption, while the body routes by class (`builder`, correctness class). This was not re-verified line by line for this note. <!-- model-slug-ok: quotes the stale alias list being reported -->
 - **Framework change.** Check the list against `.agent/docs/model-classes.md`. Point the frontmatter description at that doc, and let the slug checker own the alias list.
 
 ## 4. Adopter sync and tooling-test failures

@@ -47,7 +47,6 @@ core/CLAUDE.md          → <project>/CLAUDE.md      (or the equivalent bootstra
 core/.agent/            → <project>/.agent/          (includes empty context/ seeds)
 core/tools/             → <project>/tools/           (issue_triage + meu_status CLIs)
 core/templates/         → <project>/.agent/templates/   (TEMPLATE_HOME; or F1/F2 override)
-core/.cursor/agents/    → <project>/.cursor/agents/     (in-harness builder/verifier defs)
 core/.claude/agents/    → <project>/.claude/agents/     (Claude Code Agent/Task defs)
 .agent/INSTANTIATE.md   → <project>/.agent/INSTANTIATE.md  (how-to; docs link ../INSTANTIATE.md)
 ```
@@ -82,7 +81,6 @@ Copy-Item -LiteralPath (Join-Path $pkg 'core/CLAUDE.md')     -Destination (Join-
 Copy-Item -LiteralPath (Join-Path $pkg 'core/.agent')        -Destination (Join-Path $dest '.agent') -Recurse
 Copy-Item -LiteralPath (Join-Path $pkg 'core/tools')         -Destination (Join-Path $dest 'tools') -Recurse
 Copy-Item -LiteralPath (Join-Path $pkg 'core/templates')     -Destination (Join-Path $dest '.agent/templates') -Recurse
-Copy-Item -LiteralPath (Join-Path $pkg 'core/.cursor/agents') -Destination (Join-Path $dest '.cursor/agents') -Recurse
 Copy-Item -LiteralPath (Join-Path $pkg 'core/.claude/agents') -Destination (Join-Path $dest '.claude/agents') -Recurse
 Copy-Item -LiteralPath (Join-Path $pkg '.agent/INSTANTIATE.md') -Destination (Join-Path $dest '.agent/INSTANTIATE.md') -Force
 ```
@@ -137,11 +135,11 @@ syntax are the most common first-run failures.
 > pick a real local directory (`~/.cache/{{PROJECT_NAME}}/receipts/` or similar) and prune it
 > on purpose rather than relying on the OS to do it for you.
 
-> **Agent filenames carry `{{PROJECT_NAME}}`.** `instantiate.py` (Step 2b) renames
-> `{{PROJECT_NAME}}-builder.md` / `{{PROJECT_NAME}}-verifier.md` so the *filename stem*
-> matches the instantiated `name:` frontmatter (e.g. `acme-builder.md`). Cursor/Claude
-> register subtypes from those stems. If A6 = no subagents, delete both `agents/` trees
-> and the `subagent-delegation` skill instead.
+> **Agent filenames carry `{{PROJECT_NAME}}`.** `instantiate.py` (Step 2b) renames the four
+> `{{PROJECT_NAME}}-*.md` agent files (builder, verifier, scout, peer_reviewer) so the *filename
+> stem* matches the instantiated `name:` frontmatter (e.g. `acme-builder.md`). Claude Code
+> registers subtypes from those stems. If A6 = no subagents, delete `.claude/agents/` and the
+> `subagent-delegation` skill instead.
 
 ### Step 2b — Fill in the placeholders
 
@@ -187,11 +185,12 @@ Open `.agent/docs/harness-profiles.md`.
 3. Set `native_shell` (A4) — this selects the redirect-to-file form used everywhere.
 4. Set `context_compaction` (A7). If `none`, the ~50% checkpoint reverts to a save-and-hand-back.
 5. Set `fresh_worker` (A6). Only claim an autonomous worker when the **assistant** can address
-   it from its own tool surface (e.g. Cursor `Task` subtypes, Claude Code Agent/Task). Directory
-   presence of `.cursor/agents/` or `.claude/agents/` is **not** a detection signal — both may
-   exist while only one driver is active. If uncertain → `none`.
+   it from its own tool surface (e.g. Claude Code Agent/Task). Directory presence of
+   `.claude/agents/` is **not** a detection signal — the directory can exist while the active
+   driver cannot address it. If uncertain → `none`.
 6. If `fresh_worker` is set: load `.agent/skills/subagent-delegation/SKILL.md`, bind
-   builder/verifier **classes** in the registry you instantiate in Step 4 (A9/A10),
+   the builder, verifier, scout and peer_reviewer **classes** in the registry you instantiate
+   in Step 4 (A9/A10),
    and fill `verification-log.md` after a live smoke (readonly verifier first; builder
    write-route before claiming write-capable delegation).
 7. Set `web_search_tool`: the web-research surface the human decision protocol uses
@@ -351,8 +350,8 @@ ignored — bloat is itself a failure mode, and there is evidence that overlong 
   bulk output flood the context; write it to a file and read back only what you need.*
 - No version control? Delete the commit gate — but keep the human gate on whatever *your*
   irreversible action is (E1).
-- No subagents? Set `fresh_worker: none`, delete `core/.cursor/agents/`, `core/.claude/agents/`,
-  and `.agent/skills/subagent-delegation/`; strip `delegate_to` / `builder_model` guidance from
+- No subagents? Set `fresh_worker: none`, delete `core/.claude/agents/` and
+  `.agent/skills/subagent-delegation/`; strip `delegate_to` / `builder_model` guidance from
   templates. The framework works single-model — `isolated` rows degrade to `compact_continue`.
 
 ---

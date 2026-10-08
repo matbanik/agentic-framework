@@ -1,16 +1,16 @@
 ---
-description: Delegate /create-plan Steps 1-4 to Claude Code CLI (`coordinator` or `architecture_single_shot`) for plan generation, then run the Codex review/correction loop from the in-harness orchestrator (`coordinator` class). Use when the planning task benefits from `architecture_single_shot`'s deeper reasoning on the Claude CLI planner, or when the orchestrator wants to reserve context for execution.
+description: Delegate /create-plan Steps 1-4 to Claude Code CLI (`coordinator` or `architect`) for plan generation, then run the Codex review/correction loop from the in-harness orchestrator (`coordinator` class). Use when the planning task benefits from `architect`'s deeper reasoning on the Claude CLI planner, or when the orchestrator wants to reserve context for execution.
 ---
 
 # Delegated Plan Creation Workflow
 
-Delegate plan generation (Steps 1-4 of `/create-plan`) to Claude Code CLI using `coordinator` or `architecture_single_shot`, then handle the Codex plan-critical-review correction loop from the in-harness orchestrator (`coordinator` class). `architecture_single_shot` applies only to the *Claude CLI planner* spawn for complex plans — not as the orchestrator default. This separates expensive planning from mechanical review corrections. Class→snapshot bindings live in the live registry home you instantiate (see `.agent/INSTANTIATE.md`).
+Delegate plan generation (Steps 1-4 of `/create-plan`) to Claude Code CLI using `coordinator` or `architect`, then handle the Codex plan-critical-review correction loop from the in-harness orchestrator (`coordinator` class). `architect` applies only to the *Claude CLI planner* spawn for complex plans — not as the orchestrator default. This separates expensive planning from mechanical review corrections. Class→snapshot bindings live in the live registry home you instantiate (see `.agent/INSTANTIATE.md`).
 
 ## When to Use
 
-- The planning task is complex enough to benefit from `architecture_single_shot`'s deeper reasoning on the Claude CLI planner
+- The planning task is complex enough to benefit from `architect`'s deeper reasoning on the Claude CLI planner
 - The orchestrator wants to preserve context window for execution
-- The user explicitly requests delegated planning ("use architecture_single_shot to create the plan")
+- The user explicitly requests delegated planning ("use architect to create the plan")
 - Session grouping is already done — the MEU scope and project slug are known
 
 ## EGRESS_PRECEDENCE
@@ -26,7 +26,7 @@ External review dispatch is mandatory unless PROFILE C1/C2/C3b or E5 forbids sen
 ## Architecture
 
 ```
-Phase 1: Claude CLI (`architecture_single_shot` / `coordinator`) — Planning
+Phase 1: Claude CLI (`architect` / `coordinator`) — Planning
   └── Reads context files, build plan, templates
   └── Generates implementation-plan.md + task.md
   └── STOPS (does NOT dispatch Codex or start execution)
@@ -143,12 +143,12 @@ the Codex review loop separately.
 
 | Class | Resolve (`claude-p`) | Effort | Budget | Use When |
 |-------|----------|--------|--------|----------|
-| **`architecture_single_shot`** | `$(resolve architecture_single_shot -Harness claude-p -Project <project-root>)` (when bound) | `--effort high` | generous | Complex multi-MEU plans, architecture-heavy, spec gaps |
+| **`architect`** | `$(resolve architect -Harness claude-p -Project <project-root>)` (when bound) | `--effort high` | generous | Complex multi-MEU plans, architecture-heavy, spec gaps |
 | **`coordinator`** | `$(resolve coordinator -Harness claude-p -Project <project-root>)` | `--effort high` | moderate | Standard plans, single-MEU, well-specified |
 
 > Per-class price bands and empirical budget guidance live in the registry catalog (`price_band`, `price_note`) — do not restate dollar figures here.
 >
-> **`architecture_single_shot` at `--effort high` burns more subscription quota** than `coordinator` at the same effort. Use `--effort medium` for cost savings if the plan scope is well-defined.
+> **`architect` at `--effort high` burns more subscription quota** than `coordinator` at the same effort. Use `--effort medium` for cost savings if the plan scope is well-defined.
 
 ### Dispatch Command
 
@@ -163,11 +163,11 @@ Remove-Item -Force -ErrorAction SilentlyContinue {{RECEIPTS_DIR}}/dispatch/claud
 # dispatch rather than launch a planner with an empty `--model`.
 $ErrorActionPreference = 'Stop'
 Import-Module <registry-home>/tools/ModelRegistry.psm1 -Force
-$plannerClass = "coordinator"  # complex plans: architecture_single_shot when bound on this harness
+$plannerClass = "coordinator"  # complex plans: architect when bound on this harness
 $plannerSlug = resolve $plannerClass -Harness claude-p -Project <project-root>
 if (-not $plannerSlug) { throw "resolve returned no slug for $plannerClass" }
 
-# Dispatch (coordinator example — swap class when architecture_single_shot is bound)
+# Dispatch (coordinator example — swap class when architect is bound)
 Get-Content {{RECEIPTS_DIR}}/dispatch/prompt.txt | claude -p `
   --model $plannerSlug `
   --effort high `
@@ -181,7 +181,7 @@ Get-Content {{RECEIPTS_DIR}}/dispatch/prompt.txt | claude -p `
 **Parameters:**
 - `--permission-mode bypassPermissions` — planner needs full file access (reads ~10+ files, writes plan files, runs MEU status commands)
 - `--max-turns 80` — generous for Steps 1-4 (empirical: 26 turns for 2-MEU plan)
-- `--max-budget-usd` — hard cap; size per class band in registry catalog (`architecture_single_shot` needs a generous cap)
+- `--max-budget-usd` — hard cap; size per class band in registry catalog (`architect` needs a generous cap)
 - `-Project` — resolves against this project's accepted overlay, not global policy alone
 - Working directory: set via `Cwd` in `run_command` (Claude has no `-C` flag)
 
@@ -354,7 +354,7 @@ Present to the user:
 ```
 Plan approved by Codex `independent_reviewer` in {N} rounds.
 
-Planner: {architecture_single_shot | coordinator} @ {effort} — {turns} turns
+Planner: {architect | coordinator} @ {effort} — {turns} turns
 Review: {N} rounds (R1: {findings}, R2: {findings}, ...)
 
 Plan files:
@@ -379,7 +379,7 @@ the ratio is the durable part; the absolute numbers move with every price change
 
 | Configuration | Empirical Cost | Turns | Notes |
 |---------------|---------------|-------|-------|
-| `architecture_single_shot` @ high, 2 MEUs (D1+D7) | $26.67 | 26 | Hit $25 cap before R2 |
+| `architect` @ high, 2 MEUs (D1+D7) | $26.67 | 26 | Hit $25 cap before R2 |
 | Codex R1 @ high (first review) | ~$2-4 | — | Subscription |
 | Codex R2-R3 @ medium (follow-up) | ~$0.80-1.50 | — | Subscription |
 | **Total (planner + 3 Codex rounds)** | **~30 to 35 USD** | | |
@@ -390,7 +390,7 @@ the ratio is the durable part; the absolute numbers move with every price change
 
 | Aspect | Standard `/create-plan` | Delegated Plan Creation |
 |--------|------------------------|------------------------|
-| Planner | Current agent (`coordinator` class) | Claude CLI (`architecture_single_shot` / `coordinator`) |
+| Planner | Current agent (`coordinator` class) | Claude CLI (`architect` / `coordinator`) |
 | Review dispatch | Planner dispatches Codex | **Orchestrator** dispatches Codex |
 | Corrections | Planner applies + re-dispatches | **Orchestrator** applies + re-dispatches |
 | Context cost | Uses orchestrator context window | Preserves orchestrator context |
@@ -402,7 +402,7 @@ the ratio is the durable part; the absolute numbers move with every price change
 ## Hard Rules
 
 1. **The planner NEVER dispatches Codex.** This avoids 3-level subprocess chains and saves planner budget.
-2. **The orchestrator applies all corrections.** Corrections are mechanical (file edits) and don't need `architecture_single_shot`/`coordinator` reasoning.
+2. **The orchestrator applies all corrections.** Corrections are mechanical (file edits) and don't need `architect`/`coordinator` reasoning.
 3. **Codex R1 uses `high` effort; R2+ uses `medium`.** First review is substantive; follow-ups verify mechanical fixes.
 4. **Budget the planner generously** — size the cap from the class's catalog band. Under-budgeting causes the planner to stop mid-plan.
 5. **Always use stdin pipe** for the planning prompt (`Get-Content prompt.txt | claude -p ...`).

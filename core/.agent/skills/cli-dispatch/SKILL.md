@@ -1,6 +1,6 @@
 ---
 name: cli-dispatch
-description: Multi-CLI dispatch skill for Codex (Invoke-CodexDispatch.ps1), Claude CLI, and Antigravity CLI (agy.exe). Enforces the Codex PowerShell wrapper and the verified native-Windows agy -p stdout capture path.
+description: CLI dispatch skill for Codex (Invoke-CodexDispatch.ps1) and headless Claude (claude -p). Enforces the Codex PowerShell wrapper and the reviewer fallback chain.
 ---
 
 # CLI Dispatch Skill
@@ -13,7 +13,6 @@ Route specialized work to the right external CLI:
 |-------|--------|-------------|---------------|
 | **Codex** | `codex` via `tools/Invoke-CodexDispatch.ps1` | Validation / review / image gen | Wrapper only — never bare `codex exec` |
 | **Claude** | `claude` | Creative writing / critical decisions | Direct `claude -p` (see workflow) |
-| **agy** | `%LOCALAPPDATA%\agy\bin\agy.exe` | Data processing / Gemini Flash tasks | Direct `agy -p` with stdout capture |
 
 For Codex, the wrapper manages parameter validation, least-privilege sandboxing, artifact structure, token usage parsing, and exit code propagation.
 
@@ -26,11 +25,10 @@ For Codex, the wrapper manages parameter validation, least-privilege sandboxing,
 - **Claude CLI** reads the `ANTHROPIC_API_KEY` environment variable.
 - **Codex CLI** uses user login state. To verify active credentials, use `codex login status` or `codex doctor`.
 - For automated / non-interactive Codex dispatches, the `CODEX_API_KEY` environment variable can be set as a child process override.
-- **agy (Antigravity CLI)** uses interactive login once (`agy` TUI / auth flow). Headless `-p` then uses silent keyring auth. Verify with `agy --version` (require **≥ 1.1.1**; current verified: **1.1.5**).
 
 ### Detection
 
-Before dispatching, check active authentication status **and** Codex CLI version:
+Before dispatching, check Codex authentication status **and** CLI version:
 ```powershell
 # Verify Codex auth status
 codex login status
@@ -38,10 +36,6 @@ codex login status
 # Verify Codex CLI version (wrapper also enforces this fail-closed)
 codex --version
 # Required: ≥ 0.145.0 (Invoke-CodexDispatch.ps1 -MinCodexCliVersion default)
-
-# Verify agy binary + version (need ≥ 1.1.1 for Windows stdout + no stdin hang)
-& "$env:LOCALAPPDATA\agy\bin\agy.exe" --version
-
 ```
 
 **Codex version gate (mandatory):** `tools/Invoke-CodexDispatch.ps1` probes
@@ -50,7 +44,7 @@ semver is below `-MinCodexCliVersion` (default `0.145.0`) or is unparseable.
 Agents must not bypass with `-SkipCodexVersionCheck` except for fixture tests /
 explicit human-approved emergency. Upgrade path: `npm install -g @openai/codex`.
 
-Never manually parse, edit, or attempt to repair the `auth.json` file. All authentication status changes should be handled through `codex login` / `codex logout` or interactive `agy` auth.
+Never manually parse, edit, or attempt to repair the `auth.json` file. All authentication status changes should be handled through `codex login` / `codex logout`.
 
 ---
 
@@ -73,12 +67,6 @@ The `-Mode` parameter maps to the Codex sandbox levels:
 > apply. A reproduced sandbox-helper error may justify an authorized FullAccess exception,
 > with the wrapper's required justification. A receipt path alone never justifies it.
 
-### agy permissions (headless)
-
-- Prefer persisted allow rules in `~/.gemini/antigravity-cli/settings.json`.
-- Tools that still need interactive confirmation are **soft-denied** in `-p` mode (they do not hang on a prompt).
-- Use `--dangerously-skip-permissions` only in a controlled workspace when the task must exercise tools without soft-denies.
-
 ## Artifact Layout & Retention
 
 ### Codex (wrapper)
@@ -99,13 +87,6 @@ The wrapper writes all outputs to a unique run directory: `{{RECEIPTS_DIR}}/disp
 - `Keep`: Retains all raw logs and diagnostics.
 - `DeleteOnSuccess`: Deletes log and stderr files on successful execution, retaining only the status and final response.
 
-### agy (direct stdout)
-
-Write the redirected capture to a fixed receipt path (P0 redirect-to-file):
-
-- `{{RECEIPTS_DIR}}/dispatch/agy-output.txt` — captured stdout/stderr from `*>`
-- On hang/empty output: read `~/.gemini/antigravity-cli/log/cli-*.log` (latest) for MCP/auth stalls
-
 ---
 
 ## Stdin & Prompt Delivery
@@ -117,12 +98,6 @@ To prevent command-line length limits on Windows (8191 characters), prompts must
 2. `-PromptFile`: For large, generated prompts.
 
 The wrapper automatically feeds the prompt content to Codex's stdin via the `-` argument, avoiding command-line truncation.
-
-### agy (native Windows, ≥ 1.1.1)
-
-Pass the prompt as a **CLI argument** to `-p` / `--print`. Do **not** pipe stdin (`$null |` is obsolete for agy ≥ 1.1.1 — that hang was fixed).
-
-For long prompts that risk the Windows 8191 argv limit, write the prompt to a file and pass a short instruction that tells agy to read that file — still via `-p "<short prompt>"`, not via stdin.
 
 ### Invoking a CLI directly on macOS/Linux: close stdin
 
@@ -313,54 +288,6 @@ See [`.agent/docs/verification-principles.md`](../../docs/verification-principle
 (the count belongs on disk) and V43 (a loop bounded only by volume converges on its own
 instrumentation) for why the stops are shaped this way.
 
-### agy — Data Processing / Gemini Flash (stdout capture)
-
-**Prerequisite:** `agy --version` ≥ `1.1.1` (verified path: `1.1.5`). Binary: `$env:LOCALAPPDATA\agy\bin\agy.exe`.
-
-**Smoke test (expect exit 0 and stdout `PONG` in a few seconds):**
-
-```powershell
-New-Item -ItemType Directory -Force -Path {{RECEIPTS_DIR}}/dispatch | Out-Null
-$agyPath = "$env:LOCALAPPDATA\agy\bin\agy.exe"
-& $agyPath -p "Reply with exactly PONG" *> {{RECEIPTS_DIR}}/dispatch/agy-output.txt
-$code = $LASTEXITCODE
-Get-Content {{RECEIPTS_DIR}}/dispatch/agy-output.txt
-exit $code
-```
-
-**Task dispatch (capture model response from stdout):**
-
-```powershell
-New-Item -ItemType Directory -Force -Path {{RECEIPTS_DIR}}/dispatch | Out-Null
-$agyPath = "$env:LOCALAPPDATA\agy\bin\agy.exe"
-$out = "{{RECEIPTS_DIR}}/dispatch/agy-output.txt"
-Remove-Item $out -Force -ErrorAction SilentlyContinue
-
-# Flags BEFORE -p. Assign prompt to a variable so PowerShell does not eat flags as the prompt.
-# Optional: --dangerously-skip-permissions when tools must run headless in a trusted workspace
-# Optional: --print-timeout 5m0s for longer jobs; --model <slug> to pin model; --effort high
-$prompt = @"
-<TASK PROMPT>
-
-Return the complete answer as plain text or markdown on stdout.
-"@
-& $agyPath --dangerously-skip-permissions --print-timeout 5m0s --effort high --add-dir "{{PROJECT_ROOT}}" --mode accept-edits -p $prompt *> $out
-
-$code = $LASTEXITCODE
-Get-Content $out
-exit $code
-```
-
-**agy rules:**
-
-1. Capture via PowerShell `*>` to `{{RECEIPTS_DIR}}/dispatch/` (P0). Read the receipt after the process exits.
-2. **Flags before `-p`.** Put `--print-timeout`, `--dangerously-skip-permissions`, `--effort`, `--add-dir`, `--mode`, etc. **before** `-p`. Assign the prompt to a PowerShell variable (`-p $prompt`). If `-p` comes first, the next token (e.g. `--print-timeout`) can be treated as the prompt.
-3. For workspace file work, pass `--add-dir "{{PROJECT_ROOT}}"` (and `--mode accept-edits` when the task must write files).
-4. Do **not** use the obsolete side-channel “write everything to a file” prompt as the primary capture path — stdout works on Windows as of 1.1.0+.
-5. Do **not** prefix with `$null |` for agy ≥ 1.1.1.
-6. Never use agy for validation/review verdicts — that remains Codex.
-7. If `-p` hangs with empty stdout for >30s, check the latest `~/.gemini/antigravity-cli/log/cli-*.log` for `MCP: … still connecting`. Disable/remove stuck MCP servers (they block print mode even for trivial prompts), kill leftover `agy` processes, then retry.
-
 ---
 
 ## Reviewer Effort Policy (D4, 2026-06-13; effort bands re-measured 2026-07-11
@@ -386,29 +313,28 @@ When Codex CLI is rate-limited or unavailable:
 ### 1. Detection
 - **Claude CLI:** Output contains `session limit` or `resets` (Usually 15-60 min).
 - **Codex CLI:** Exit code 1 + `rate limit` or `429` in log (Usually 1-5 min).
-- **agy:** Non-zero exit + auth/API error in `agy-output.txt` or `~/.gemini/antigravity-cli/log/cli-*.log`. Empty output + MCP “still connecting” is not a rate limit — fix MCP first.
 
 ### 2. Provider Substitution Matrix
 | Primary | Task Type | Substitute | Quality Trade-off |
 |---------|-----------|------------|-------------------|
-| Codex `independent_reviewer` | Validation review (surface-level) | **agy / Gemini** (surface only) or Gemini web | **First fallback for surface work.** Cross-vendor; NOT for deep-infra/troubleshooting reviews. |
 | Codex `independent_reviewer` | Validation review (deep/infra) | **A different-vendor CLI you have configured** | Cross-vendor is the requirement. Run at high effort. |
 | Codex `independent_reviewer` | Validation review | Same model family via web (manual) | Same family; no file access, requires manual copy-paste of results. Still cross-*context*, so it beats self-review. |
-| Any | Validation review | ~~The coordinator's own vendor~~ | **PROHIBITED.** Not a rung. See §Same-vendor self-review below. |
+| Any | Validation review | Headless `claude -p` (`fallback_reviewer`) | Same-vendor when the author is too, and flagged so in the verdict. Only on a rate-limit receipt; see §Same-vendor fallback below. |
 
-#### Same-vendor self-review is PROHIBITED
+#### Same-vendor fallback
 
-The reviewer must not be the vendor that authored the work. There is no "last resort"
-rung where the coordinator reviews itself at higher effort — that is not a weaker review,
-it is a **different kind of thing** wearing a review's name, and it launders an
-unreviewed artifact into one marked `approved`. When every cross-vendor rung is
-unavailable, the escalation is the **human handoff path in §0**, which is a real terminal
-state. Effort flags do not buy independence.
+The `fallback_reviewer` rung is a fallback, never a choice. It runs only after rung 1 has
+produced a rate-limit or unavailability receipt; in a fresh headless process, never the
+authoring session or a subagent of it; at a reviewer tier at least the author's; and its
+verdict says it is same-vendor review. Effort flags do not buy independence — the fresh
+process and the tier floor are what separate it from self-review, which stays forbidden.
+When it is limited too, the escalation is the **human handoff path in §0**. Conditions:
+`model-routing.md` §Independent-reviewer chain.
 
 ### 3. Fallback Steps
 0. **If PROFILE forbids egress (C1/C2/C3b or E5):** stop for B4's named human reviewer. Do not write `<provider>-web-prompt.md` and do not request manual external submission. Skip the rest of this section.
-1. **Advance to the next eligible cross-vendor reviewer rung** (surface-only rungs stay surface-only).
-2. **If all cross-vendor rungs are exhausted:** Save the prompt to a file at `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`.
+1. **Advance to the next reviewer rung** (`model-routing.md` §Independent-reviewer chain), the flagged same-vendor rung included.
+2. **If every machine rung is exhausted:** Save the prompt to a file at `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`.
 3. **Present to user (HARD STOP):** Inform them all rungs are rate-limited, as a Decision Brief (`.agent/docs/human-decision-protocol.md` §5): recommendation first (manual web submission of the saved prompt, or a timed retry — whichever the evidence favours, with why), the other option compared against it, and the default if unanswered.
 4. **Collect results:** User pastes the web response into `{{RECEIPTS_DIR}}/dispatch/<provider>-web-response.md`.
 

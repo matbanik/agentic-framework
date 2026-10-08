@@ -58,7 +58,7 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `triage-meu-loop.md` — Compact portable contract for the report → triage → MEU register → session-group → plan → reflect learning loop.
 - `prompt-templates.md` — Copy-paste prompt templates for driving an agentic build session through an AI coding assistant.
 - `natural-writing-guide.md` — Project-wide mandatory style guide for AI-generated prose to avoid "corporate mid" writing patterns.
-- `claude-cli-fallback-lessons.md` — CLI-mechanics lessons from a historical same-vendor fallback. **The practice itself is now PROHIBITED** (see the file's banner and `model-routing.md` §Independent-reviewer chain); retained for the flag/exit-code details the wrapper encapsulates.
+- `claude-cli-fallback-lessons.md` — CLI-mechanics lessons from a historical same-vendor fallback. Prohibited 2026-09-07; back on 2026-10-07 only as the conditional `fallback_reviewer` rung (see the file's banner and `model-routing.md` §Independent-reviewer chain); retained for the flag/exit-code details the wrapper encapsulates.
 - `macos-setup.md` — macOS/Linux companion for P0 shell redirect, Codex CLI install, and cross-platform dispatch. Verified on arm64 macOS 26.6 (Tahoe 25G72); `Invoke-CodexDispatch.sh` is canonical there and unreproduced blockers are marked CONTINGENCY.
 - `context-tool-decision-gate.md` — Decision gate for when orchestrators may invoke context/MCP tools during planning and execution (eligible-tool inventory + token-savings rules).
 - `human-decision-protocol.md` — How any workflow stage hands a decision to the human: precedent sweep of prior project decisions → web research (`web_search_tool` ladder) → obviousness test (decide-and-log vs. human-gated) → Decision Brief with the recommendation first and alternatives compared against it → Decision Log / reflection Decisions Log recording.
@@ -116,23 +116,23 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `skill-optimizer/SKILL.md` — Toolkit/contract for evolving an instruction doc via bounded edits gated by a cross-vendor LLM-judge over held-out evidence.
 - `skill-optimizer/rubric-templates.md` — LLM-judge rubric consumed by the skill-optimizer validation gate; scores candidate-vs-baseline instructions pairwise per dimension.
 - `session-meta-review/SKILL.md` — Structured analysis toolkit (friction taxonomy, segment-detection patterns, research query bank) for reviewing session logs.
-- `subagent-delegation/SKILL.md` — In-harness subagent detection + delegation gate for Cursor (`.cursor/agents/`) and Claude Code (`.claude/agents/`). Resolves `fresh_worker` from the harness profile (never from directory presence), decides which `task.md` rows may be delegated, enforces never-delegate categories (correctness, review verdicts, commits, human gates), and feeds outcomes into the reflection loop.
+- `subagent-delegation/SKILL.md` — In-harness subagent detection + delegation gate for Claude Code (`.claude/agents/`). Resolves `fresh_worker` from the harness profile (never from directory presence), decides which `task.md` rows may be delegated, enforces never-delegate categories (correctness, review verdicts, commits, human gates), and feeds outcomes into the reflection loop.
 - `subagent-delegation/verification-log.md` — Portable stub for the resolved-driver smoke + builder write-route probe. Adopters replace the placeholders with real receipt paths after a live probe; a `[B]` is never a pass.
 - `issue-triage/SKILL.md` — Record/query/verify/bucket/triage known issues via `tools/issue_triage.py` and `.agent/context/known-issues.yaml`.
 - `meu-status/SKILL.md` — Query/update/render MEU completion status via `tools/meu_status.py` and `.agent/context/meu-status.yaml`.
 - `deep-research-prompting/SKILL.md` — Pomera MCP preflight gate, provider capability recon, and portal-ready deep-research prompt templates; driven by `/inspiration-research`. **Manual adopter edit required** if Pomera is not your search surface (see `ADOPTION-GUIDE.md` §Provider substitution).
 
-## 5b. `core/.cursor/agents/` and `core/.claude/agents/` (in-harness subagents)
+## 5b. `core/.claude/agents/` (in-harness subagents)
 
 > Filenames keep the `{{PROJECT_NAME}}` token until `instantiate.py` + a rename step (see
-> `ADOPTION-GUIDE.md` Step 2). Cursor and Claude Code register subtypes from the filename stem /
+> `ADOPTION-GUIDE.md` Step 2). Claude Code registers subtypes from the filename stem /
 > frontmatter `name:`.
 
-- `.cursor/agents/{{PROJECT_NAME}}-builder.md` — Mechanical-class executor for one `task.md` row. AUTOGEN template: `model:` is filled from the registry, not hand-maintained.
-- `.cursor/agents/{{PROJECT_NAME}}-verifier.md` — Readonly validator for one `task.md` row (`readonly: true`). AUTOGEN template, same as builder.
-- `.claude/agents/{{PROJECT_NAME}}-builder.md` — Same builder contract; AUTOGEN template for the Claude Code agents harness.
-- `.claude/agents/{{PROJECT_NAME}}-verifier.md` — Same verifier contract; Claude Code `tools` allowlist (no Write/Edit). AUTOGEN template.
-- `README.md` (each agents dir) — Rename-after-instantiate instructions.
+- `.claude/agents/{{PROJECT_NAME}}-builder.md` — Mechanical-class executor for one `task.md` row (`effort: medium`). AUTOGEN template: `model:` is filled from the registry, not hand-maintained.
+- `.claude/agents/{{PROJECT_NAME}}-verifier.md` — Readonly validator for one `task.md` row (`effort: low`); `tools` allowlist with no Write/Edit. AUTOGEN template.
+- `.claude/agents/{{PROJECT_NAME}}-scout.md` — Read-only fan-out search that returns paths and excerpts (`effort: low`); never edits, judges correctness, or decides a gate. AUTOGEN template.
+- `.claude/agents/{{PROJECT_NAME}}-peer_reviewer.md` — Advisory adversarial read of one diff or plan (`effort: high`); never writes a verdict file and never substitutes for `independent_reviewer`. AUTOGEN template.
+- `README.md` — Rename-after-instantiate instructions.
 
 ## 5c. `core/.agent/context/` — empty seeds (not live product data)
 
@@ -275,7 +275,6 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 **Subagent tooling (source-repo only — do not port as-is):**
 - `scripts/verify_subagent_delegation.py` + `tests/tooling/test_verify_subagent_delegation.py` — structural gates used to activate delegation in the originating repo. Portable adopters use the skill + a live smoke receipt instead; re-port only if you want the same machine-check suite.
 - Source `verification-log.md` probe receipts — replaced in this package by the portable stub.
-- `tools/Invoke-CursorAgentDispatch.ps1` — Cursor Agent CLI orchestrated-dispatch wrapper used in the originating repo. **Deliberately not shipped.** Packaged `cli-dispatch` skill/workflow already scrub Cursor Agent dispatch; independent review stays on the Codex chain. Re-port only if the adopter runs Cursor Agent CLI as an isolated worker and accepts maintaining a second wrapper.
 
 **Planned / source-repo-only automation named by packaged docs (referenced, not shipped):**
 - `.agent/skills/session-digest`, `.agent/skills/execution-tldr`, `.agent/skills/advisor-consult` — the session-digest / TL;DR / advisor-consult automation named in `development-lifecycle.md` §Phase 9 and §Governance Files. **Planned** in the originating repo, not built; the lifecycle doc's own NOTE says so. Adopters run those steps manually until they build them.

@@ -1,8 +1,8 @@
 # Model Delegation Policy — Builder vs Coordinator (Harness-Conditional)
 
-> **Canonical routing matrix:** [`.agent/docs/model-routing.md`](model-routing.md) is the source of truth for the full routed stack (3 model tiers — Coordinator / Builder / Router — plus an external reviewer and two execution modes) and the independent-reviewer chain. **This file is the detailed work-class taxonomy *within* the Coordinator and Builder tiers** — which specific tasks are "mechanical" (delegate) vs "correctness" (keep).
+> **Canonical routing matrix:** [`.agent/docs/model-routing.md`](model-routing.md) is the source of truth for the full routed stack (3 model tiers — Coordinator / Builder / Router — plus an external reviewer and an isolated-worker execution mode) and the independent-reviewer chain. **This file is the detailed work-class taxonomy *within* the Coordinator and Builder tiers** — which specific tasks are "mechanical" (delegate) vs "correctness" (keep).
 >
-> **Harness-conditional class resolution (Q1–Q2, 2026-07-22):** the `coordinator` and `builder` classes resolve per harness — Cursor vs Claude Code bindings differ. Which snapshot each class binds to lives in the live registry home you instantiate (see [`.agent/INSTANTIATE.md`](../INSTANTIATE.md)) and must be resolved, not restated here.
+> **Harness-conditional class resolution (Q1–Q2, 2026-07-22):** the `coordinator` and `builder` classes resolve per harness, and the bindings differ between harnesses. Which snapshot each class binds to lives in the live registry home you instantiate (see [`.agent/INSTANTIATE.md`](../INSTANTIATE.md)) and must be resolved, not restated here.
 >
 > **Source:** `Local Canon + Human-approved` (2026-06-13 `instruction-set-optimization`, decision D5; Q1–Q8 2026-07-22). Evidence: `docs/execution/plans/2026-06-13-instruction-set-optimization/audit-findings.md` §6. Effort guidance: `.agent/skills/cli-dispatch/SKILL.md` §Reviewer Effort Policy.
 
@@ -35,14 +35,21 @@ The `coordinator` class holds planning, correctness-critical reasoning, and orch
 
 - **In-harness route (only where an *assistant-addressable* `fresh_worker` resolves):** dispatch
   the mechanical class to the `{{PROJECT_NAME}}-builder` subagent and verbose validation to the
-  `{{PROJECT_NAME}}-verifier` subagent via the resolved harness's Agent/`Task` tool — e.g. Claude Code's
-  Agent tool + `.claude/agents/` (`model: sonnet`), <!-- model-slug-ok: harness agent-def frontmatter schema uses vendor shorthand, not capability classes --> or Cursor's assistant-addressable `Task` tool
-  (`{{PROJECT_NAME}}-builder` / `{{PROJECT_NAME}}-verifier`) + `.cursor/agents/` (builder class binding via registry autogen).
-  The detection, decision table, dispatch-prompt contract, and result-acceptance rules live in
+  `{{PROJECT_NAME}}-verifier` subagent via Claude Code's Agent tool + `.claude/agents/` (`model:` lines
+  generated from the registry's `builder` / `verifier` bindings). The detection, decision table, dispatch-prompt contract, and result-acceptance rules live in
   [`../skills/subagent-delegation/SKILL.md`](../skills/subagent-delegation/SKILL.md). Resolve
   `fresh_worker` from the harness profile, never from directory presence.
-- A `mechanical-edit` subagent with the `builder` class + low/medium effort in its frontmatter.
-- `CLAUDE_CODE_EFFORT_LEVEL` per role (low for mechanical-edit subagents; high/xhigh for the reviewer/planner).
+- **Agent files pin `model:` and `effort:`.** `{{PROJECT_NAME}}-builder` (`builder` class, `medium`) takes the
+  mechanical class; `{{PROJECT_NAME}}-verifier` (`verifier`, `low`) runs validation read-only;
+  `{{PROJECT_NAME}}-scout` (`scout`, `low`) takes read-only search fan-out and returns paths + excerpts;
+  `{{PROJECT_NAME}}-peer_reviewer` (`peer_reviewer`, `high`) gives an advisory adversarial read of a
+  correctness-critical diff or plan — findings only, never a verdict file, never `approved`.
+  `model:` is generated from the registry (`resolve_model.py sync`; see `.agent/INSTANTIATE.md`);
+  `effort:` is pinned by hand — keep it equal to the class's `effort_default`, and add a test that
+  fails when a pin drifts.
+- Do not set `CLAUDE_CODE_EFFORT_LEVEL`: it overrides every agent file's `effort:` pin (Claude Code
+  docs, sub-agents frontmatter). Set the coordinator's own effort for the session with `/effort`.
+- **Advisor.** Where the resolved harness's `advisor` flag ([`harness-profiles.md`](harness-profiles.md)) is `opus`, the coordinator may consult the harness-native advisor (`/advisor opus`, the `advisorModel` setting) before an irreversible or architecture decision. Its answer is advisory input to the coordinator — never a review verdict, never human approval, never a substitute for the `independent_reviewer`. Where the flag is `none`, escalate through `{{PROJECT_NAME}}-peer_reviewer`, or the `architect` class when the grouping row flags architecture risk. <!-- model-slug-ok: `opus` is the value set of Claude Code's own advisor surface (`/advisor opus`, `advisorModel`), a harness enum, not a routing pin -->
 - Keep the harness-resolved `coordinator` as the main-loop orchestrator; reserve frontier effort on the `independent_reviewer` chain for the correctness class.
 - **Never delegate** the correctness class, review verdict authorship, commit/push, or any
   human-approval gate — those stay inline on the `coordinator` or on the external reviewer chain.

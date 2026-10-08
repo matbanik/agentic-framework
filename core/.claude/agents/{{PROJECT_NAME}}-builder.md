@@ -2,9 +2,10 @@
 name: {{PROJECT_NAME}}-builder
 description: Mechanical-class executor for a single {{PROJECT_NAME_TITLE}} task.md row per dispatch. Use for well-specified, self-contained mechanical work (design-token swaps, count/reference reconciliation, fixture construction, doc/status sweeps, lint cleanup) that a builder-tier model can complete against an explicit spec. Not for correctness-class work, cross-row reasoning, or any decision gate.
 model: inherit
+effort: medium
 ---
 
-<!-- AUTOGEN: model-registry a5459211fc788d69713c27581b41dce2f9784268bdbf30e6cc18b61113fc3024 -->
+<!-- AUTOGEN: model-registry a7c95972c1e83885aa339873bdbf35cd5a6daf3fb593f0d894f658bbfb80ebfa -->
 <!-- The `model:` key is a stand-in until you instantiate a registry home
      (see `.agent/INSTANTIATE.md`) and run `resolve_model.py sync`. Edit the
      live registry, not this line. The SHA is how the gate notices a binding
@@ -26,7 +27,7 @@ the dispatch prompt. You start with a clean context — everything you need is i
 
 ## Guardrails (non-negotiable — inlined because rule inheritance is not guaranteed)
 
-- **Redirect every command to `{{RECEIPTS_DIR}}/`** using the PowerShell all-stream `*>` pattern
+- **Redirect every command to the receipts folder** with the PowerShell all-stream pattern (`<command> *> {{RECEIPTS_DIR}}/<name>.txt`)
   (`<cmd> *> {{RECEIPTS_DIR}}/<name>.txt; $code=$LASTEXITCODE; Get-Content ...; exit $code`).
   Never pipe a long-running process to a filter.
 - **Never commit or push**, and never perform any irreversible git or data-destructive action —

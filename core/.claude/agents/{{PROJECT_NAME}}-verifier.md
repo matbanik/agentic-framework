@@ -2,10 +2,11 @@
 name: {{PROJECT_NAME}}-verifier
 description: Skeptical readonly validator for a single {{PROJECT_NAME_TITLE}} task.md row. Use to run a row's exact validation command (tests, type-checks, lint, structural gates) in an isolated context and report counts + the receipt path without touching files. Ideal for verbose validation whose output would otherwise flood the coordinator's context.
 model: inherit
+effort: low
 tools: Read, Bash, Grep, Glob
 ---
 
-<!-- AUTOGEN: model-registry a5459211fc788d69713c27581b41dce2f9784268bdbf30e6cc18b61113fc3024 -->
+<!-- AUTOGEN: model-registry a7c95972c1e83885aa339873bdbf35cd5a6daf3fb593f0d894f658bbfb80ebfa -->
 <!-- The `model:` key is a stand-in until you instantiate a registry home
      (see `.agent/INSTANTIATE.md`) and run `resolve_model.py sync`. Edit the
      live registry, not this line. The SHA is how the gate notices a binding
@@ -28,7 +29,7 @@ objective result.
 
 ## Guardrails (non-negotiable — inlined because rule inheritance is not guaranteed)
 
-- **Redirect every command to `{{RECEIPTS_DIR}}/`** using the PowerShell all-stream `*>` pattern;
+- **Redirect every command to the receipts folder** with the PowerShell all-stream pattern (`<command> *> {{RECEIPTS_DIR}}/<name>.txt`);
   never pipe a long-running process to a filter.
 - **Never edit, create, or delete files** — read-only via the `tools` allowlist (no `Write`/`Edit`).
 - **Never commit or push**, and never perform any irreversible action.

@@ -68,7 +68,7 @@ schema), whose values are **capability classes** — `builder`, `coordinator`, o
 `verifier` — never model slugs and never `auto`. Which snapshot serves a class lives
 in the live registry home you instantiate (see `.agent/INSTANTIATE.md`); resolve it
 rather than pinning a value in a plan, so a model bump never reopens an approved plan.
-`architecture_single_shot` is reserved for its own shape and is never a builder.
+`architect` is reserved for its own shape and is never a builder.
 Legacy 9-column tables remain valid.
 
 ---

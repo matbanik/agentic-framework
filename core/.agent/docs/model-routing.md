@@ -25,7 +25,7 @@
 > ```
 >
 > ```bash
-> python <registry-home>/tools/resolve_model.py resolve builder --harness cursor-task --project <project-root>
+> python <registry-home>/tools/resolve_model.py resolve builder --harness claude-code-agents --project <project-root>
 > ```
 >
 > `-Project` / `--project` names the repo whose overlay governs the answer; without it
@@ -43,35 +43,35 @@
 
 ---
 
-## The routed stack (3 model tiers + external reviewer + 2 execution modes)
+## The routed stack (3 model tiers + external reviewer + isolated-worker mode)
 
 Field consensus and this project's toolchain converge on a routed stack — *route the
 work to the cheapest tier that can do it well.* Uniform top-tier usage wastes 50–80%;
 builder-class models handle 80–90% of coding at near-top quality. The stack is: **three
 in-family model tiers** (`coordinator` / `builder` / `router`), **one external reviewer**
-(a different vendor), and **two execution modes** (surface-orchestration, isolated-worker)
-that describe *how* work runs rather than a distinct model tier.
+(a different vendor), and **one execution mode** (isolated-worker) that describes *how*
+work runs rather than a distinct model tier.
 
 **`role` (from [harness-profiles.md](harness-profiles.md)) → class mapping:**
 `primary-driver` → `coordinator` + `builder` (delegated); `reviewer` →
-`independent_reviewer`; `surface-orchestrator` → `surface_orchestrator`;
-`isolated-worker` → `isolated_worker`; `host` → no class (contributes
+`independent_reviewer`; `isolated-worker` → `isolated_worker`; `host` → no class (contributes
 gate/injection constraints only). The `router` class is a delegation target the
 coordinator spawns, not a harness role.
 
-Each class resolves per harness, which is how one name covers both a Cursor session
-and a Claude Code session without either being written down here.
+Each class resolves per harness, which is how one name covers both a Claude Code
+session and a Codex CLI dispatch without either snapshot being written down here.
 
 | Tier | Task class | Class | Why |
 |---|---|---|---|
 | **Coordinator** | Orchestration, planning, architecture, synthesis, governance-doc edits, correctness-critical reasoning, troubleshooting, deep-infra | `coordinator` | Holds the dependency graph; makes the judgment calls |
 | **Builder** | Bulk implementation, mechanical edits, test scaffolding, file/log audits, doc sweeps, CI-log reading | `builder` (and `verifier`, which extends it for read-only validation) | Near-coordinator quality on the majority of coding, at a lower band |
 | **Router** | High-volume classification, triage, grep-collation, inventory, routing decisions | `router` | Cheapest/fastest — *not* for real logic or multi-file reasoning |
+| **Scout** | Read-only search fan-out: where something lives, which files follow a convention, which call sites use a symbol; returns paths + excerpts | `scout` (extends `router`) | Keeps file dumps out of the coordinator's context at the cheapest tier; never judges correctness, never decides a gate |
+| **Peer reviewer** (advisory) | A same-vendor adversarial second read of a correctness-critical diff or plan, before the independent review | `peer_reviewer` | Catches defects before a paid review round. Advisory input only: never writes a verdict file, never authors `approved` — the verdict stays with `independent_reviewer` |
 | **Reviewer** (independent) | Adversarial plan & code review | `independent_reviewer` — see the review chain below | Cross-vendor diversity catches failure modes the author's model shares; also offloads tokens off the primary budget |
 | **Cheap validator** | Checklist-shaped validation with no risk path | `checklist_validator` | A distinct, deliberately cheap route; not a discount reviewer (see Decision Table row 5) |
-| **Surface orchestrator** | Low-reasoning, low-awareness surface work (simple edits, boilerplate coordination) | `surface_orchestrator` | Cheap orchestration for work that needs no deep reasoning; **never** troubleshooting or deep-infra |
-| **Isolated worker** | Large parallel/independent workstreams, overnight bursts, isolated-context tasks | `isolated_worker`, one per git worktree | Each spawn is an isolated main agent with fresh context; worktrees prevent file conflicts. Prefer in-harness Cursor `Task` when available. Do **not** default to an unshipped Cursor Agent CLI wrapper. **Not** an independent-reviewer substitute. |
-| **Single-shot architecture** | Very large one-shot architecture reasoning | `architecture_single_shot` | Reserved for that shape only — never a coordinator default and never a `builder_model` pin |
+| **Isolated worker** | Large parallel/independent workstreams, overnight bursts, isolated-context tasks | `isolated_worker`, one per git worktree | Each spawn is an isolated main agent with fresh context; worktrees prevent file conflicts. Prefer the in-harness Agent tool (`.claude/agents/`) when available; use headless `claude -p` when it is unavailable / CI / overnight. **Not** an independent-reviewer substitute. |
+| **Architect** (advisory) | Very large one-shot architecture reasoning | `architect` | Reserved for that shape only, and invoked only on explicit human direction or an accepted grouping row flagged `architecture-risk: yes` — never a coordinator default, never a builder, never a `builder_model` pin, never a verdict |
 | **Creative prose** | Prose whose voice matters, and the second reader on it | `creative_prose` | Pinned by *difference*, not recency: see the class's registry note |
 
 Every snapshot the classes above resolve to is recorded once, in the adopter's
@@ -87,7 +87,8 @@ author this code + a different vendor than the author**. Vendor distinctness is 
 **requirement, not a preference**: the `independent_reviewer` class declares
 `vendor_distinct_from: author`, so the dispatch wrapper requires the authoring agent's
 vendor (`-AuthorVendor` / `--author-vendor`) and refuses to guess it — assuming it would
-either fake diversity or reject a valid reviewer.
+either fake diversity or reject a valid reviewer. Rung 2 below is the single exception,
+it is flagged in the verdict, and it is reachable only when rung 1 is not.
 
 The chain, in order:
 
@@ -96,20 +97,34 @@ The chain, in order:
    the tree). Effort: the class's `effort_default` for routine work, one tier up for
    risk-paths and contract surfaces, never above the snapshot's declared
    `effort_ceiling_effective`.
-2. **`surface_orchestrator`** — secondary reviewer, **surface-level work only** (per
-   that class's declared caveats). Do **not** route troubleshooting or deep-infra
-   review to it.
-3. **A human.** There is no third machine rung. When rungs 1–2 are unavailable or
-   rate-limited, escalate to the human-handoff path in `cli-dispatch/SKILL.md` §0.
+2. **`fallback_reviewer`** — headless `claude -p`, the same-vendor fallback. It runs
+   **only** on a rate-limit or unavailability receipt from rung 1, never by preference.
+   Four conditions hold every time:
+   - **Isolation:** a fresh headless process with zero shared context — never the
+     authoring session and never a subagent of it.
+   - **Tier floor (policy):** the reviewer's tier is at least the author's. The
+     dispatcher applies this rule; the resolver does not. The binding covers authors up
+     to its own tier, and a higher-tier author passes `--slug` with that tier's catalog
+     id. Never pass `--slug` with a tier below the binding's. The contract checks only
+     the vendor and `effort_floor: high`. That floor refuses a snapshot whose effort
+     ceiling is below `high`; a smaller-tier snapshot that supports `high` passes it, so
+     the floor is not a tier check. The schema has no tier key.
+   - **Flag:** the verdict names itself same-vendor review whenever the author shares
+     its vendor (`flag_if_same_vendor_as_author: true`).
+   - **Return:** rung 1 takes the next round as soon as it answers again.
+3. **A human.** A HARD STOP, reached only when both machine rungs are rate-limited or
+   unavailable — the human-handoff path in `cli-dispatch/SKILL.md` §0.
 
-> **Same-vendor review is PROHIBITED (2026-09-07).** The former rung 3 — an
-> `isolated_worker` on the coordinator's own vendor with zero shared context, "flagged as
-> same-vendor" — is **removed**, not deprioritized. Two reasons it had to go rather than
-> stay as a labelled-weaker option: a rung that exists gets taken under deadline, and the
-> flag lands in a verdict nobody re-reads; and "zero shared context" answers the *context*
-> half of independence while quietly conceding the *vendor* half, which is the half that
-> catches a whole model family's shared blind spots. Escalating to a human is a real
-> terminal state; a self-review round is an artifact that says `approved` without one.
+> **A same-vendor fallback, not a same-vendor default (2026-10-07).** The 2026-09-07
+> prohibition removed this rung for two reasons, and both stay — as conditions rather
+> than as a ban. *A rung that exists gets taken under deadline:* so it needs a rung-1
+> rate-limit receipt, and a deadline is not one. *"Zero shared context" answers the
+> context half of independence and concedes the vendor half:* so the verdict is flagged,
+> and once rung 1 recovers it may re-read a flagged `approved` on a risk path
+> (advisory). What changed is the terminal state: a human cannot review at agent
+> throughput, and in practice the human rung stalled the loop instead of reviewing it.
+> Self-review is still forbidden — the authoring session never reviews its own work, at
+> any effort.
 
 The class's declared `fallbacks` are the rate-limit rungs within rung 1. They are
 reported by the resolver but never auto-selected, so a receipt always says which
@@ -143,7 +158,7 @@ copied into prose is stale the day the vendor reprices.
   dispatch with no terminal `turn.completed` event, which `Invoke-CodexDispatch.ps1`
   already treats as a failure.
 
-If none of rungs 1–3 is reachable, follow the rate-limit HARD STOP in
+If neither machine rung is reachable, follow the rate-limit HARD STOP in
 [`../skills/cli-dispatch/SKILL.md`](../skills/cli-dispatch/SKILL.md) §Rate-Limit
 Fallback — do **not** self-review.
 
@@ -151,13 +166,14 @@ Fallback — do **not** self-review.
 
 ## Delegation & nesting rules
 
-- **Delegate down, not up.** `coordinator` dispatches `builder` / `router` subagents
-  and the `independent_reviewer`; a builder subagent does not promote itself to
-  coordinator. For the detailed "which tasks are mechanical (delegate) vs correctness
+- **Delegate down, not up.** `coordinator` dispatches `builder` / `verifier` / `router` /
+  `scout` subagents, a `peer_reviewer` for an advisory second read, and the
+  `independent_reviewer`; a builder subagent does not promote itself to coordinator. For the detailed "which tasks are mechanical (delegate) vs correctness
   (keep on coordinator)" taxonomy, see [`.agent/docs/model-delegation.md`](model-delegation.md).
-- **Nesting depth cap = 5.** Claude Code subagents can spawn subagents up to 5 levels
-  deep; the depth-5 agent loses the Agent tool. `coordinator → builder → router`
-  (2 levels) is safe. For **wide or deep parallel fan-out, prefer `isolated_worker`
+- **Nesting depth cap = 3.** Claude Code lets subagents spawn subagents 3 levels below the
+  main conversation by default (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` changes it); at the
+  limit the Agent tool is withheld (Claude Code docs, sub-agents §Spawning, read
+  2026-10-07). `coordinator → builder → router` (2 levels) is safe. For **wide or deep parallel fan-out, prefer `isolated_worker`
   on `claude-p`** (resets the depth budget, full capabilities) over deep Task nesting.
 - **Worktree isolation for parallel writers.** When multiple agents edit files
   concurrently, give each its own git worktree (or headless session per worktree) so
@@ -174,15 +190,16 @@ Fallback — do **not** self-review.
 | If the task is… | Route to… |
 |---|---|
 | Deciding *what* to build / how to architect it | `coordinator` |
-| Troubleshooting, race conditions, deep-infra, correctness-critical | `coordinator` — never `surface_orchestrator` |
+| Troubleshooting, race conditions, deep-infra, correctness-critical | `coordinator` |
 | Writing lots of straightforward code / tests to a clear spec | `builder` |
 | Reading logs, auditing many files, mechanical find-replace across a repo | `builder` |
 | Running a row's validation command and reporting counts, touching nothing | `verifier` |
 | Classifying/triaging a big list, pure routing | `router` |
-| Reviewing a plan or a diff (independent) | `independent_reviewer` → `surface_orchestrator` (surface) → **a human**; see §Independent-reviewer chain — this row is a summary of it, never a variant |
-| Simple surface work you want orchestrated cheaply | `surface_orchestrator` |
-| Many independent tasks in parallel / overnight | `isolated_worker`, one per worktree; prefer in-harness Cursor `Task`. Unshipped Cursor Agent CLI wrappers are not a default route. |
-| Very large single-shot architecture reasoning | `architecture_single_shot` |
+| Sweeping many files for one answer (where is X, who calls Y) when only the conclusion is needed | `scout` |
+| A second, advisory read of a correctness-critical diff or plan before the independent review | `peer_reviewer` (advisory; the verdict stays with `independent_reviewer`) |
+| Reviewing a plan or a diff (independent) | `independent_reviewer` → `fallback_reviewer` (headless `claude -p`, only on a rate-limit receipt, flagged same-vendor) → **a human** (HARD STOP); see §Independent-reviewer chain — this row is a summary of it, never a variant |
+| Many independent tasks in parallel / overnight | `isolated_worker`, one per worktree; prefer the in-harness Agent tool, else headless `claude -p` |
+| Very large single-shot architecture reasoning | `architect` (only on explicit human direction or a grouping row flagged `architecture-risk: yes`) |
 | Prose whose voice matters, or a second reader on prose | `creative_prose` |
 
 ## CLI Dispatch Decision Table

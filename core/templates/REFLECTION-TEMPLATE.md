@@ -135,6 +135,7 @@ EXAMPLE: {before → after}
 | Handoff Score (X/7) | ___ |
 | Rule Adherence (%) | ___ |
 | Prompt→commit time | ___ |
+| Compactions (auto/manual) | ___ (___/___) |
 
 ### Rules Sampled for Adherence Check
 

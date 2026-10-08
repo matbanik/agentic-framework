@@ -280,7 +280,7 @@ docs/build-plan/
 
 ## Phase 5: Plan Validation (External Reviewer Loop)
 
-**Purpose:** Independent AI review of the plan for accuracy, consistency, and completeness before any code is written. The reviewer role is role-generic, not vendor-fixed — the independent-reviewer chain (`independent_reviewer` primary → `surface_orchestrator` surface-only → `isolated_worker` on `claude-p` last resort) is defined in `.agent/docs/model-routing.md`.
+**Purpose:** Independent AI review of the plan for accuracy, consistency, and completeness before any code is written. The reviewer role is role-generic, not vendor-fixed — the independent-reviewer chain (`independent_reviewer` primary → `fallback_reviewer` on `claude-p`, only on a rate-limit receipt and flagged same-vendor → a human) is defined in `.agent/docs/model-routing.md`.
 
 **Human involvement:** 🟡 Review is auto-dispatched by the workflow (`create-plan.md` §5), not human-triggered. Doc-only corrections applied via [plan-corrections.md](https://{{REPO_URL}}/blob/main/.agent/workflows/plan-corrections.md) auto-proceed (reversible, no separate approval gate); the re-dispatched review is what re-validates the fix. Human intervenes only for the round-cap/rate-limit HARD STOPs, a reviewer human-decision-required question, or — once `approved` — the `plan_to_exec_gate == human` go-ahead (`.agent/docs/harness-profiles.md`, `GUARDRAILS.md` SIGN 1).
 
@@ -308,7 +308,7 @@ docs/build-plan/
 ### Rate Limit Fallback
 
 When a reviewer CLI hits a rate limit, the [Rate-Limit Fallback Protocol](https://{{REPO_URL}}/blob/main/.agent/skills/cli-dispatch/SKILL.md) walks the independent-reviewer chain **in order first**, and only escalates to human/web submission when **all rungs** are exhausted:
-1. Try the next reviewer rung (`independent_reviewer` → `surface_orchestrator`; there is no same-vendor rung; canonical in `.agent/docs/model-routing.md`)
+1. Try the next reviewer rung (`independent_reviewer` → `fallback_reviewer`, flagged same-vendor; canonical in `.agent/docs/model-routing.md`)
 2. If **all rungs** are rate-limited/unavailable: save prompt to `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`, adapt for web submission (inline context, markdown)
 3. Human submits to web interface manually (a HARD STOP at a human gate — never self-review)
 4. Paste response back; agent continues
@@ -319,7 +319,7 @@ When a reviewer CLI hits a rate limit, the [Rate-Limit Fallback Protocol](https:
 |------|---------|
 | [`.agent/workflows/plan-critical-review.md`](https://{{REPO_URL}}/blob/main/.agent/workflows/plan-critical-review.md) | Review workflow |
 | [`.agent/workflows/plan-corrections.md`](https://{{REPO_URL}}/blob/main/.agent/workflows/plan-corrections.md) | Corrections workflow |
-| [`.agent/skills/cli-dispatch/SKILL.md`](https://{{REPO_URL}}/blob/main/.agent/skills/cli-dispatch/SKILL.md) | CLI dispatch (Codex, Claude, agy) |
+| [`.agent/skills/cli-dispatch/SKILL.md`](https://{{REPO_URL}}/blob/main/.agent/skills/cli-dispatch/SKILL.md) | CLI dispatch (Codex, Claude) |
 | `.agent/context/handoffs/*-plan-critical-review.md` | Rolling review handoff |
 
 ### 🔄 Adaptability Notes
@@ -562,7 +562,7 @@ flowchart LR
 
 | Skill | Used In |
 |-------|---------|
-| [cli-dispatch](https://{{REPO_URL}}/blob/main/.agent/skills/cli-dispatch/SKILL.md) | Phases 5, 7 (Codex/Claude/agy dispatch) |
+| [cli-dispatch](https://{{REPO_URL}}/blob/main/.agent/skills/cli-dispatch/SKILL.md) | Phases 5, 7 (Codex/Claude dispatch) |
 | [quality-gate](https://{{REPO_URL}}/blob/main/.agent/skills/quality-gate/SKILL.md) | Phase 6 (MEU validation) |
 | [pre-handoff-review](https://{{REPO_URL}}/blob/main/.agent/skills/pre-handoff-review/SKILL.md) | Phase 6 (self-review) |
 | [git-workflow](https://{{REPO_URL}}/blob/main/.agent/skills/git-workflow/SKILL.md) | Phase 9 (commits) |

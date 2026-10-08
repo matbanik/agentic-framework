@@ -13,16 +13,11 @@
   Prerequisites:
   - codex CLI in PATH (npm global)
   - claude CLI in PATH (npm global)
-  - agy CLI at $env:LOCALAPPDATA\agy\bin\agy.exe (version >= 1.1.1; stdout capture verified on 1.1.5)
   - All CLIs authenticated
-  - agy model set to the `surface_orchestrator` binding for `gemini-cli` via TUI
-    /model (or --model); resolve it with
-    `Resolve-AgentModel -Class surface_orchestrator -Harness gemini-cli`
-  - Stuck/broken MCP servers disabled -- they block agy -p even for trivial prompts
 #>
 
 param(
-    [ValidateSet('all', 'wrapper-contract', 'codex-validation', 'codex-image', 'agy-data', 'claude-writing')]
+    [ValidateSet('all', 'wrapper-contract', 'codex-validation', 'codex-image', 'claude-writing')]
     [string]$Test = 'all',
     # No baked default on purpose. This used to default to the literal string
     # '{{RECEIPTS_DIR}}\dispatch-tests', which is only a path AFTER instantiate.py
@@ -916,84 +911,7 @@ function Test-CodexImageGen {
     }
 }
 
-# --- Test 3: agy Data Processing ---
-
-function Test-AgyDataProcessing {
-    Write-TestHeader "agy CLI -- Data Processing (Gemini 3.5 Flash High)"
-
-    $agyPath = "$env:LOCALAPPDATA\agy\bin\agy.exe"
-    if (-not (Test-Path $agyPath)) {
-        Write-TestSkip "agy Data Processing" "agy.exe not found at $agyPath"
-        return
-    }
-
-    $version = (& $agyPath --version 2>$null | Out-String).Trim()
-    if (-not $version) {
-        Write-TestSkip "agy Data Processing" "agy --version returned empty"
-        return
-    }
-
-    # After the agy presence checks, not before: an absent agy is a legitimate SKIP,
-    # and reporting a receipts-path problem to someone who simply does not have the
-    # CLI installed points them at the wrong thing.
-    $dir = Get-OutputDir
-    if (-not $dir) { Write-TestResult "agy Data Processing" $false $script:OutputDirError 0; return }
-
-    $outputFile = "$dir\agy-data-output.txt"
-    Clean-File $outputFile
-
-    # Create a test data file for processing
-    $testDataFile = "$dir\test-data.csv"
-    @"
-Name,Age,City,Score
-Alice,30,New York,85
-Bob,25,San Francisco,92
-Carol,35,Chicago,78
-Dave,28,Boston,95
-Eve,32,Seattle,88
-"@ | Set-Content $testDataFile -Encoding UTF8
-
-    $prompt = @"
-Read the CSV file at $testDataFile and produce a summary report with:
-1. Total number of records
-2. Average age
-3. Average score
-4. Person with highest score
-5. List all cities mentioned
-
-Return the complete report as markdown on stdout.
-"@
-
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
-    try {
-        # Flags BEFORE -p; prompt in a variable (see cli-dispatch SKILL.md agy rules).
-        & $agyPath --print-timeout 5m0s --effort high --add-dir "{{PROJECT_ROOT}}" -p $prompt *> $outputFile
-        $code = $LASTEXITCODE
-        $sw.Stop()
-
-        if ($code -ne 0) {
-            Write-TestResult "agy Data Processing" $false "agy exited $code (version=$version)" $sw.Elapsed.TotalSeconds
-            return
-        }
-
-        if (Test-Path $outputFile) {
-            $content = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
-            if ($null -ne $content -and $content.Length -gt 20) {
-                Write-TestResult "agy Data Processing" $true "Stdout capture OK ($($content.Length) chars, version=$version)" $sw.Elapsed.TotalSeconds
-            } else {
-                Write-TestResult "agy Data Processing" $false "Stdout empty/short -- check ~/.gemini/antigravity-cli/log for MCP stalls" $sw.Elapsed.TotalSeconds
-            }
-        } else {
-            Write-TestResult "agy Data Processing" $false "Output receipt not created" $sw.Elapsed.TotalSeconds
-        }
-    } catch {
-        $sw.Stop()
-        Write-TestResult "agy Data Processing" $false "Exception: $_" $sw.Elapsed.TotalSeconds
-    }
-}
-
-# --- Test 4: Claude Creative Writing ---
+# --- Test 3: Claude Creative Writing ---
 
 function Test-ClaudeCreativeWriting {
     $model = Get-ClassModel -Class 'creative_prose' -Harness 'claude-p'
@@ -1083,13 +1001,11 @@ switch ($Test) {
         Test-CodexWrapperContract
         Test-CodexValidation
         Test-CodexImageGen
-        Test-AgyDataProcessing
         Test-ClaudeCreativeWriting
     }
     'wrapper-contract'   { Test-CodexWrapperContract }
     'codex-validation'   { Test-CodexValidation }
     'codex-image'        { Test-CodexImageGen }
-    'agy-data'           { Test-AgyDataProcessing }
     'claude-writing'     { Test-ClaudeCreativeWriting }
 }
 

@@ -63,8 +63,8 @@ core/
                        review_ledger.py (bounded review loop: budgets, mechanism stop),
                        validate_closeout_artifacts.py + lint_task_contract.py (the
                        closeout and Task-Table gates the templates call)
-  .cursor/agents/      AUTOGEN templates: {{PROJECT_NAME}}-builder / -verifier
-  .claude/agents/      AUTOGEN templates (same pair)
+  .claude/agents/      AUTOGEN templates: {{PROJECT_NAME}}-builder / -verifier / -scout /
+                       -peer_reviewer
   templates/           plan, task, handoff, review, reflection, build-plan hub/phase-spec/matrix
 scripts/
   instantiate.py       fill {{PLACEHOLDER}} tokens with your project's values (adopters run this)

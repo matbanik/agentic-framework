@@ -22,11 +22,11 @@
 # default fails the contract or the requested effort. `fallbacks` is optional.
 # A binding without it has no same-class rate-limit rung, and a rate limit goes
 # to the class's `fallback_rungs`. A class that must never run unasked uses the
-# stronger pattern on `architecture_single_shot`: a contract flag, plus `forbid`
+# stronger pattern on `architect`: a contract flag, plus `forbid`
 # on the classes that must not bind its snapshot.
 
 schema_version: 1
-updated: '2026-09-23'
+updated: '2026-10-07'
 bump_gate: human
 
 catalog: {}
@@ -43,16 +43,21 @@ classes:
     contract:
       capabilities: [agentic_exec, bulk_edit]
       effort_default: medium
-      # `high` so both a cheap mechanical pin and a stronger Cursor pin can
-      # satisfy the class. A `medium` ceiling rejects the stronger pin.
+      # `high` so both a cheap mechanical pin and a stronger pin can satisfy
+      # the class. A `medium` ceiling rejects the stronger pin.
       price_ceiling_band: high
       inherit_allowed: false
     bindings: {}
 
-  # A separate class, not an alias, so the verifier can diverge from the
-  # builder later without touching any caller.
+  # Its own cheap contract: running one row's validation command needs no
+  # bulk-edit capability, so the verifier no longer inherits the builder.
   verifier:
-    extends: builder
+    contract:
+      capabilities: [validation_runner]
+      effort_default: low
+      price_ceiling_band: low
+      inherit_allowed: false
+    bindings: {}
 
   router:
     contract:
@@ -60,6 +65,11 @@ classes:
       effort_default: low
       price_ceiling_band: low
     bindings: {}
+
+  # Read-only fan-out search. A separate class so it can diverge from the
+  # router later without touching any caller.
+  scout:
+    extends: router
 
   independent_reviewer:
     contract:
@@ -70,25 +80,32 @@ classes:
       price_ceiling_band: high
       auth_mode: chatgpt-plan
     bindings: {}
-    # No same-vendor rung: past `surface_orchestrator` the chain ends at a human
-    # (model-routing.md, "Same-vendor review is PROHIBITED").
+    # One machine rung past the primary, then a human (model-routing.md,
+    # §Independent-reviewer chain). It fires only on a rate-limit/unavailable
+    # receipt from the primary, and its verdict is flagged same-vendor.
     fallback_rungs:
-      - harness: gemini-cli
-        class: surface_orchestrator
-        scope: surface_only
+      - harness: claude-p
+        class: fallback_reviewer
+        flag_if_same_vendor_as_author: true
+
+  # The reviewer for when every `independent_reviewer` rung is limited. Unlike
+  # `peer_reviewer` it may author `approved`. Tier floor: reviewer tier >= author
+  # tier — the binding covers authors up to its tier, a higher-tier author passes
+  # `--slug`, so the contract has no capabilities clause. The tier floor is
+  # dispatcher policy, not a contract check: `effort_floor: high` refuses only a
+  # snapshot whose effort ceiling is below high; a smaller-tier snapshot that
+  # supports high passes it. Never pass `--slug` below the binding's tier.
+  fallback_reviewer:
+    contract:
+      vendor_allow: [anthropic]
+      effort_floor: high
+      effort_default: high
+    bindings: {}
 
   checklist_validator:
     contract:
       capabilities: [checklist_review]
       effort_default: medium
-      price_ceiling_band: low
-    bindings: {}
-
-  surface_orchestrator:
-    contract:
-      capabilities: [surface_edit]
-      effort_default: high
-      scope: surface_only
       price_ceiling_band: low
     bindings: {}
 
@@ -99,9 +116,18 @@ classes:
       not_a_reviewer: true
     bindings: {}
 
-  architecture_single_shot:
+  # An advisory second opinion from the authoring side. It never writes a
+  # verdict and never stands in for `independent_reviewer`.
+  peer_reviewer:
     contract:
-      capabilities: [very_large_single_shot]
+      capabilities: [deep_reasoning, agentic_exec]
+      effort_default: high
+      not_a_reviewer: true
+    bindings: {}
+
+  architect:
+    contract:
+      capabilities: [architecture, very_large_single_shot]
       effort_default: high
       invoke_only_on_explicit_human_direction: true
     bindings: {}

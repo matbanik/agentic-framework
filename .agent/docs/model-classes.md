@@ -52,7 +52,7 @@ claude -p --model $(resolve coordinator -Harness claude-p -Project <project-root
 The Python equivalent (same S2 locate order) is
 `python <registry-home>/tools/resolve_model.py resolve <class> --harness <harness> --project <project-root>`.
 
-## The twelve global classes
+## The thirteen global classes
 
 Overlay-only classes belong in a project's `.agent/model-registry.local.yaml`,
 not here. An overlay may add classes and tighten constraints; it may never
@@ -62,13 +62,15 @@ loosen a global contract.
 |---|---|---|
 | `coordinator` | Orchestration, planning, architecture, synthesis, governance-doc edits, correctness-critical reasoning | `orchestration`, `deep_reasoning`, `agentic_exec`. Never bind this class to the architecture-reserved snapshot. |
 | `builder` | Bulk implementation, mechanical edits, test scaffolding, file/log audits, doc sweeps | `agentic_exec`, `bulk_edit`. `price_ceiling_band: high` so both a cheap mechanical pin and a stronger pin can satisfy it. `inherit_allowed: false`. Same architecture-reserved forbid as `coordinator`. |
-| `verifier` | Read-only validation of one `task.md` row | `extends: builder`. A separate class so it can diverge later without touching callers. |
+| `verifier` | Read-only validation of one `task.md` row | `validation_runner`. `effort_default: low`, `price_ceiling_band: low`, `inherit_allowed: false`. Its own contract, no longer an extension of `builder`. Same architecture-reserved forbid as `builder`. |
 | `router` | High-volume classification, triage, inventory, routing decisions | `classification`. `price_ceiling_band: low`. Not for real logic or multi-file reasoning. |
+| `scout` | Read-only fan-out codebase search that returns paths and excerpts | `extends: router`. A separate class so it can diverge later without touching callers. Never edits, judges correctness, or decides a gate. |
 | `independent_reviewer` | Adversarial plan and code review | `code_review`, `agentic_exec`, `read_only_sandbox`. `vendor_distinct_from: author`. `auth_mode: chatgpt-plan`. Cross-vendor diversity is the point; the resolver will not guess the author vendor. |
 | `checklist_validator` | Checklist-shaped validation with no risk path | `checklist_review`. `price_ceiling_band: low`. A cheap route, not a discount reviewer. |
-| `surface_orchestrator` | Low-reasoning surface work | `surface_edit`. `scope: surface_only`. **Never** troubleshooting or deep-infra. |
 | `isolated_worker` | Isolated-context bursts, one per worktree | `agentic_exec`. `not_a_reviewer: true`. Not a substitute for `independent_reviewer`. |
-| `architecture_single_shot` | Very large one-shot architecture reasoning | `very_large_single_shot`. `invoke_only_on_explicit_human_direction: true`. Never a coordinator default and never a `builder_model` pin. |
+| `peer_reviewer` | Advisory adversarial read of one diff or plan before independent review | `deep_reasoning`, `agentic_exec`. `effort_default: high`. `not_a_reviewer: true`: it never writes a verdict file and never substitutes for `independent_reviewer`. |
+| `fallback_reviewer` | Independent review when every `independent_reviewer` rung is rate-limited or unavailable | `vendor_allow: [anthropic]`. `effort_floor: high`. No capabilities clause, so a higher-tier author's `--slug` override passes. May author `approved`; the verdict is flagged same-vendor when the author shares its vendor. |
+| `architect` | Very large one-shot architecture reasoning | `architecture`, `very_large_single_shot`. `invoke_only_on_explicit_human_direction: true`. Never a coordinator default and never a `builder_model` pin. |
 | `translator_prose` | Long-form translation whose voice must survive | `long_form_prose`. `vendor_allow: [openai]`. `effort_floor: high`. `auth_mode: chatgpt-plan`. |
 | `image_generator` | Image dispatch | `image_gen`. `auth_mode: chatgpt-plan`. The binding may carry `extra_args` the harness needs to enable generation. |
 | `creative_prose` | Prose whose voice matters, and the second reader on it | `creative_prose`. `vendor_allow: [anthropic]`. Pin by *difference* from the drafter, not by recency. |
@@ -79,10 +81,11 @@ The implementing agent never authors its own `approved` verdict. The class's
 declared `fallback_rungs` are the chain, in order:
 
 1. `independent_reviewer` — primary. Cross-vendor; read-only sandbox.
-2. `surface_orchestrator` — secondary, **surface-level work only**.
-3. **A human.** There is no third machine rung. A same-vendor reviewer is not a
-   weaker rung but a prohibited one, and self-review never substitutes for the
-   human handoff.
+2. `fallback_reviewer` — headless `claude -p`, only on a rate-limit or
+   unavailability receipt from rung 1: a fresh process, a reviewer tier at least
+   the author's, a verdict flagged same-vendor.
+3. **A human** — a HARD STOP when both machine rungs are limited. Self-review by
+   the authoring session never substitutes for either.
 
 Rate-limit rungs *within* a binding (`fallbacks:`) are reported by the resolver
 and never auto-selected, so a receipt always says which snapshot actually
@@ -104,7 +107,7 @@ reached two ways, and both leave a trace:
 `alternates` is the wrong home. The resolver falls through to an alternate on its
 own when the default fails the contract or the requested effort, so a snapshot
 listed there can answer without anyone having asked for it. A class that must
-never run unasked goes further: `architecture_single_shot` carries
+never run unasked goes further: `architect` carries
 `invoke_only_on_explicit_human_direction: true`, and `coordinator` and `builder`
 `forbid` its snapshot.
 

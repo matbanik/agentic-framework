@@ -200,6 +200,15 @@ NOT_A_PROMISE = {
     (".agent/context/2026-09-18-source-project-evidence-framework-gaps.md", 143, ".cursor/agents/source-project-opus.md"): (
         "Historical source-repository finding about an explicitly non-AUTOGEN agent; not adoption content."
     ),
+    (".agent/context/2026-09-19-adopter-findings-fix-proposal.md", 94, "core/.cursor/agents/README.md"): (
+        "Historical adopter finding (2026-09-19) about a Cursor surface retired on 2026-10-07 (model-orchestration refresh); not adoption content."
+    ),
+    (".agent/context/2026-09-19-adopter-findings-fix-proposal.md", 170, "tools/Invoke-CursorAgentDispatch.ps1"): (
+        "Historical adopter finding (2026-09-19) about a Cursor surface retired on 2026-10-07 (model-orchestration refresh); not adoption content."
+    ),
+    (".agent/context/2026-09-19-adopter-mock-deploy-findings.md", 76, ".cursor/agents/README.md"): (
+        "Historical adopter finding (2026-09-19) about a Cursor surface retired on 2026-10-07 (model-orchestration refresh); not adoption content."
+    ),
     ("core/.agent/workflows/plan-critical-review.md", 197, "tools/generate.go"): (
         "Cited *as* an example of a mid-path false positive the reviewer should "
         "expect from the sweep regex ('tui/tools/generate.go reported as "

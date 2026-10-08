@@ -1,22 +1,19 @@
 # Claude CLI as Codex Fallback — Lessons Learned
 
 > [!CAUTION]
-> **THE PRACTICE DOCUMENTED HERE IS NOW PROHIBITED.** Using the coordinator's own vendor
-> as a reviewer rung — "same-vendor self-review" — is not a permitted fallback at any
-> effort level. This file is retained only for its **CLI-mechanics** lessons (flag
-> differences, prompt-file handling, exit-code shapes), which are what the wrapper
-> encapsulates. Do **not** read it as a live fallback chain.
+> **READ THIS AS CLI MECHANICS, NOT AS THE CHAIN.** The practice recorded here — the
+> coordinator's own vendor as an ad-hoc reviewer — was prohibited on 2026-09-07 and came
+> back on 2026-10-07 only in a constrained form: the `fallback_reviewer` rung in
+> `model-routing.md` §Independent-reviewer chain (a rung-1 rate-limit receipt first, a
+> fresh process, a reviewer tier at least the author's, a verdict flagged same-vendor).
+> This file is retained for its **CLI-mechanics** lessons (flag differences, prompt-file
+> handling, exit-code shapes), which are what the wrapper encapsulates. The conditions
+> live in `model-routing.md`, not here.
 >
-> **What replaced it:** when every *cross-vendor* rung is rate-limited or unavailable,
-> the escalation is a **human gate** (`cli-dispatch/SKILL.md` §0 human-handoff path),
-> not a self-review round. A second adopting repo reached the same conclusion
-> independently and made it a standing prohibition.
->
-> **Why the archive was not enough.** This banner previously said only that the wrapper
-> "encapsulates these differences" — which reads as *the mechanism was fixed*, and left
-> the practice looking merely awkward rather than forbidden. Agents kept finding the
-> rung in the chain and taking it. A file that documents how to do a prohibited thing
-> needs the prohibition in the banner, not in a sibling doc.
+> **Why the banner stays loud.** It once said only that the wrapper "encapsulates these
+> differences" — which read as *the mechanism was fixed*, and agents took the rung
+> without conditions. A file that documents how to do a constrained thing needs the
+> constraints pointed at from its banner, not left to a sibling doc.
 
 **Date:** 2026-06-07
 **Context:** MEU-118a critical review loop, Rounds 5+
