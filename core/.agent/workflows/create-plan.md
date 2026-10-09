@@ -319,7 +319,7 @@ Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/plan-critical-review`
 
 **Reviewer Agent Priority** (canonical chain defined once in [`.agent/docs/model-routing.md`](../docs/model-routing.md) §Independent-reviewer chain):
 1. **Codex CLI (`independent_reviewer`)** — Primary (`-c model_reasoning_effort=medium` for routine Round 1; `high` for plans touching risk paths / contract surfaces — see `cli-dispatch/SKILL.md` §Reviewer Effort Policy)
-2. **Headless `claude -p` (`fallback_reviewer`)** — only on a Codex rate-limit or unavailability receipt; a fresh process, a reviewer tier at least the author's, the verdict flagged same-vendor (conditions in `model-routing.md`). CLI mechanics: [`claude-cli-fallback-lessons.md`](../docs/claude-cli-fallback-lessons.md).
+2. **Headless Claude (`tools/Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer -PermissionMode bypassPermissions -ReasoningEffort high`)** — only on a Codex rate-limit or unavailability receipt; a fresh session (a review class takes no continuation switch), a reviewer tier at least the author's, the verdict flagged same-vendor (conditions in `model-routing.md`). CLI mechanics: [`claude-cli-fallback-lessons.md`](../docs/claude-cli-fallback-lessons.md).
 3. **A human.** A HARD STOP when both machine rungs are rate-limited or unavailable. The authoring session never reviews its own plan.
 
 **Prompt template for dispatch:**
@@ -504,7 +504,7 @@ At the round cap:
 - If not → HARD STOP with a Decision Brief (protocol §5) surfaced to the human — recommendation first, never the bare question
 
 **Rate limit hit mid-loop:**
-- Attempt the next reviewer rung (see §5a priority chain: `independent_reviewer` → `fallback_reviewer` (headless `claude -p`, only on a rate-limit receipt, flagged same-vendor) → **human**)
+- Attempt the next reviewer rung (see §5a priority chain: `independent_reviewer` → `fallback_reviewer` (`tools/Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer`, only on a rate-limit receipt, flagged same-vendor) → **human**)
 - If **all rungs** rate-limited/unavailable → HARD STOP with "All reviewer rungs rate-limited. Reset at {time}." (never self-review)
 
 **Sudden session stop:**
@@ -585,7 +585,7 @@ After all MEU TDD cycles and handoffs are complete, **continue immediately** wit
 
 Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/execution-critical-review` — the protocol, reviewer priority, correction loop, round cap (6), and edge cases are identical to **`execution-session.md` §4c**. In brief:
 
-1. Detect billing mode + compute routing signals; dispatch via the independent-reviewer chain (`independent_reviewer` → `fallback_reviewer` (headless `claude -p`, only on a rate-limit receipt, flagged same-vendor) → **human**; canonical in [`.agent/docs/model-routing.md`](../docs/model-routing.md)).
+1. Detect billing mode + compute routing signals; dispatch via the independent-reviewer chain (`independent_reviewer` → `fallback_reviewer` (`tools/Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer`, only on a rate-limit receipt, flagged same-vendor) → **human**; canonical in [`.agent/docs/model-routing.md`](../docs/model-routing.md)).
 2. Write the verdict to the canonical `.agent/context/handoffs/{plan-folder-name}-implementation-critical-review.md` (rolling file).
 3. **If `changes_required`:** apply code/test corrections via `/execution-corrections`, re-run the MEU gate, re-dispatch. **If `approved`:** continue to the remaining deliverables.
 4. **Round cap: 6 rounds** → HARD STOP with a TL;DR in the Decision-Brief form of the §5 round-cap block (recommendation first, alternatives compared against it); resume on the user's "continue review loop".

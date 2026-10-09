@@ -3,6 +3,10 @@
   Validation test suite for the CLI Dispatch skill.
   Tests dispatch routes plus a deterministic Invoke-CodexDispatch.ps1 contract suite
   (wrapper-contract) that does not require a live Codex session.
+  Codex validation and Claude creative writing launch through the dispatch wrappers
+  (tools/Invoke-CodexDispatch.ps1, tools/Invoke-ClaudeDispatch.ps1) and check that
+  each run recorded a UUID session_id in its status.json. The contract suite also
+  covers the resume/fork refusals of both wrappers (no live CLI).
 
 .DESCRIPTION
   Each test dispatches a minimal task to the target CLI agent, captures the output,
@@ -216,6 +220,31 @@ function Resolve-WrapperPath {
     return $null
 }
 
+# A new dispatch ID for one wrapper run, so a rerun never collides with an old run.
+function New-SmokeDispatchId($prefix) {
+    return "$prefix-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
+}
+
+# Read <OutputDir>/<id>/status.json and return its session_id ('' when absent).
+function Get-StatusSessionId($runDir) {
+    $statusPath = Join-Path $runDir 'status.json'
+    if (-not (Test-Path -LiteralPath $statusPath)) { return '' }
+    $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+    return [string]$status.session_id
+}
+
+# One continuation-refusal arm: the wrapper must exit 1 and name the expected refusal.
+# Asserting on the name, not on non-zero alone, keeps an earlier unrelated clause from
+# passing the arm (V3).
+function Test-ContinuationRefusal($label, $runnable, $expected, [string[]]$wrapperArgs) {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $out = & pwsh -NoProfile -File $runnable @wrapperArgs 2>&1
+    $code = $LASTEXITCODE
+    $ok = ($code -eq 1) -and ("$out" -match [regex]::Escape($expected))
+    $tail = (("$out" -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1) -replace '\s+', ' ')
+    Write-TestResult $label $ok "exit=$code $($tail.Substring(0, [Math]::Min(80, $tail.Length)))" $sw.Elapsed.TotalSeconds
+}
+
 function Test-CodexWrapperContract {
     Write-TestHeader "Invoke-CodexDispatch.ps1 -- contract smoke (no live Codex)"
 
@@ -269,6 +298,20 @@ function Test-CodexWrapperContract {
             Replace('{{PROJECT_NAME}}', 'clidispatchtest')
         [IO.File]::WriteAllText($runnable, $instantiated, (New-Object System.Text.UTF8Encoding($false)))
 
+        # The headless Claude wrapper, instantiated the same way, for its resume/fork arms.
+        $claudeSrc = Join-Path (Split-Path $wrapper -Parent) 'Invoke-ClaudeDispatch.ps1'
+        $script:ClaudeRunnable = $null
+        if (Test-Path -LiteralPath $claudeSrc) {
+            $script:ClaudeRunnable = Join-Path $testTools 'Invoke-ClaudeDispatch.ps1'
+            $claudeText = (Get-Content -LiteralPath $claudeSrc -Raw).
+                Replace('{{RECEIPTS_DIR}}', ($testReceipts -replace '\\', '/')).
+                Replace('{{PROJECT_ROOT}}', ($testRoot -replace '\\', '/')).
+                Replace('{{PROJECT_NAME_UPPER}}', 'CLIDISPATCHTEST').
+                Replace('{{PROJECT_NAME_TITLE}}', 'CliDispatchTest').
+                Replace('{{PROJECT_NAME}}', 'clidispatchtest')
+            [IO.File]::WriteAllText($script:ClaudeRunnable, $claudeText, (New-Object System.Text.UTF8Encoding($false)))
+        }
+
         # Every sibling helper the wrapper resolves through $PSScriptRoot, not just the
         # ledger. adapt_output_schema.py and validate_json_schema.py were absent here, so
         # the -OutputSchema arms could only ever exercise the wrapper's "helper missing"
@@ -283,6 +326,7 @@ function Test-CodexWrapperContract {
         }
     } else {
         $runnable = $wrapper
+        $script:ClaudeRunnable = Resolve-WrapperPath -Name 'Invoke-ClaudeDispatch.ps1'
         # An already-instantiated tree: the wrapper's own repo root is two levels up from
         # tools/, and it is that root the -OutputSchema arms must stay inside. The temp tree
         # is still where captured artifacts go, so ContractTempRoot is left alone.
@@ -373,6 +417,37 @@ function Test-CodexWrapperContract {
     $codeGateOk = $LASTEXITCODE
     $gatePasses = ($codeGateOk -eq 0) -and ("$outGateOk" -match 'bypassed-non-review')
     Write-TestResult "-GateOnly -NonReviewDispatch permitted (gate can pass)" $gatePasses "exit=$codeGateOk" $sw.Elapsed.TotalSeconds
+
+    # --- resume / fork (cli-dispatch SKILL.md Resume and Fork) -----------------
+    # Every refusal happens before the run directory and before any CLI launch, so
+    # these arms need no live CLI. The source-not-found arms are the must-reach half:
+    # a wrapper that refused every continuation would satisfy the other arms.
+    Test-ContinuationRefusal "Codex: -ResumeDispatchId + -ForkDispatchId rejected" $runnable 'resume_fork_exclusive' @(
+        '-NonReviewDispatch', '-ModelClass', 'translator_prose', '-ResumeDispatchId', 'heron-1', '-ForkDispatchId', 'heron-2', '-PromptText', 'noop')
+    Test-ContinuationRefusal "Codex: review class refuses a continuation" $runnable 'resume_refused_review_class' @(
+        '-NonReviewDispatch', '-ModelClass', 'independent_reviewer', '-ResumeDispatchId', 'heron-1', '-PromptText', 'noop')
+    Test-ContinuationRefusal "Codex: -LoopId dispatch refuses a continuation" $runnable 'resume_refused_review_class' @(
+        '-LoopId', 'smoke-loop', '-ModelClass', 'translator_prose', '-ResumeDispatchId', 'heron-1', '-Mode', 'ReviewReadOnly', '-PromptText', 'noop')
+    Test-ContinuationRefusal "Codex: absent source run named" $runnable 'resume_source_not_found' @(
+        '-NonReviewDispatch', '-ModelClass', 'translator_prose', '-ResumeDispatchId', 'no-such-run-1', '-PromptText', 'noop')
+
+    if (-not $script:ClaudeRunnable -or -not (Test-Path -LiteralPath $script:ClaudeRunnable)) {
+        Write-TestResult "Claude wrapper path resolve" $false "Invoke-ClaudeDispatch.ps1 not found beside the Codex wrapper" 0
+    } else {
+        $sw.Restart()
+        try {
+            $null = [scriptblock]::Create((Get-Content -LiteralPath $script:ClaudeRunnable -Raw))
+            Write-TestResult "Claude wrapper parses as PowerShell" $true $script:ClaudeRunnable $sw.Elapsed.TotalSeconds
+        } catch {
+            Write-TestResult "Claude wrapper parses as PowerShell" $false "$_" $sw.Elapsed.TotalSeconds
+        }
+        Test-ContinuationRefusal "Claude: -ResumeDispatchId + -ForkDispatchId rejected" $script:ClaudeRunnable 'resume_fork_exclusive' @(
+            '-ModelClass', 'creative_prose', '-ResumeDispatchId', 'osprey-1', '-ForkDispatchId', 'osprey-2', '-PromptText', 'noop', '-ValidateOnly')
+        Test-ContinuationRefusal "Claude: fallback_reviewer refuses a continuation" $script:ClaudeRunnable 'resume_refused_review_class' @(
+            '-ModelClass', 'fallback_reviewer', '-ResumeDispatchId', 'osprey-1', '-PromptText', 'noop', '-ValidateOnly')
+        Test-ContinuationRefusal "Claude: absent source run named" $script:ClaudeRunnable 'resume_source_not_found' @(
+            '-ModelClass', 'creative_prose', '-ResumeDispatchId', 'no-such-run-1', '-PromptText', 'noop', '-ValidateOnly')
+    }
 
     # --- dispatch kind + the execution-review timeout floor -------------------
     # The kind comes from the mode the ledger recorded at `begin`, so these arms open real
@@ -780,14 +855,19 @@ exit 0
 # --- Test 1: Codex Validation (live; opt-in; no length false-pass) ---
 
 function Test-CodexValidation {
-    Write-TestHeader "Codex CLI -- Validation (GPT-5.5, reasoning=high)"
+    Write-TestHeader "Codex CLI -- Validation (translator_prose class through Invoke-CodexDispatch.ps1, reasoning=high)"
 
     $dir = Get-OutputDir
     if (-not $dir) { Write-TestResult "Codex Validation" $false $script:OutputDirError 0; return }
 
-    $outputFile = "$dir\codex-val-output.md"
+    $wrapper = Resolve-WrapperPath
+    if (-not $wrapper) { Write-TestResult "Codex Validation" $false "Invoke-CodexDispatch.ps1 not found from test location" 0; return }
+
+    $outDir = $dir.Replace('\', '/')
+    $dispatchId = New-SmokeDispatchId 'codex-val'
+    $runDir = "$outDir/$dispatchId"
+    $promptFile = "$outDir/codex-val-prompt.txt"
     $logFile = "$dir\codex-val-log.txt"
-    Clean-File $outputFile
     Clean-File $logFile
 
     $prompt = @"
@@ -809,37 +889,42 @@ def fibonacci(n):
 
 Report: VERDICT (PASS or CHANGES_REQUIRED), then a 1-line SUMMARY.
 "@
+    Set-Content -LiteralPath $promptFile -Value $prompt -Encoding utf8
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     try {
-        $run = Start-CliWithTimeout -FilePath "codex" -ArgumentList @(
-            "exec",
-            "-C", "{{PROJECT_ROOT}}",
-            "-s", "danger-full-access",
-            "-c", "model_reasoning_effort=high",
-            "-o", $outputFile,
-            $prompt
-        ) -StdOut "$logFile.stdout" -StdErr "$logFile.stderr" -TimeoutSec 300
+        # danger-full-access, as before: the Windows sandbox helper blocks the read-only modes.
+        # A non-review class with -NonReviewDispatch: this is a smoke run, not a review loop.
+        pwsh -NoProfile -File $wrapper `
+            -NonReviewDispatch `
+            -ModelClass translator_prose `
+            -Mode FullAccess `
+            -FullAccessJustification "CLI dispatch smoke test; the Windows sandbox helper blocks the read-only modes" `
+            -ReasoningEffort high `
+            -Retention Keep `
+            -TimeoutSec 300 `
+            -DispatchId $dispatchId `
+            -OutputDir $outDir `
+            -PromptFile $promptFile `
+            *> $logFile
+        $dispatchExit = $LASTEXITCODE
 
         $sw.Stop()
 
-        # Reported before the content checks, and separately from them: a timeout that
-        # left a partial -o file behind would otherwise be judged on that partial
-        # content and could report PASS on a run that was killed.
-        if ($run.TimedOut) {
-            Write-TestResult "Codex Validation" $false "codex did not exit within 300s; process tree killed" $sw.Elapsed.TotalSeconds
-            return
-        }
-        if ($run.ExitCode -ne 0) {
-            Write-TestResult "Codex Validation" $false "codex exited $($run.ExitCode) -- see $logFile.stderr" $sw.Elapsed.TotalSeconds
-            return
-        }
-
-        if (Test-Path $outputFile) {
+        $outputFile = "$runDir/final.md"
+        # A resumable run records its session: status.json session_id must be a UUID.
+        $sessionId = Get-StatusSessionId $runDir
+        $parsedSid = [guid]::Empty
+        $sidIsUuid = [guid]::TryParse($sessionId, [ref]$parsedSid)
+        if ($dispatchExit -ne 0) {
+            Write-TestResult "Codex Validation" $false "Invoke-CodexDispatch.ps1 exited $dispatchExit (see $logFile)" $sw.Elapsed.TotalSeconds
+        } elseif (-not $sidIsUuid) {
+            Write-TestResult "Codex Validation" $false "status.json in $runDir has no UUID session_id" $sw.Elapsed.TotalSeconds
+        } elseif (Test-Path $outputFile) {
             $content = Get-Content $outputFile -Raw
             if ($content -match "VERDICT.*PASS" -or $content -match "(?m)^VERDICT:\s*PASS") {
-                Write-TestResult "Codex Validation" $true "VERDICT PASS found ($($content.Length) chars)" $sw.Elapsed.TotalSeconds
+                Write-TestResult "Codex Validation" $true "VERDICT PASS found ($($content.Length) chars); session_id $sessionId" $sw.Elapsed.TotalSeconds
             } else {
                 Write-TestResult "Codex Validation" $false "No VERDICT PASS in output ($($content.Length) chars) -- length alone is not a pass" $sw.Elapsed.TotalSeconds
             }
@@ -915,15 +1000,25 @@ function Test-CodexImageGen {
 
 function Test-ClaudeCreativeWriting {
     $model = Get-ClassModel -Class 'creative_prose' -Harness 'claude-p'
-    Write-TestHeader "Claude Code -- Creative Writing ($model)"
+    Write-TestHeader "Claude Code -- Creative Writing ($model, through Invoke-ClaudeDispatch.ps1)"
 
     $dir = Get-OutputDir
     if (-not $dir) { Write-TestResult "Claude Creative Writing" $false $script:OutputDirError 0; return }
 
-    $outputFile = "$dir\claude-writing-output.txt"
+    $wrapper = Resolve-WrapperPath -Name 'Invoke-ClaudeDispatch.ps1'
+    if (-not $wrapper) { Write-TestResult "Claude Creative Writing" $false "Invoke-ClaudeDispatch.ps1 not found from test location" 0; return }
+
+    $outDir = $dir.Replace('\', '/')
+    $dispatchId = New-SmokeDispatchId 'claude-writing'
+    $runDir = "$outDir/$dispatchId"
+    $promptFile = "$outDir/claude-writing-prompt.txt"
     $logFile = "$dir\claude-writing-log.txt"
-    Clean-File $outputFile
     Clean-File $logFile
+
+    # A scratch working directory: a session started in the repository would land
+    # in the repository's own session store, where another lane may continue it.
+    $workDir = "$dir\claude-writing-workdir"
+    Ensure-Dir $workDir
 
     $prompt = @"
 Write in a natural, human-like tone. Avoid bullet points, numbered lists,
@@ -933,44 +1028,40 @@ Write a short paragraph (50-80 words) describing a sunrise over a mountain lake.
 Focus on sensory details -- what you see, hear, and feel. Write as a skilled human
 nature writer would.
 "@
+    Set-Content -LiteralPath $promptFile -Value $prompt -Encoding utf8
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     try {
-        # Use cmd to pipe NUL to stdin
-        $cmdLine = "echo. | claude -p --model $model --permission-mode plan --output-format json --max-turns 5 --max-budget-usd 2 `"$($prompt -replace '"', '\"')`""
-
-        $null | claude -p `
-            --model $model `
-            --permission-mode plan `
-            --output-format json `
-            --max-turns 5 `
-            --max-budget-usd 2 `
-            $prompt `
-            *> $outputFile
+        pwsh -NoProfile -File $wrapper `
+            -ModelClass creative_prose `
+            -PermissionMode plan `
+            -MaxBudgetUsd 2 `
+            -TimeoutSec 300 `
+            -DispatchId $dispatchId `
+            -OutputDir $outDir `
+            -PromptFile $promptFile `
+            -WorkingDirectory $workDir `
+            *> $logFile
+        $dispatchExit = $LASTEXITCODE
 
         $sw.Stop()
 
-        if (Test-Path $outputFile) {
-            $raw = Get-Content $outputFile -Raw -Encoding Unicode
-            if ($null -eq $raw -or $raw.Length -lt 10) {
-                $raw = Get-Content $outputFile -Raw
-            }
-
-            if ($null -ne $raw -and $raw.Length -gt 20) {
-                try {
-                    $json = $raw | ConvertFrom-Json
-                    $result = $json.result
-                    if ([string]::IsNullOrWhiteSpace([string]$result)) {
-                        Write-TestResult "Claude Creative Writing" $false "JSON missing non-empty result field" $sw.Elapsed.TotalSeconds
-                    } else {
-                        Write-TestResult "Claude Creative Writing" $true "Output: $($result.Substring(0, [Math]::Min(80, $result.Length)))..." $sw.Elapsed.TotalSeconds
-                    }
-                } catch {
-                    Write-TestResult "Claude Creative Writing" $false "Output not valid JSON ($($raw.Length) chars)" $sw.Elapsed.TotalSeconds
-                }
+        $outputFile = "$runDir/final.md"
+        # A resumable run records its session: status.json session_id must be a UUID.
+        $sessionId = Get-StatusSessionId $runDir
+        $parsedSid = [guid]::Empty
+        $sidIsUuid = [guid]::TryParse($sessionId, [ref]$parsedSid)
+        if ($dispatchExit -ne 0) {
+            Write-TestResult "Claude Creative Writing" $false "Invoke-ClaudeDispatch.ps1 exited $dispatchExit (see $logFile)" $sw.Elapsed.TotalSeconds
+        } elseif (-not $sidIsUuid) {
+            Write-TestResult "Claude Creative Writing" $false "status.json in $runDir has no UUID session_id" $sw.Elapsed.TotalSeconds
+        } elseif (Test-Path $outputFile) {
+            $result = [string](Get-Content $outputFile -Raw)
+            if ($result.Trim().Length -le 20) {
+                Write-TestResult "Claude Creative Writing" $false "Output too short ($($result.Length) chars)" $sw.Elapsed.TotalSeconds
             } else {
-                Write-TestResult "Claude Creative Writing" $false "Output too short ($($raw.Length) chars)" $sw.Elapsed.TotalSeconds
+                Write-TestResult "Claude Creative Writing" $true "Output: $($result.Substring(0, [Math]::Min(80, $result.Length)))...; session_id $sessionId" $sw.Elapsed.TotalSeconds
             }
         } else {
             Write-TestResult "Claude Creative Writing" $false "Output file not created" $sw.Elapsed.TotalSeconds

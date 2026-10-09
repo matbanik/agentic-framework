@@ -120,13 +120,46 @@ param(
 
     # Minimum allowed Codex CLI semver (x.y.z). Preflight fails closed below this.
     [Parameter(Mandatory = $false)]
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [ValidatePattern('^\d+\.\d+\.\d+\z')]
     [string]$MinCodexCliVersion = '0.145.0',
 
     # Emergency/test escape hatch -- do not use for production reviews.
     [Parameter(Mandatory = $false)]
-    [switch]$SkipCodexVersionCheck
+    [switch]$SkipCodexVersionCheck,
+
+    # Continue the Codex session of an earlier dispatch in the same OutputDir.
+    # The session ID is read from <OutputDir>/<id>/status.json. Review classes
+    # and review-loop dispatches are refused, so every review round starts fresh.
+    [Parameter(Mandatory = $false)]
+    [string]$ResumeDispatchId,
+
+    # Branch a new Codex session from an earlier dispatch's session. Same
+    # source rules and refusals as -ResumeDispatchId; the two are exclusive.
+    [Parameter(Mandatory = $false)]
+    [string]$ForkDispatchId
 )
+
+# The single canonical set of classes whose sessions are never continued
+# (resume or fork), as target or as source. A review must not inherit an
+# earlier session's context. The default -ModelClass is in the set, so a
+# caller who forgets -ModelClass is refused.
+$ResumeReviewDenyClasses = @(
+    'independent_reviewer',
+    'fallback_reviewer',
+    'peer_reviewer',
+    'checklist_validator'
+)
+
+# Write a named continuation refusal on stderr and stop with exit 1. Every
+# refusal runs before the run directory exists and before Codex is resolved.
+function Stop-ContinuationRefused {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Detail
+    )
+    [Console]::Error.WriteLine("${Name}: $Detail")
+    exit 1
+}
 
 # Helper to write UTF-8 text without BOM
 function Write-TextNoBom {
@@ -220,6 +253,84 @@ function Get-KindTimeoutFloorSec {
     }
 }
 
+# Read a version child's stdout and stderr under one deadline. Both streams are
+# read at the same time, so a full stderr pipe cannot block stdout. A child that
+# is still running at the deadline is killed with its whole tree, and $null is
+# returned. A grandchild can keep a pipe open after the child exits, so the
+# reads are also bounded.
+function Read-VersionProcessOutput {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory = $true)][int]$TimeoutMs
+    )
+    $outTask = $Process.StandardOutput.ReadToEndAsync()
+    $errTask = $Process.StandardError.ReadToEndAsync()
+    if (-not $Process.WaitForExit($TimeoutMs)) {
+        Stop-DispatchProcessTree -Process $Process
+        return $null
+    }
+    try {
+        $null = [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($outTask, $errTask), 5000)
+    } catch {
+        [Console]::Error.WriteLine("Version output read failed: $($_.Exception.Message)")
+    }
+    $out = ''
+    $err = ''
+    if ($outTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) { $out = $outTask.Result }
+    if ($errTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) { $err = $errTask.Result }
+    return @{ Out = $out; Err = $err }
+}
+
+# cmd.exe expands %NAME% anywhere in its command line, also inside quotes, so a
+# literal path that holds a percent sign would name another file. Each word and
+# each redirect target goes in through its own environment variable: cmd.exe
+# expands a reference once and does not scan the result again, and /v:off keeps
+# !NAME! literal. A .cmd or .bat shim runs directly in this cmd.exe; a nested
+# 'cmd.exe /c' would parse the expanded path a second time. Returns the start
+# info and a log text (the command line, then each variable and its value).
+function New-CmdStartInfo {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Command,
+        [string]$StdinPath,
+        [string]$StdoutPath,
+        [string]$StderrPath
+    )
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'cmd.exe'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $log = New-Object System.Collections.Generic.List[string]
+    $words = @()
+    for ($i = 0; $i -lt $Command.Count; $i++) {
+        if ($Command[$i] -eq '') {
+            # cmd.exe leaves a reference to an empty variable unexpanded.
+            $words += '""'
+            continue
+        }
+        $name = "{{PROJECT_NAME_UPPER}}_DISPATCH_ARG$i"
+        # Inner quotes are escaped for the CLI's own argv parser.
+        $psi.EnvironmentVariables[$name] = $Command[$i] -replace '"', '\"'
+        $words += "`"%$name%`""
+        $log.Add("$name=$($Command[$i])")
+    }
+    $line = $words -join ' '
+    $redirects = @(
+        @('<', '{{PROJECT_NAME_UPPER}}_DISPATCH_STDIN', $StdinPath),
+        @('>', '{{PROJECT_NAME_UPPER}}_DISPATCH_STDOUT', $StdoutPath),
+        @('2>', '{{PROJECT_NAME_UPPER}}_DISPATCH_STDERR', $StderrPath)
+    )
+    foreach ($redirect in $redirects) {
+        if (-not [string]::IsNullOrEmpty($redirect[2])) {
+            $psi.EnvironmentVariables[$redirect[1]] = $redirect[2]
+            $line += " $($redirect[0]) `"%$($redirect[1])%`""
+            $log.Add("$($redirect[1])=$($redirect[2])")
+        }
+    }
+    $psi.Arguments = '/v:off /s /c "' + $line + '"'
+    $log.Insert(0, $psi.Arguments)
+    return @{ StartInfo = $psi; Log = ($log -join "`n") }
+}
+
 function Get-CodexCliVersionString {
     param(
         [Parameter(Mandatory = $true)][string]$ResolvedExecutable,
@@ -238,28 +349,38 @@ function Get-CodexCliVersionString {
             $versionArgsList = @('-NoProfile', '-File', $ResolvedExecutable, '--version')
         }
     } elseif ($Extension -match '^\.(cmd|bat)$') {
-        $versionFilePath = 'cmd.exe'
-        $versionArgsList = @('/c', $ResolvedExecutable, '--version')
+        # The shim runs in cmd.exe; New-CmdStartInfo keeps its path literal.
+        $versionFilePath = $null
+        $versionArgsList = @($ResolvedExecutable, '--version')
     }
 
-    $versionPsi = New-Object System.Diagnostics.ProcessStartInfo
-    $versionPsi.FileName = $versionFilePath
-    $escapedVersionArgs = @()
-    foreach ($arg in $versionArgsList) {
-        $escaped = $arg -replace '"', '\"'
-        $escapedVersionArgs += "`"$escaped`""
+    if ($null -eq $versionFilePath) {
+        $versionPsi = (New-CmdStartInfo -Command $versionArgsList).StartInfo
+    } else {
+        $versionPsi = New-Object System.Diagnostics.ProcessStartInfo
+        $versionPsi.FileName = $versionFilePath
+        $escapedVersionArgs = @()
+        foreach ($arg in $versionArgsList) {
+            $escaped = $arg -replace '"', '\"'
+            $escapedVersionArgs += "`"$escaped`""
+        }
+        $versionPsi.Arguments = $escapedVersionArgs -join " "
+        $versionPsi.UseShellExecute = $false
+        $versionPsi.CreateNoWindow = $true
     }
-    $versionPsi.Arguments = $escapedVersionArgs -join " "
-    $versionPsi.UseShellExecute = $false
     $versionPsi.RedirectStandardOutput = $true
     $versionPsi.RedirectStandardError = $true
-    $versionPsi.CreateNoWindow = $true
 
     $versionProc = [System.Diagnostics.Process]::Start($versionPsi)
-    $versionOut = $versionProc.StandardOutput.ReadToEnd()
-    $versionErr = $versionProc.StandardError.ReadToEnd()
-    $null = $versionProc.WaitForExit(5000)
-    $combined = (($versionOut + "`n" + $versionErr)).Trim()
+    try {
+        $streams = Read-VersionProcessOutput -Process $versionProc -TimeoutMs 5000
+    } finally {
+        $versionProc.Dispose()
+    }
+    if ($null -eq $streams) {
+        return 'unknown'
+    }
+    $combined = ($streams.Out + "`n" + $streams.Err).Trim()
     if ([string]::IsNullOrWhiteSpace($combined)) {
         return 'unknown'
     }
@@ -319,6 +440,15 @@ function Test-DispatchTerminalAndFinal {
     return ($hasTerminal -and $hasFinal)
 }
 
+# Windows drops trailing dots and spaces from a path name and compares names
+# without case, so 'source', 'Source' and 'source.' name one directory. Two
+# paths name the same directory when their keys are equal.
+function Get-RunDirIdentityKey {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $names = $Path.Replace('\', '/').Split('/') | ForEach-Object { $_.TrimEnd('.', ' ') }
+    return ($names -join '/').ToUpperInvariant()
+}
+
 function Get-PhysicalPath {
     param(
         [string]$path,
@@ -330,7 +460,15 @@ function Get-PhysicalPath {
     }
 
     $cleanPath = $path.Replace('\', '/')
-    $absPath = [System.IO.Path]::GetFullPath($cleanPath).Replace('\', '/')
+    # Under Windows PowerShell GetFullPath throws on an illegal character or a
+    # colon after the drive, and that error does not stop the script: $absPath
+    # would stay empty and the walk below would return the drive root.
+    try {
+        $absPath = [System.IO.Path]::GetFullPath($cleanPath).Replace('\', '/')
+    }
+    catch {
+        throw "Not a valid path: $path"
+    }
 
     if (-not $seen.Add($absPath)) {
         throw "Circular reparse-point path detected: $absPath"
@@ -387,6 +525,27 @@ function Get-PhysicalPath {
     return [System.IO.Path]::GetFullPath($resolved).Replace('\', '/')
 }
 
+# Every path argument is checked once, before any use. The characters below
+# are illegal in a Windows path under both PowerShell editions; GetFullPath
+# catches the rest, such as a colon after the drive under Windows PowerShell.
+# Without this check a bad value became an empty path, which Get-PhysicalPath
+# turned into the drive root.
+function Assert-PathArgument {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string]$Value
+    )
+    if ([string]::IsNullOrEmpty($Value)) { return }
+    $valid = $Value.IndexOfAny([char[]]((0..31) + 34, 60, 62, 124)) -lt 0
+    if ($valid) {
+        try { [void][System.IO.Path]::GetFullPath($Value) } catch { $valid = $false }
+    }
+    if (-not $valid) {
+        [Console]::Error.WriteLine("$Name is not a valid path: $Value")
+        exit 1
+    }
+}
+
 # 1. Parameter Validation
 if ([string]::IsNullOrEmpty($PromptText) -and [string]::IsNullOrEmpty($PromptFile)) {
     [Console]::Error.WriteLine("Either -PromptText or -PromptFile must be specified.")
@@ -395,6 +554,45 @@ if ([string]::IsNullOrEmpty($PromptText) -and [string]::IsNullOrEmpty($PromptFil
 if (-not [string]::IsNullOrEmpty($PromptText) -and -not [string]::IsNullOrEmpty($PromptFile)) {
     [Console]::Error.WriteLine("Cannot specify both -PromptText and -PromptFile.")
     exit 1
+}
+Assert-PathArgument -Name 'PromptFile' -Value $PromptFile
+Assert-PathArgument -Name 'OutputDir' -Value $OutputDir
+Assert-PathArgument -Name 'WorkingDirectory' -Value $WorkingDirectory
+Assert-PathArgument -Name 'OutputSchema' -Value $OutputSchema
+Assert-PathArgument -Name 'BenchmarkContextReceipt' -Value $BenchmarkContextReceipt
+
+# Continuation switches (resume / fork). The argument checks that need no
+# source run directory run here, before the review-loop gate and model
+# resolution, so a review gets the named refusal and not a later error.
+# -LoopId and -Kind exist only for reviews, so either one is a refusal too:
+# a continuation must be a -NonReviewDispatch.
+$resumeRequested = $PSBoundParameters.ContainsKey('ResumeDispatchId')
+$forkRequested = $PSBoundParameters.ContainsKey('ForkDispatchId')
+$continuationMode = 'fresh'
+$sourceDispatchId = $null
+if ($resumeRequested -and $forkRequested) {
+    Stop-ContinuationRefused -Name 'resume_fork_exclusive' `
+        -Detail 'specify -ResumeDispatchId or -ForkDispatchId, not both'
+}
+if ($resumeRequested) {
+    $continuationMode = 'resume'
+    $sourceDispatchId = $ResumeDispatchId
+}
+elseif ($forkRequested) {
+    $continuationMode = 'fork'
+    $sourceDispatchId = $ForkDispatchId
+}
+if ($continuationMode -ne 'fresh') {
+    if ($BenchmarkIsolation) {
+        Stop-ContinuationRefused -Name 'resume_refused_benchmark' `
+            -Detail 'a benchmark run must start from a fresh session'
+    }
+    if ($ResumeReviewDenyClasses -contains $ModelClass -or
+        -not [string]::IsNullOrWhiteSpace($Kind) -or
+        -not [string]::IsNullOrWhiteSpace($LoopId)) {
+        Stop-ContinuationRefused -Name 'resume_refused_review_class' `
+            -Detail "class '$ModelClass' kind '$Kind' loop '$LoopId' is a review; every review round starts fresh"
+    }
 }
 
 # Review-loop bound (see tools/review_ledger.py and
@@ -538,7 +736,7 @@ if ($modelWasGiven -and [string]::IsNullOrEmpty($Model)) {
     [Console]::Error.WriteLine("Model must be specified.")
     exit 1
 }
-if ($modelWasGiven -and $Model -notmatch '^[a-zA-Z0-9.-]+$') {
+if ($modelWasGiven -and $Model -notmatch '^[a-zA-Z0-9.-]+\z') {
     [Console]::Error.WriteLine("Invalid Model format.")
     exit 1
 }
@@ -686,7 +884,7 @@ if ($BenchmarkIsolation) {
         [Console]::Error.WriteLine("BenchmarkIsolation requires BenchmarkContextReceipt.")
         exit 1
     }
-    if ($BenchmarkContextSha256 -notmatch '^[0-9a-f]{64}$') {
+    if ($BenchmarkContextSha256 -notmatch '^[0-9a-f]{64}\z') {
         [Console]::Error.WriteLine("BenchmarkIsolation requires a lowercase SHA-256 context hash.")
         exit 1
     }
@@ -706,7 +904,7 @@ if ($BenchmarkIsolation) {
 
 # Validate DispatchId
 if (-not [string]::IsNullOrEmpty($DispatchId)) {
-    if ($DispatchId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') {
+    if ($DispatchId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}\z') {
         [Console]::Error.WriteLine("Invalid DispatchId format.")
         exit 1
     }
@@ -743,7 +941,7 @@ if ($Mode -eq 'FullAccess') {
 
 # Validate ApiKeyEnvVar
 if (-not [string]::IsNullOrEmpty($ApiKeyEnvVar)) {
-    if ($ApiKeyEnvVar -notmatch '^[A-Z_][A-Z0-9_]*$') {
+    if ($ApiKeyEnvVar -notmatch '^[A-Z_][A-Z0-9_]*\z') {
         [Console]::Error.WriteLine("Invalid ApiKeyEnvVar format.")
         exit 1
     }
@@ -809,11 +1007,100 @@ if ($BenchmarkIsolation) {
     }
 }
 
-# Resolve CodexExecutable
+# Continuation source. The source is an earlier run directory in the same
+# OutputDir; its status.json supplies the session to continue. Every check
+# runs before Codex is resolved and before the run directory exists.
+$sourceSessionId = $null
+if ($continuationMode -ne 'fresh') {
+    if ([string]::IsNullOrEmpty($sourceDispatchId) -or
+        $sourceDispatchId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}\z') {
+        Stop-ContinuationRefused -Name 'resume_source_invalid' `
+            -Detail "source dispatch ID '$sourceDispatchId' is not a valid dispatch ID"
+    }
+    if ($sourceDispatchId -eq $DispatchId) {
+        Stop-ContinuationRefused -Name 'resume_source_is_target' `
+            -Detail "source '$sourceDispatchId' is the target run; use a new -DispatchId"
+    }
+    $sourceRunDir = Get-PhysicalPath ([System.IO.Path]::GetFullPath((Join-Path $canonicalOutputDir $sourceDispatchId)))
+    if (-not $sourceRunDir.StartsWith($canonicalOutputDir + "/", [System.StringComparison]::OrdinalIgnoreCase)) {
+        Stop-ContinuationRefused -Name 'resume_source_invalid' `
+            -Detail "source '$sourceDispatchId' resolves outside OutputDir"
+    }
+    # A target that names the source directory under another spelling would be
+    # deleted by -Force and rewritten, so the source would be lost.
+    $targetRunDir = Get-PhysicalPath ([System.IO.Path]::GetFullPath((Join-Path $canonicalOutputDir $DispatchId)))
+    if ([string]::Equals((Get-RunDirIdentityKey $targetRunDir), (Get-RunDirIdentityKey $sourceRunDir),
+            [System.StringComparison]::Ordinal)) {
+        Stop-ContinuationRefused -Name 'resume_source_is_target' `
+            -Detail "target '$DispatchId' names the source run directory '$sourceDispatchId'; use a new -DispatchId"
+    }
+    $sourceStatusPath = Join-Path $sourceRunDir 'status.json'
+    if (-not (Test-Path -LiteralPath $sourceStatusPath -PathType Leaf)) {
+        Stop-ContinuationRefused -Name 'resume_source_not_found' `
+            -Detail "no status.json for source '$sourceDispatchId' at $sourceStatusPath"
+    }
+    try {
+        $sourceStatus = Get-Content -LiteralPath $sourceStatusPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Stop-ContinuationRefused -Name 'resume_source_invalid' `
+            -Detail "source status.json does not parse: $($_.Exception.Message)"
+    }
+    if ($null -eq $sourceStatus -or $sourceStatus -isnot [System.Management.Automation.PSCustomObject]) {
+        Stop-ContinuationRefused -Name 'resume_source_invalid' `
+            -Detail 'source status.json is not a JSON object'
+    }
+    $sourceProps = $sourceStatus.PSObject.Properties
+    $sourceClass = if ($sourceProps['model_class']) { $sourceProps['model_class'].Value } else { $null }
+    $sourceKind = if ($sourceProps['dispatch_kind']) { $sourceProps['dispatch_kind'].Value } else { $null }
+    $sourceCli = if ($sourceProps['cli']) { $sourceProps['cli'].Value } else { $null }
+    $sourceSid = if ($sourceProps['session_id']) { $sourceProps['session_id'].Value } else { $null }
+    $sourceWorkDir = if ($sourceProps['working_directory']) { $sourceProps['working_directory'].Value } else { $null }
+    # dispatch_kind is 'non-review' for a -NonReviewDispatch run and the ledger
+    # mode (plan, execution, ...) for a review-loop run.
+    if (($sourceClass -is [string] -and $ResumeReviewDenyClasses -contains $sourceClass) -or
+        ($null -ne $sourceKind -and $sourceKind -cne 'non-review')) {
+        Stop-ContinuationRefused -Name 'resume_refused_review_class' `
+            -Detail "source class '$sourceClass' kind '$sourceKind' is a review session"
+    }
+    if ($sourceCli -cne 'codex') {
+        Stop-ContinuationRefused -Name 'resume_source_cli_mismatch' `
+            -Detail "source cli '$sourceCli' is not 'codex'"
+    }
+    if ($null -eq $sourceSid -or ($sourceSid -is [string] -and $sourceSid.Length -eq 0)) {
+        Stop-ContinuationRefused -Name 'resume_source_missing_session_id' `
+            -Detail "source '$sourceDispatchId' recorded no session_id"
+    }
+    if ($sourceSid -isnot [string] -or
+        $sourceSid -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z') {
+        Stop-ContinuationRefused -Name 'resume_source_invalid_session_id' `
+            -Detail "source session_id '$sourceSid' is not a UUID"
+    }
+    $sourceWorkNorm = if ($sourceWorkDir -is [string]) { $sourceWorkDir.Replace('\', '/').TrimEnd('/') } else { '' }
+    $targetWorkNorm = $canonicalWorkDir.Replace('\', '/').TrimEnd('/')
+    if (-not [string]::Equals($sourceWorkNorm, $targetWorkNorm, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Stop-ContinuationRefused -Name 'resume_source_workdir_mismatch' `
+            -Detail "source working_directory '$sourceWorkDir' differs from '$canonicalWorkDir'"
+    }
+    if ($sourceClass -cne $ModelClass) {
+        Stop-ContinuationRefused -Name 'resume_source_class_mismatch' `
+            -Detail "source class '$sourceClass' differs from target class '$ModelClass'"
+    }
+    $sourceSessionId = $sourceSid
+}
+
+# Resolve CodexExecutable. Under Windows PowerShell GetFullPath throws on a
+# value that is not a path (an illegal character, or quotes kept around it);
+# such a value is refused like a missing file.
 $resolvedExecutable = ""
 if ($CodexExecutable -match '[\\/]') {
-    $resolvedExecutable = [System.IO.Path]::GetFullPath($CodexExecutable)
-    if (-not (Test-Path $resolvedExecutable)) {
+    try {
+        $resolvedExecutable = [System.IO.Path]::GetFullPath($CodexExecutable)
+    } catch {
+        $resolvedExecutable = ""
+    }
+    if ([string]::IsNullOrEmpty($resolvedExecutable) -or -not (Test-Path -LiteralPath $resolvedExecutable)) {
         [Console]::Error.WriteLine("Executable not found: $CodexExecutable")
         exit 1
     }
@@ -927,6 +1214,11 @@ if ($Mode -ne 'FullAccess') {
     # TMPDIR is usually under %LOCALAPPDATA%\Temp, not C:/Temp).
     $argsList += @("-c", "sandbox_workspace_write.writable_roots=[`"$tempWritableRoot`"]")
 }
+if ($continuationMode -ne 'fresh') {
+    # `codex exec resume|fork <SESSION_ID>`: the exec options above stay before
+    # the subcommand (probe: codex_exec_options_before_subcommand = accepted).
+    $argsList += @($continuationMode, $sourceSessionId)
+}
 $finalOutputFileName = if (-not [string]::IsNullOrEmpty($OutputSchema)) { "final.json" } else { "final.md" }
 $finalOutputPath = "$runDir/$finalOutputFileName"
 
@@ -994,32 +1286,35 @@ if ($ext -eq '.ps1') {
         $processFilePath = 'powershell'
         $processArgsList = @('-NoProfile', '-File', $resolvedExecutable) + $argsList
     }
-} elseif ($ext -match '^\.(cmd|bat)$') {
-    $processFilePath = 'cmd.exe'
-    $processArgsList = @('/c', $resolvedExecutable) + $argsList
 }
+# A .cmd/.bat shim runs directly in the cmd.exe of New-CmdStartInfo.
 
-# Escape all arguments for cmd.exe shell execution by double-quoting them and escaping inner quotes
-$escapedArgs = @()
-foreach ($arg in $processArgsList) {
-    $escaped = $arg -replace '"', '\"'
-    $escapedArgs += "`"$escaped`""
+$launchCmd = New-CmdStartInfo -Command (@($processFilePath) + @($processArgsList)) `
+    -StdinPath $promptTempFile -StdoutPath "$runDir/events.jsonl" -StderrPath "$runDir/stderr.txt"
+$psi = $launchCmd.StartInfo
+if ($continuationMode -ne 'fresh') {
+    # The session lookup and the tools then see the same directory, whatever
+    # the CLI does with -C on a continuation (checked equal to the source above).
+    $psi.WorkingDirectory = $canonicalWorkDir
 }
-$cmdArgsStr = $escapedArgs -join " "
-
-# Build cmd.exe redirect command line using /s /c and safe concatenation to avoid quote nesting syntax issues
-$cmdLine = "/s /c `"`"" + $processFilePath + "`" " + $cmdArgsStr + " < `"" + $promptTempFile + "`" > `"" + $runDir + "/events.jsonl`" 2> `"" + $runDir + "/stderr.txt`"`""
-
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = "cmd.exe"
-$psi.Arguments = $cmdLine
-$psi.UseShellExecute = $false
-$psi.CreateNoWindow = $true
 
 # Log the command line for debugging
-Write-TextNoBom "$runDir/cmd_line.txt" $cmdLine
+Write-TextNoBom "$runDir/cmd_line.txt" $launchCmd.Log
 
-$proc = [System.Diagnostics.Process]::Start($psi)
+# A launch that fails stops here: polling a process that never started would
+# wait through -TimeoutSec and then report a timeout.
+$proc = $null
+try {
+    $proc = [System.Diagnostics.Process]::Start($psi)
+} catch {
+    $proc = $null
+    [Console]::Error.WriteLine("Codex launch failed: $($_.Exception.Message)")
+}
+if ($null -eq $proc) {
+    Remove-Item -LiteralPath $promptTempFile -ErrorAction SilentlyContinue
+    [Console]::Error.WriteLine("Codex launch failed: no process started")
+    exit 1
+}
 
 # Poll for terminal event or process exit or timeout. $TimeoutSec was resolved next to
 # the ledger gate (effort default, then the kind floor) so -GateOnly can report it and a
@@ -1112,6 +1407,7 @@ $terminalEventCount = 0
 $terminalEventType = ""
 $errorSummary = ""
 $hasMalformedLine = $false
+$threadStartedId = $null
 $eventsFile = "$runDir/events.jsonl"
 if (Test-Path $eventsFile) {
     $lines = Get-Content $eventsFile
@@ -1119,6 +1415,14 @@ if (Test-Path $eventsFile) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         try {
             $evt = $line | ConvertFrom-Json
+            # The first thread.started event names the session this run used;
+            # it is the ID a later -ResumeDispatchId / -ForkDispatchId reads, so
+            # only a value that the source check accepts is recorded.
+            if ($null -eq $threadStartedId -and $evt.type -eq "thread.started" -and
+                $evt.thread_id -is [string] -and
+                $evt.thread_id -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z') {
+                $threadStartedId = $evt.thread_id
+            }
             if ($evt.type -eq "turn.completed" -or $evt.type -eq "turn.failed") {
                 $terminalEventCount++
                 $terminalEventType = $evt.type
@@ -1357,6 +1661,14 @@ $statusManifest = [ordered]@{
     # whatever the global registry said that day.
     overlay_path = $overlayPath
     resolution = $modelResolution
+    # Session record. A later -ResumeDispatchId / -ForkDispatchId reads cli,
+    # dispatch_kind, model_class, working_directory and session_id from here.
+    cli = "codex"
+    session_id = $threadStartedId
+    session_id_source = if ($null -ne $threadStartedId) { "event" } else { "none" }
+    session_mode = $continuationMode
+    source_dispatch_id = $sourceDispatchId
+    source_session_id = $sourceSessionId
     effort_clamped = $effortClamped
     # The review-loop bound, recorded so a bypass leaves a trace. `bypassed-non-review`
     # in a receipt whose prompt was plainly a review is the audit signal.
@@ -1420,7 +1732,8 @@ $statusManifest = [ordered]@{
         effective_codex_home = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
             [System.IO.Path]::GetFullPath((Join-Path $HOME ".codex")).Replace('\', '/')
         } else {
-            [System.IO.Path]::GetFullPath($env:CODEX_HOME).Replace('\', '/')
+            try { [System.IO.Path]::GetFullPath($env:CODEX_HOME).Replace('\', '/') }
+            catch { $env:CODEX_HOME }
         }
         allowlisted_keys = @("CODEX_HOME", "HOME", "PATH", "USERPROFILE")
     }

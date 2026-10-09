@@ -1,6 +1,6 @@
 ---
 name: CLI Dispatch
-description: Route specialized tasks to external CLI agents — Codex (validation/images), Claude (creative writing/critical decisions), headless `claude -p` (isolated worker) — and collect results back to the orchestrator.
+description: Route specialized tasks to external CLI agents — Codex (validation/images) through `Invoke-CodexDispatch.ps1`, headless Claude (creative writing/critical decisions/isolated worker) through `Invoke-ClaudeDispatch.ps1` — and collect results back to the orchestrator.
 trigger: /cli-dispatch
 ---
 
@@ -38,7 +38,8 @@ Is this creative writing / natural prose?
 
 Is this headless isolated-worker / overnight / CI bulk work where
 in-harness Task is unavailable or undesirable?
-  → YES → your harness's headless builder CLI, wrapped per `cli-dispatch/SKILL.md`
+  → YES → headless Claude via `tools/Invoke-ClaudeDispatch.ps1 -ModelClass isolated_worker`
+     (one spawn per worktree), or your harness's headless builder CLI wrapped per `cli-dispatch/SKILL.md`
      Prefer in-harness Task → {{PROJECT_NAME}}-builder when Task is available.
      Never route independent review to a builder (Codex chain only).
 
@@ -52,8 +53,8 @@ Read (your harness `read_tool`; e.g. `view_file {{PROJECT_ROOT}}\.agent\skills\c
 
 Follow the command template for the selected agent. Key rules:
 - For Codex: Use the `Invoke-CodexDispatch.ps1` wrapper script (no `$null |` prefix needed).
-- For Claude: prefix with `$null |` to prevent stdin hang; always use `--output-format json` for structured parsing.
-- Always suffix direct CLI dispatches with `*> {{RECEIPTS_DIR}}/dispatch/<agent>-*.txt`.
+- For Claude: Use the `Invoke-ClaudeDispatch.ps1` wrapper script. It feeds the prompt file on stdin (no stdin hang), passes `--output-format json`, and writes `status.json` with the `session_id`.
+- Always suffix wrapper dispatches with `*> {{RECEIPTS_DIR}}/dispatch/<agent>-*.txt`.
 
 ## Step 3 — Prepare Environment
 
@@ -153,15 +154,15 @@ Get-Content {{RECEIPTS_DIR}}/dispatch/{dispatchId}/final.md
 # Get-Content {{RECEIPTS_DIR}}/dispatch/{dispatchId}/status.json
 ```
 
-### Claude — Creative Writing or Critical Decision (parse JSON)
+### Claude — Creative Writing or Critical Decision (wrapper output)
 ```powershell
-$raw = Get-Content {{RECEIPTS_DIR}}/dispatch/claude-output.txt -Encoding Unicode -Raw
-# Or for critical decisions:
-# $raw = Get-Content {{RECEIPTS_DIR}}/dispatch/coordinator-output.txt -Encoding Unicode -Raw
-$json = $raw | ConvertFrom-Json
-$result = $json.result          # The actual text/analysis
-$sessionId = $json.session_id   # For follow-up with --continue
-$modelUsage = $json.modelUsage  # Verify correct model was used
+pwsh -NoProfile -File tools/Invoke-ClaudeDispatch.ps1 -ModelClass creative_prose `
+  -DispatchId writing-1 -PromptFile {{RECEIPTS_DIR}}/dispatch/writing-prompt.txt `
+  *> {{RECEIPTS_DIR}}/dispatch/claude-writing-1.txt
+Get-Content {{RECEIPTS_DIR}}/dispatch/writing-1/final.md      # The actual text/analysis
+$status = Get-Content {{RECEIPTS_DIR}}/dispatch/writing-1/status.json -Raw | ConvertFrom-Json
+$status.session_id   # Read by -ResumeDispatchId / -ForkDispatchId for a follow-up
+$status.model        # Verify correct model was used
 ```
 
 ## Step 7 — Report to User
@@ -177,7 +178,7 @@ Present the results to the user with:
 
 If the user wants changes or continuation:
 - **Codex:** Execute a new wrapper run with the follow-up prompt, referencing the previous output files for context.
-- **Claude:** `claude -p --continue "<follow-up>"`
+- **Claude:** a new wrapper run with `-ResumeDispatchId <previous dispatch ID>` and a new `-DispatchId`, so the follow-up continues that exact session (see the skill's §Resume and Fork). Never continue "the most recent conversation" in the directory: on a shared tree it may belong to another lane.
 
 ---
 
@@ -200,7 +201,7 @@ If the user wants changes or continuation:
 - ❌ **Never use `creative_prose` for critical decisions** — `coordinator` has better judgment and adaptive thinking
 - ❌ **Never invoke codex exec directly** — always use `Invoke-CodexDispatch.ps1` wrapper
 - ❌ **Never use a builder-tier CLI for independent review verdicts** — Codex chain only (self-review prohibition)
-- ❌ **Never forget `$null |` prefix for Claude CLI** — causes stdin hang
+- ❌ **Never launch the Claude CLI directly** — always use `Invoke-ClaudeDispatch.ps1` wrapper (it feeds stdin and records the session)
 - ❌ **Never forget `*>` redirect** — causes PowerShell buffer saturation
 - ❌ **Never use `codex exec --search`** — search is a top-level option
 - ❌ **Never skip effort at the class ceiling on critical decisions** — default effort underutilizes the coordinator class's thinking capacity

@@ -4,7 +4,9 @@ Use this when the originating project's governance or subagent flows change and 
 need `_transfer-out/agentic-framework/` to match again. The package is **not** critical
 runtime data — use selective contract merges for divergent files; recopy only files whose behavior still matches, then re-sanitize.
 
-Last refreshed: **2026-10-07** (Cursor worker templates and the Gemini review rung
+Last refreshed: **2026-10-08** (dispatch resume and fork: `-ResumeDispatchId` / `-ForkDispatchId`
+on both Codex wrappers, the new `Invoke-ClaudeDispatch.ps1`, review classes refused, docs routed
+through the Claude wrapper). Previous: **2026-10-07** (Cursor worker templates and the Gemini review rung
 retired; `scout` and `peer_reviewer` classes and agent templates added, `effort:` pinned in
 every agent template; the single-shot architecture class renamed `architect`; the verifier owns a
 cheap contract). Previous: **2026-09-07** (package-root `.agent/` registry-home template, class-based
@@ -125,6 +127,7 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 | `tools/__init__.py` | `core/tools/__init__.py` |
 | `tools/Invoke-CodexDispatch.ps1` | `core/tools/` | if present in source |
 | `tools/Invoke-CodexDispatch.sh` | `core/tools/` | package-authored POSIX companion (no live-source twin) |
+| `tools/Invoke-ClaudeDispatch.ps1` | `core/tools/` | scrub (see §Accepted divergences) |
 | `tools/issue_triage.py` + `tools/issue_triage/**` | `core/tools/` |
 | `tools/meu_status.py` + `tools/meu_status/**` | `core/tools/` |
 | _(package seeds, not live YAML)_ | `core/.agent/context/known-issues.yaml` (empty) |
@@ -140,8 +143,9 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 
 Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 
-> **Full tools set:** the packaged `core/tools/` tree ships **19 files** (both CLIs + packages +
-> `Invoke-CodexDispatch.ps1` + `__init__.py`). After copy, confirm count and no `__pycache__`.
+> **Full tools set:** the packaged `core/tools/` tree ships **33 files** as of 2026-10-08 (both CLIs +
+> packages, the three dispatch wrappers, the gates, `tests/`, and `__init__.py`). After copy, confirm
+> the count with `find core/tools -type f -not -path '*__pycache__*' | wc -l` and that no `__pycache__` ships.
 
 ### Subagent agent definitions (required for subagent flows)
 
@@ -388,7 +392,8 @@ rtk proxy uv run python tools/_fw_hashdiff.py --ledger *> {{RECEIPTS_DIR}}/fw-le
 | `.agent/skills/README.md` | authored | Package-authored 'Packaged Skills' table lists exactly what ships, replacing the repo's product-specific planned-skills table. |
 | `.agent/skills/cli-dispatch/SKILL.md` | scrub | Codex wrapper docs (timeout/process-tree defaults) taken from live source; package adds ┬ºCross-Platform Dispatch (pwsh / macos-setup link) with no live-source twin. |
 | `.agent/skills/cli-dispatch/tests/Test-CliDispatch.ps1` | scrub | Package adds `wrapper-contract` suite that exercises Invoke-CodexDispatch.ps1 without false-pass length checks on bare `codex exec`, plus the review-loop and dispatch-kind arms (which open real ledger loops in a temp `RECEIPTS_DIR`). |
-| `tools/Invoke-CodexDispatch.ps1` / `.sh` | package-authored | `-Kind` / `--Kind` + the execution-review timeout floor are package additions with no live-source twin: the kind is read from the ledger's `mode=`, not from the flag, so the two wrappers and `review_ledger.py` move as one unit. Porting either wrapper alone will exit 3 (`ledger_mode_unavailable`) or silently drop the floor. |
+| `tools/Invoke-CodexDispatch.ps1` / `.sh` | package-authored | `-Kind` / `--Kind` + the execution-review timeout floor are package additions with no live-source twin: the kind is read from the ledger's `mode=`, not from the flag, so the two wrappers and `review_ledger.py` move as one unit. Porting either wrapper alone will exit 3 (`ledger_mode_unavailable`) or silently drop the floor. **2026-10-08 resume/fork port:** the source's `-ResumeDispatchId` / `-ForkDispatchId` are ported with the package vocabulary — `status.json` writes `dispatch_kind` (not the source's `kind`), and the review-class refusal also refuses any `-Kind` or `-LoopId` and a source run whose `dispatch_kind` is not `non-review`, so a continuation is always `-NonReviewDispatch` with a non-review `-ModelClass`. The Codex wrapper has no `-ValidateOnly`; the contract arms drive the refusals directly. |
+| `tools/Invoke-ClaudeDispatch.ps1` | scrub | Ported 2026-10-08. Model resolution uses the package's S2 registry-home discovery (`AGENT_MODEL_REGISTRY` → `AGENT_MODEL_REGISTRY_HOME` → `$USERPROFILE|$HOME/.agent`), not the source's fixed path; `status.json` writes `dispatch_kind: "non-review"` to match the Codex wrapper's vocabulary; comments and messages are ASCII so Windows PowerShell 5.1 parses it without a BOM. |
 | `tools/preflight.sh` | package-authored | No live-source twin. The source repo carried these facts as always-loaded prose caveats; the package turns them into eight checks with a `--selftest`. Ship it with the ┬ºEnvironment Pre-Flight section of `terminal-preflight/SKILL.md` and step 9 of `macos-setup.md` ┬ºAdopter smoke checklist ΓÇö the file alone is a script nobody is told to run. |
 | `.agent/skills/terminal-preflight/SKILL.md` | authored | Package-only macOS/Linux note + link to `.agent/docs/macos-setup.md` after the `native_shell: powershell` paragraph ΓÇö no live-source twin (macos-setup is package-authored). Package also adds ┬ºEnvironment Pre-Flight (`tools/preflight.sh`, once per session ΓÇö explicitly *not* per command, which is what the rest of the skill governs). |
 | `.agent/skills/subagent-delegation/SKILL.md` | scrub | In-harness-Task-vs-Cursor-Agent bridge subsection removed. The `fresh_worker` first-match blockquote and the four never-delegate categories are preserved. |
@@ -397,7 +402,7 @@ rtk proxy uv run python tools/_fw_hashdiff.py --ledger *> {{RECEIPTS_DIR}}/fw-le
 | `templates/PLAN-TEMPLATE.md` | scrub | `eligible_tools` drops Serena. |
 | `templates/TASK-TEMPLATE.md` | scrub | `eligible_tools` drops Serena. |
 
--- 21 accepted divergence(s), all live --
+-- 22 accepted divergence(s), all live --
 
 
 Re-run `--ledger` after every refresh and update this table when the count or rows change.

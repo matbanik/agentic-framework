@@ -64,9 +64,24 @@ POST_KILL_GRACE_SEC=90
 NO_PROCESS_TREE_KILL=0
 MIN_CODEX_CLI_VERSION="0.145.0"
 SKIP_CODEX_VERSION_CHECK=0
+# Continue an earlier non-review dispatch: `codex exec resume|fork <session>`, with the
+# session read from the source run's status.json. Twin of -ResumeDispatchId /
+# -ForkDispatchId in the .ps1. Review classes and review-loop dispatches are refused.
+RESUME_DISPATCH_ID=""
+RESUME_GIVEN=0
+FORK_DISPATCH_ID=""
+FORK_GIVEN=0
+RESUME_REVIEW_DENY_CLASSES=" independent_reviewer fallback_reviewer peer_reviewer checklist_validator "
 
 die() {
   printf '%s\n' "$*" >&2
+  exit 1
+}
+
+refuse_continuation() {
+  # refuse_continuation NAME DETAIL -- same "<name>: <detail>" line and exit 1 as
+  # Stop-ContinuationRefused in the .ps1, so callers can match on the name.
+  printf '%s: %s\n' "$1" "$2" >&2
   exit 1
 }
 
@@ -119,6 +134,12 @@ Common:
   --BenchmarkIsolation
   --BenchmarkContextReceipt PATH
   --BenchmarkContextSha256 HEX64
+  --ResumeDispatchId ID     Continue the Codex session of an earlier dispatch in the
+                            same --OutputDir (`codex exec resume`). Needs
+                            --NonReviewDispatch; review classes, --Kind, --LoopId and
+                            --BenchmarkIsolation are refused.
+  --ForkDispatchId ID       As --ResumeDispatchId, but branch the session
+                            (`codex exec fork`) and leave the source untouched.
 
 Exit codes:
   0  dispatch completed (or --GateOnly and a round is permitted)
@@ -163,6 +184,8 @@ while [[ $# -gt 0 ]]; do
     --NoProcessTreeKill) NO_PROCESS_TREE_KILL=1; shift ;;
     --SkipCodexVersionCheck) SKIP_CODEX_VERSION_CHECK=1; shift ;;
     --BenchmarkIsolation) BENCHMARK_ISOLATION=1; shift ;;
+    --ResumeDispatchId) RESUME_DISPATCH_ID="${2:-}"; RESUME_GIVEN=1; shift 2 ;;
+    --ForkDispatchId) FORK_DISPATCH_ID="${2:-}"; FORK_GIVEN=1; shift 2 ;;
     *) die "Unknown argument: $1 (see --help)" ;;
   esac
 done
@@ -292,6 +315,32 @@ if [[ -z "$PROMPT_TEXT" && -z "$PROMPT_FILE" ]]; then
 fi
 if [[ -n "$PROMPT_TEXT" && -n "$PROMPT_FILE" ]]; then
   die "Cannot specify both --PromptText and --PromptFile."
+fi
+# --- continuation (resume / fork) ---------------------------------------------
+# Mirrors the same block in Invoke-CodexDispatch.ps1. The refusals that need no
+# source run directory run here, before the review-loop gate and model
+# resolution, so a review gets the named refusal and not a later error.
+# --LoopId and --Kind exist only for reviews, so either one is a refusal too:
+# a continuation must be a --NonReviewDispatch.
+CONTINUATION_MODE="fresh"
+SOURCE_DISPATCH_ID=""
+if [[ "$RESUME_GIVEN" -eq 1 && "$FORK_GIVEN" -eq 1 ]]; then
+  refuse_continuation resume_fork_exclusive "specify --ResumeDispatchId or --ForkDispatchId, not both"
+fi
+if [[ "$RESUME_GIVEN" -eq 1 ]]; then
+  CONTINUATION_MODE="resume"
+  SOURCE_DISPATCH_ID="$RESUME_DISPATCH_ID"
+elif [[ "$FORK_GIVEN" -eq 1 ]]; then
+  CONTINUATION_MODE="fork"
+  SOURCE_DISPATCH_ID="$FORK_DISPATCH_ID"
+fi
+if [[ "$CONTINUATION_MODE" != "fresh" ]]; then
+  if [[ "$BENCHMARK_ISOLATION" -eq 1 ]]; then
+    refuse_continuation resume_refused_benchmark "a benchmark run must start from a fresh session"
+  fi
+  if [[ "$RESUME_REVIEW_DENY_CLASSES" == *" $MODEL_CLASS "* || -n "$KIND" || -n "$LOOP_ID" ]]; then
+    refuse_continuation resume_refused_review_class "class '$MODEL_CLASS' kind '$KIND' loop '$LOOP_ID' is a review; every review round starts fresh"
+  fi
 fi
 # --- review-loop bound -------------------------------------------------------
 # Mirrors the same block in Invoke-CodexDispatch.ps1. It runs before the version
@@ -610,6 +659,89 @@ else
   BENCHMARK_CONTEXT_CANONICAL=""
 fi
 
+# Continuation source. The source is an earlier run directory in the same
+# OutputDir; its status.json supplies the session to continue. Every check
+# runs before Codex is resolved and before the run directory exists. One
+# Python call does them in the .ps1's order and prints either
+# "OK<TAB>session" or "REFUSE<TAB>name<TAB>detail".
+SOURCE_SESSION_ID=""
+if [[ "$CONTINUATION_MODE" != "fresh" ]]; then
+  if [[ -z "$SOURCE_DISPATCH_ID" || ! "$SOURCE_DISPATCH_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
+    refuse_continuation resume_source_invalid "source dispatch ID '$SOURCE_DISPATCH_ID' is not a valid dispatch ID"
+  fi
+  if [[ "$SOURCE_DISPATCH_ID" == "$DISPATCH_ID" ]]; then
+    refuse_continuation resume_source_is_target "source '$SOURCE_DISPATCH_ID' is the target run; use a new --DispatchId"
+  fi
+  SOURCE_CHECK="$(ICD_SRC_RUN_DIR="$CANONICAL_OUTPUT_DIR/$SOURCE_DISPATCH_ID" \
+    ICD_TGT_RUN_DIR="$CANONICAL_OUTPUT_DIR/$DISPATCH_ID" \
+    ICD_OUT_DIR="$CANONICAL_OUTPUT_DIR" \
+    ICD_SRC_ID="$SOURCE_DISPATCH_ID" ICD_TGT_ID="$DISPATCH_ID" \
+    ICD_WORK_DIR="$CANONICAL_WORK_DIR" ICD_MODEL_CLASS="$MODEL_CLASS" \
+    ICD_DENY="$RESUME_REVIEW_DENY_CLASSES" \
+    "$PYTHON_BIN" -c '
+import json, os, re
+env = os.environ.get
+def refuse(name, detail):
+    print("REFUSE\t" + name + "\t" + detail)
+    raise SystemExit(0)
+def real(p):
+    return os.path.realpath(os.path.abspath(p)).replace(chr(92), "/")
+def key(p):
+    # Windows and default macOS volumes compare names without case, and Windows
+    # drops trailing dots and spaces: "source", "Source" and "source." can name
+    # one directory.
+    return "/".join(n.rstrip(". ") for n in p.replace(chr(92), "/").split("/")).upper()
+out_dir = env("ICD_OUT_DIR")
+src_dir = real(env("ICD_SRC_RUN_DIR"))
+if not src_dir.startswith(out_dir + "/"):
+    refuse("resume_source_invalid", "source %r resolves outside OutputDir" % env("ICD_SRC_ID"))
+if key(real(env("ICD_TGT_RUN_DIR"))) == key(src_dir):
+    refuse("resume_source_is_target", "target %r names the source run directory %r; use a new --DispatchId" % (env("ICD_TGT_ID"), env("ICD_SRC_ID")))
+status_path = src_dir + "/status.json"
+if not os.path.isfile(status_path):
+    refuse("resume_source_not_found", "no status.json for source %r at %s" % (env("ICD_SRC_ID"), status_path))
+try:
+    with open(status_path, encoding="utf-8-sig") as f:
+        doc = json.load(f)
+except Exception as exc:
+    refuse("resume_source_invalid", "source status.json does not parse: %s" % exc)
+if not isinstance(doc, dict):
+    refuse("resume_source_invalid", "source status.json is not a JSON object")
+deny = env("ICD_DENY").split()
+cls = doc.get("model_class")
+kind = doc.get("dispatch_kind")
+cli = doc.get("cli")
+sid = doc.get("session_id")
+wd = doc.get("working_directory")
+# dispatch_kind is "non-review" for a --NonReviewDispatch run and the ledger
+# mode (plan, execution, ...) for a review-loop run.
+if (isinstance(cls, str) and cls in deny) or (kind is not None and kind != "non-review"):
+    refuse("resume_refused_review_class", "source class %r kind %r is a review session" % (cls, kind))
+if cli != "codex":
+    refuse("resume_source_cli_mismatch", "source cli %r is not \"codex\"" % (cli,))
+if sid is None or sid == "":
+    refuse("resume_source_missing_session_id", "source %r recorded no session_id" % env("ICD_SRC_ID"))
+if not isinstance(sid, str) or not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", sid):
+    refuse("resume_source_invalid_session_id", "source session_id %r is not a UUID" % (sid,))
+src_wd = wd.replace(chr(92), "/").rstrip("/") if isinstance(wd, str) else ""
+tgt_wd = env("ICD_WORK_DIR").replace(chr(92), "/").rstrip("/")
+if src_wd.lower() != tgt_wd.lower():
+    refuse("resume_source_workdir_mismatch", "source working_directory %r differs from %r" % (wd, env("ICD_WORK_DIR")))
+if cls != env("ICD_MODEL_CLASS"):
+    refuse("resume_source_class_mismatch", "source class %r differs from target class %r" % (cls, env("ICD_MODEL_CLASS")))
+print("OK\t" + sid)
+')" || die "resume_source_invalid: the source check could not run (python exit $?)"
+  SOURCE_CHECK="${SOURCE_CHECK%$'\r'}"
+  case "$SOURCE_CHECK" in
+    OK$'\t'*) SOURCE_SESSION_ID="${SOURCE_CHECK#OK$'\t'}" ;;
+    REFUSE$'\t'*)
+      rest="${SOURCE_CHECK#REFUSE$'\t'}"
+      refuse_continuation "${rest%%$'\t'*}" "${rest#*$'\t'}"
+      ;;
+    *) die "resume_source_invalid: the source check returned no result" ;;
+  esac
+fi
+
 # Resolve Codex executable
 if [[ "$CODEX_EXECUTABLE" == */* ]]; then
   RESOLVED_EXECUTABLE="$(physical_path "$CODEX_EXECUTABLE")"
@@ -684,6 +816,11 @@ ARGS+=(-c "model_reasoning_effort=$REASONING_EFFORT")
 if [[ "$MODE" != "FullAccess" ]]; then
   ARGS+=(-c "sandbox_workspace_write.writable_roots=[\"$TEMP_WRITABLE_ROOT\"]")
 fi
+if [[ "$CONTINUATION_MODE" != "fresh" ]]; then
+  # `codex exec resume|fork <SESSION_ID>`: the exec options above stay before
+  # the subcommand (probe: codex_exec_options_before_subcommand = accepted).
+  ARGS+=("$CONTINUATION_MODE" "$SOURCE_SESSION_ID")
+fi
 
 if [[ -n "$OUTPUT_SCHEMA" ]]; then
   FINAL_OUTPUT_FILE_NAME="final.json"
@@ -751,6 +888,12 @@ ARGS+=(-)
 
 START_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 START_EPOCH="$(date +%s)"
+
+if [[ "$CONTINUATION_MODE" != "fresh" ]]; then
+  # A continued session runs from the source's working directory, which the
+  # source check has already matched to this one. Every path below is absolute.
+  cd "$CANONICAL_WORK_DIR" || die "Cannot enter WorkingDirectory $CANONICAL_WORK_DIR"
+fi
 
 # $TIMEOUT_SEC was resolved next to the ledger gate (effort default, then the kind
 # floor) so --GateOnly can report it and a review cannot reach this point holding a 0.
@@ -894,6 +1037,30 @@ done
 # end of attempt loop
 
 rm -f "$PROMPT_TEMP_FILE"
+
+# The session this run belongs to, from the first thread.started event. Read
+# before the retention block can compress events.jsonl. A later run passes
+# this dispatch ID to --ResumeDispatchId or --ForkDispatchId to continue it.
+THREAD_STARTED_ID=""
+if [[ -f "$EVENTS_FILE" ]]; then
+  THREAD_STARTED_ID="$(python3 -c '
+import json, re, sys
+uuid = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+    for line in f:
+        try:
+            evt = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(evt, dict):
+            continue
+        tid = evt.get("thread_id")
+        if evt.get("type") == "thread.started" and isinstance(tid, str) and uuid.fullmatch(tid):
+            print(tid)
+            break
+' "$EVENTS_FILE" 2>/dev/null || true)"
+  THREAD_STARTED_ID="${THREAD_STARTED_ID%$'\r'}"
+fi
 
 SCHEMA_VALIDATION_ERROR=""
 EXIT_VALUE="$CHILD_EXIT_CODE"
@@ -1052,6 +1219,15 @@ export ICD_FINAL_NAME="$FINAL_OUTPUT_FILE_NAME"
 export ICD_SANITIZED_ARGV_JSON="$SANITIZED_ARGV_JSON"
 export ICD_DISPATCH_ID="$DISPATCH_ID"
 export ICD_MODEL="$MODEL"
+if [[ "$BENCHMARK_ISOLATION" -eq 1 ]]; then
+  export ICD_MODEL_CLASS="pin:benchmark_headroom_baseline"
+else
+  export ICD_MODEL_CLASS="$MODEL_CLASS"
+fi
+export ICD_SESSION_ID="$THREAD_STARTED_ID"
+export ICD_SESSION_MODE="$CONTINUATION_MODE"
+export ICD_SOURCE_DISPATCH_ID="$SOURCE_DISPATCH_ID"
+export ICD_SOURCE_SESSION_ID="$SOURCE_SESSION_ID"
 export ICD_LOOP_ID="$LOOP_ID"
 export ICD_LEDGER_GATE="$LEDGER_GATE_RESULT"
 export ICD_DISPATCH_KIND="$DISPATCH_KIND"
@@ -1127,6 +1303,16 @@ manifest = {
     "schema_version": "dispatch-status.v1",
     "dispatch_id": env("ICD_DISPATCH_ID"),
     "model": env("ICD_MODEL"),
+    "model_class": env("ICD_MODEL_CLASS"),
+    # Session record, the same keys as the .ps1 twin. A later --ResumeDispatchId /
+    # --ForkDispatchId reads cli, dispatch_kind, model_class, working_directory and
+    # session_id from here.
+    "cli": "codex",
+    "session_id": env("ICD_SESSION_ID") or None,
+    "session_id_source": "event" if env("ICD_SESSION_ID") else "none",
+    "session_mode": env("ICD_SESSION_MODE") or "fresh",
+    "source_dispatch_id": env("ICD_SOURCE_DISPATCH_ID") or None,
+    "source_session_id": env("ICD_SOURCE_SESSION_ID") or None,
     # The review-loop bound, recorded so a bypass leaves a trace.
     # `bypassed-non-review` in a receipt whose prompt was plainly a review is the
     # audit signal.

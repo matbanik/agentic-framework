@@ -132,8 +132,8 @@ the Codex review loop separately.
 ```
 
 > [!CAUTION]
-> **Prompt > 2KB — use stdin pipe.** The planning prompt will always exceed 2KB.
-> Use `Get-Content prompt.txt | claude -p ...` (NOT positional arg).
+> **Prompt > 2KB — use a prompt file.** The planning prompt will always exceed 2KB.
+> Pass it as `-PromptFile` to `tools/Invoke-ClaudeDispatch.ps1` (NOT a positional arg); the wrapper feeds the file on stdin.
 
 ---
 
@@ -143,12 +143,12 @@ the Codex review loop separately.
 
 | Class | Resolve (`claude-p`) | Effort | Budget | Use When |
 |-------|----------|--------|--------|----------|
-| **`architect`** | `$(resolve architect -Harness claude-p -Project <project-root>)` (when bound) | `--effort high` | generous | Complex multi-MEU plans, architecture-heavy, spec gaps |
-| **`coordinator`** | `$(resolve coordinator -Harness claude-p -Project <project-root>)` | `--effort high` | moderate | Standard plans, single-MEU, well-specified |
+| **`architect`** | `$(resolve architect -Harness claude-p -Project <project-root>)` (when bound) | `-ReasoningEffort high` | generous | Complex multi-MEU plans, architecture-heavy, spec gaps |
+| **`coordinator`** | `$(resolve coordinator -Harness claude-p -Project <project-root>)` | `-ReasoningEffort high` | moderate | Standard plans, single-MEU, well-specified |
 
 > Per-class price bands and empirical budget guidance live in the registry catalog (`price_band`, `price_note`) — do not restate dollar figures here.
 >
-> **`architect` at `--effort high` burns more subscription quota** than `coordinator` at the same effort. Use `--effort medium` for cost savings if the plan scope is well-defined.
+> **`architect` at `-ReasoningEffort high` burns more subscription quota** than `coordinator` at the same effort. Use `-ReasoningEffort medium` for cost savings if the plan scope is well-defined.
 
 ### Dispatch Command
 
@@ -156,34 +156,36 @@ the Codex review loop separately.
 # Delete stale output
 Remove-Item -Force -ErrorAction SilentlyContinue {{RECEIPTS_DIR}}/dispatch/claude-plan-output.txt
 
-# Resolve planner class → snapshot (live registry home; see .agent/INSTANTIATE.md)
-# `-Project` is what makes the working project's overlay apply; without it the
-# answer comes from global policy even where this project has tightened the
-# class. Resolution is a prerequisite, not a step: a failure must stop the
-# dispatch rather than launch a planner with an empty `--model`.
-$ErrorActionPreference = 'Stop'
-Import-Module <registry-home>/tools/ModelRegistry.psm1 -Force
+# The wrapper resolves the planner class → snapshot for the claude-p harness
+# against the live registry home (see .agent/INSTANTIATE.md) and this
+# repository's overlay, so a class the project has tightened is refused.
+# Resolution is a prerequisite, not a step: a failure stops the wrapper
+# (exit 1) before any launch, never a planner with an empty `--model`.
 $plannerClass = "coordinator"  # complex plans: architect when bound on this harness
-$plannerSlug = resolve $plannerClass -Harness claude-p -Project <project-root>
-if (-not $plannerSlug) { throw "resolve returned no slug for $plannerClass" }
+$dispatchId = "planner-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
 
 # Dispatch (coordinator example — swap class when architect is bound)
-Get-Content {{RECEIPTS_DIR}}/dispatch/prompt.txt | claude -p `
-  --model $plannerSlug `
-  --effort high `
-  --permission-mode bypassPermissions `
-  --output-format json `
-  --max-turns 80 `
-  --max-budget-usd 35 `
+pwsh -NoProfile -File <project-root>/tools/Invoke-ClaudeDispatch.ps1 `
+  -ModelClass $plannerClass `
+  -ReasoningEffort high `
+  -PermissionMode bypassPermissions `
+  -MaxBudgetUsd 35 `
+  -TimeoutSec 2700 `
+  -DispatchId $dispatchId `
+  -PromptFile {{RECEIPTS_DIR}}/dispatch/prompt.txt `
+  -OutputDir {{RECEIPTS_DIR}}/dispatch `
   *> {{RECEIPTS_DIR}}/dispatch/claude-plan-output.txt
+$dispatchExit = $LASTEXITCODE
+if ($dispatchExit -ne 0) { exit $dispatchExit }
 ```
 
 **Parameters:**
-- `--permission-mode bypassPermissions` — planner needs full file access (reads ~10+ files, writes plan files, runs MEU status commands)
-- `--max-turns 80` — generous for Steps 1-4 (empirical: 26 turns for 2-MEU plan)
-- `--max-budget-usd` — hard cap; size per class band in registry catalog (`architect` needs a generous cap)
-- `-Project` — resolves against this project's accepted overlay, not global policy alone
-- Working directory: set via `Cwd` in `run_command` (Claude has no `-C` flag)
+- `-PermissionMode bypassPermissions` — planner needs full file access (reads ~10+ files, writes plan files, runs MEU status commands)
+- `-MaxBudgetUsd` — hard cap (`--max-budget-usd`); size per class band in registry catalog (`architect` needs a generous cap)
+- `-TimeoutSec 2700` — the wrapper stops the process tree after 45 minutes (planning takes 5-15)
+- Overlay — the wrapper resolves against this repository's accepted overlay, not global policy alone
+- Working directory: the wrapper runs the planner in this repository (`-WorkingDirectory` default); Claude has no `-C` flag
+- The wrapper records the planner's `session_id` in the run directory's `status.json` (`$dispatchId/status.json`); a follow-up turn on the same plan uses `-ResumeDispatchId $dispatchId` (cli-dispatch skill §Resume and Fork)
 
 ### Background Dispatch
 
@@ -196,15 +198,16 @@ Get-Content {{RECEIPTS_DIR}}/dispatch/prompt.txt | claude -p `
 ### Parse Output
 
 ```powershell
-$raw = Get-Content {{RECEIPTS_DIR}}/dispatch/claude-plan-output.txt -Encoding Unicode -Raw
-$json = $raw | ConvertFrom-Json
+$run = "{{RECEIPTS_DIR}}/dispatch/$dispatchId"
+$status = Get-Content "$run/status.json" -Raw | ConvertFrom-Json   # exit_code, error_summary, session_id
+$json = Get-Content "$run/output.json" -Raw | ConvertFrom-Json
 $result = $json.result       # Final message (may be empty on budget exceeded)
 $turns = $json.num_turns     # Turns used
 $isError = $json.is_error    # true if budget/turn limit hit
 ```
 
 > [!NOTE]
-> **`is_error: true` with budget exceeded is NOT a failure** if the plan files exist.
+> **`is_error: true` with budget exceeded is NOT a failure** if the plan files exist. The wrapper exits 1 and writes the cause to `status.json` `error_summary` in that case too.
 > Check for `implementation-plan.md` and `task.md` in the project folder regardless of exit status.
 
 ---
@@ -405,5 +408,5 @@ the ratio is the durable part; the absolute numbers move with every price change
 2. **The orchestrator applies all corrections.** Corrections are mechanical (file edits) and don't need `architect`/`coordinator` reasoning.
 3. **Codex R1 uses `high` effort; R2+ uses `medium`.** First review is substantive; follow-ups verify mechanical fixes.
 4. **Budget the planner generously** — size the cap from the class's catalog band. Under-budgeting causes the planner to stop mid-plan.
-5. **Always use stdin pipe** for the planning prompt (`Get-Content prompt.txt | claude -p ...`).
+5. **Always use `-PromptFile`** for the planning prompt (`tools/Invoke-ClaudeDispatch.ps1 -PromptFile prompt.txt ...`); the wrapper feeds it on stdin.
 6. **Check CLI versions before first dispatch** in the session.

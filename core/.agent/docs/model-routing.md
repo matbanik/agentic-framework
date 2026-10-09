@@ -70,7 +70,7 @@ session and a Codex CLI dispatch without either snapshot being written down here
 | **Peer reviewer** (advisory) | A same-vendor adversarial second read of a correctness-critical diff or plan, before the independent review | `peer_reviewer` | Catches defects before a paid review round. Advisory input only: never writes a verdict file, never authors `approved` — the verdict stays with `independent_reviewer` |
 | **Reviewer** (independent) | Adversarial plan & code review | `independent_reviewer` — see the review chain below | Cross-vendor diversity catches failure modes the author's model shares; also offloads tokens off the primary budget |
 | **Cheap validator** | Checklist-shaped validation with no risk path | `checklist_validator` | A distinct, deliberately cheap route; not a discount reviewer (see Decision Table row 5) |
-| **Isolated worker** | Large parallel/independent workstreams, overnight bursts, isolated-context tasks | `isolated_worker`, one per git worktree | Each spawn is an isolated main agent with fresh context; worktrees prevent file conflicts. Prefer the in-harness Agent tool (`.claude/agents/`) when available; use headless `claude -p` when it is unavailable / CI / overnight. **Not** an independent-reviewer substitute. |
+| **Isolated worker** | Large parallel/independent workstreams, overnight bursts, isolated-context tasks | `isolated_worker`, one per git worktree | Each spawn is an isolated main agent with fresh context; worktrees prevent file conflicts. Prefer the in-harness Agent tool (`.claude/agents/`) when available; use headless Claude through `tools/Invoke-ClaudeDispatch.ps1 -ModelClass isolated_worker` when it is unavailable / CI / overnight. **Not** an independent-reviewer substitute. |
 | **Architect** (advisory) | Very large one-shot architecture reasoning | `architect` | Reserved for that shape only, and invoked only on explicit human direction or an accepted grouping row flagged `architecture-risk: yes` — never a coordinator default, never a builder, never a `builder_model` pin, never a verdict |
 | **Creative prose** | Prose whose voice matters, and the second reader on it | `creative_prose` | Pinned by *difference*, not recency: see the class's registry note |
 
@@ -97,7 +97,7 @@ The chain, in order:
    the tree). Effort: the class's `effort_default` for routine work, one tier up for
    risk-paths and contract surfaces, never above the snapshot's declared
    `effort_ceiling_effective`.
-2. **`fallback_reviewer`** — headless `claude -p`, the same-vendor fallback. It runs
+2. **`fallback_reviewer`** — headless Claude (`tools/Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer -PermissionMode bypassPermissions -ReasoningEffort high`), the same-vendor fallback. It runs
    **only** on a rate-limit or unavailability receipt from rung 1, never by preference.
    Four conditions hold every time:
    - **Isolation:** a fresh headless process with zero shared context — never the
@@ -197,8 +197,8 @@ Fallback — do **not** self-review.
 | Classifying/triaging a big list, pure routing | `router` |
 | Sweeping many files for one answer (where is X, who calls Y) when only the conclusion is needed | `scout` |
 | A second, advisory read of a correctness-critical diff or plan before the independent review | `peer_reviewer` (advisory; the verdict stays with `independent_reviewer`) |
-| Reviewing a plan or a diff (independent) | `independent_reviewer` → `fallback_reviewer` (headless `claude -p`, only on a rate-limit receipt, flagged same-vendor) → **a human** (HARD STOP); see §Independent-reviewer chain — this row is a summary of it, never a variant |
-| Many independent tasks in parallel / overnight | `isolated_worker`, one per worktree; prefer the in-harness Agent tool, else headless `claude -p` |
+| Reviewing a plan or a diff (independent) | `independent_reviewer` → `fallback_reviewer` (`Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer`, only on a rate-limit receipt, flagged same-vendor) → **a human** (HARD STOP); see §Independent-reviewer chain — this row is a summary of it, never a variant |
+| Many independent tasks in parallel / overnight | `isolated_worker`, one per worktree; prefer the in-harness Agent tool, else `Invoke-ClaudeDispatch.ps1 -ModelClass isolated_worker` |
 | Very large single-shot architecture reasoning | `architect` (only on explicit human direction or a grouping row flagged `architecture-risk: yes`) |
 | Prose whose voice matters, or a second reader on prose | `creative_prose` |
 

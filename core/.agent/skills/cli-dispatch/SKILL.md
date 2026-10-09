@@ -1,6 +1,6 @@
 ---
 name: cli-dispatch
-description: CLI dispatch skill for Codex (Invoke-CodexDispatch.ps1) and headless Claude (claude -p). Enforces the Codex PowerShell wrapper and the reviewer fallback chain.
+description: CLI dispatch skill for Codex (Invoke-CodexDispatch.ps1) and headless Claude (Invoke-ClaudeDispatch.ps1). Enforces both wrappers, session resume and fork through the wrappers, and the reviewer fallback chain.
 ---
 
 # CLI Dispatch Skill
@@ -12,9 +12,9 @@ Route specialized work to the right external CLI:
 | Agent | Binary | Primary use | Dispatch form |
 |-------|--------|-------------|---------------|
 | **Codex** | `codex` via `tools/Invoke-CodexDispatch.ps1` | Validation / review / image gen | Wrapper only — never bare `codex exec` |
-| **Claude** | `claude` | Creative writing / critical decisions | Direct `claude -p` (see workflow) |
+| **Claude** | `claude` via `tools/Invoke-ClaudeDispatch.ps1` | Creative writing / critical decisions / reviewer fallback rung | Wrapper only — never a bare headless launch |
 
-For Codex, the wrapper manages parameter validation, least-privilege sandboxing, artifact structure, token usage parsing, and exit code propagation.
+Each wrapper manages parameter validation, the permission level (the Codex wrapper: least-privilege sandboxing), artifact structure, the session ID, and exit code propagation. The Codex wrapper also parses token usage.
 
 ---
 
@@ -75,7 +75,7 @@ The wrapper writes all outputs to a unique run directory: `{{RECEIPTS_DIR}}/disp
 
 #### Artifacts Generated
 
-- `status.json`: Atomic run metadata (durations, exit code, redacted arguments, sizes).
+- `status.json`: Atomic run metadata (durations, exit code, redacted arguments, sizes) and the session keys `cli`, `dispatch_kind`, `session_id`, `session_id_source`, `session_mode`, `source_dispatch_id` and `source_session_id` (see §Resume and Fork).
 - `final.md` or `final.json`: The final response from the agent.
 - `stderr.txt`: Captured standard error diagnostics.
 - `receipt.txt`: Text summary of the dispatch.
@@ -86,6 +86,64 @@ The wrapper writes all outputs to a unique run directory: `{{RECEIPTS_DIR}}/disp
 - `CompressOnSuccess` (default): Compresses event logs to `.gz` on success and deletes the raw `.jsonl`.
 - `Keep`: Retains all raw logs and diagnostics.
 - `DeleteOnSuccess`: Deletes log and stderr files on successful execution, retaining only the status and final response.
+
+### Claude (wrapper)
+
+`tools/Invoke-ClaudeDispatch.ps1` writes to the same layout, `{{RECEIPTS_DIR}}/dispatch/{dispatchId}/`: `status.json` (the same `dispatch-status.v1` manifest, with `cli` set to `claude`), `final.md` (the `result` field), `output.json` (the raw CLI output), `stderr.txt` and `prompt_temp.txt`. It resolves `-ModelClass` against the registry for the `claude-p` harness, passes `--model`, `--effort` and `--permission-mode` (default `plan`, read-only), and sets a new session ID with `--session-id` on every fresh run. `-MaxBudgetUsd` adds `--max-budget-usd`. `-WorkingDirectory` sets the process directory (default: this repository); the CLI has no `-C` flag, so this directory is where the session runs and where its transcript is stored.
+
+```powershell
+pwsh -NoProfile -File tools/Invoke-ClaudeDispatch.ps1 `
+  -ModelClass creative_prose `
+  -PermissionMode plan `
+  -MaxBudgetUsd 2 `
+  -PromptFile {{RECEIPTS_DIR}}/dispatch/writing-prompt.txt
+```
+
+---
+
+## Resume and Fork
+
+Both wrappers, `tools/Invoke-CodexDispatch.ps1` (and its POSIX port `tools/Invoke-CodexDispatch.sh`, with `--ResumeDispatchId` / `--ForkDispatchId`) and `tools/Invoke-ClaudeDispatch.ps1`, can continue the session of an earlier dispatch. The switches are opt-in; without them every dispatch starts a fresh session.
+
+- `-ResumeDispatchId <id>` continues the same session (Codex `exec resume <session>`; Claude `--resume <session>`). New turns go into that session.
+- `-ForkDispatchId <id>` starts a new session with a copy of the source history (Codex `exec fork <session>`; Claude `--resume <session> --fork-session` with a new `--session-id`). The source session does not change.
+
+The wrapper reads the session ID from `<OutputDir>/<id>/status.json` (key `session_id`). The caller never passes a raw session ID. The new run's `status.json` records `session_mode` (`fresh`, `resume` or `fork`), `source_dispatch_id` and `source_session_id`.
+
+**Review classes always start fresh.** `independent_reviewer`, `fallback_reviewer`, `peer_reviewer` and `checklist_validator` refuse both switches, as target and as source. A Codex dispatch with `-Kind` or `-LoopId` (a review-ledger dispatch) also refuses them, so a continuation is always a `-NonReviewDispatch` run with a non-review `-ModelClass`. A source whose `status.json` has a `dispatch_kind` other than `non-review` is refused too. A review round that continues an earlier round's session inherits that round's conclusions, so each round must get a fresh session.
+
+**One live continuation per session.** Two processes that write the same session at the same time can corrupt its history. Do not start a second `-ResumeDispatchId` on a source while one is still running. To branch more than once, use `-ForkDispatchId`, which gives each branch its own session.
+
+**The source run directory must survive.** Retention `Keep` or the default (`CompressOnSuccess`) keeps `status.json`; `DeleteOnSuccess` also keeps it. Do not delete the source directory before the continuation starts.
+
+Every refusal happens before the run directory exists and before the CLI starts. The wrapper writes `<name>: <detail>` on stderr and exits 1:
+
+| Error | Cause |
+|---|---|
+| `resume_fork_exclusive` | Both switches were given. |
+| `resume_refused_review_class` | The target class is a review class, the Codex dispatch has `-Kind` or `-LoopId`, or the source run was a review (review class, or `dispatch_kind` other than `non-review`). |
+| `resume_refused_benchmark` | A Codex `-BenchmarkIsolation` run was given a switch. A benchmark starts fresh. |
+| `resume_source_not_found` | `<OutputDir>/<id>/status.json` does not exist. |
+| `resume_source_invalid` | The source ID is not a valid dispatch ID, resolves outside `OutputDir`, or its `status.json` is not a JSON object. |
+| `resume_source_missing_session_id` | The source `status.json` has no `session_id`. |
+| `resume_source_invalid_session_id` | The source `session_id` is not a UUID. |
+| `resume_source_is_target` | The source ID equals the new run's `-DispatchId`. |
+| `resume_source_cli_mismatch` | The source run used the other CLI (`cli` is not this wrapper's CLI). |
+| `resume_source_workdir_mismatch` | The source `working_directory` differs from this run's working directory. Both CLIs store sessions per directory. |
+| `resume_source_class_mismatch` | The source `model_class` differs from this run's `-ModelClass`. |
+
+Examples. The Claude wrapper's `-ValidateOnly` runs every check above and prints `dispatch_args_ok` without a launch; the Codex wrapper has no dry-run switch, but its refusals still happen before the launch:
+
+```powershell
+pwsh -NoProfile -File tools/Invoke-CodexDispatch.ps1 -ModelClass translator_prose -NonReviewDispatch `
+  -ResumeDispatchId heron-1 -DispatchId heron-2 -PromptText "Continue."
+pwsh -NoProfile -File tools/Invoke-ClaudeDispatch.ps1 -ModelClass isolated_worker `
+  -ForkDispatchId osprey-1 -DispatchId osprey-2 -PromptText "Try the other branch." -ValidateOnly
+```
+
+```bash
+bash tools/Invoke-CodexDispatch.sh --ModelClass translator_prose --NonReviewDispatch \n  --ResumeDispatchId heron-1 --DispatchId heron-2 --PromptText "Continue."
+```
 
 ---
 
@@ -295,7 +353,7 @@ against the then-current `independent_reviewer` class)
 
 For LLM-as-judge or critical-review tasks, more reasoning is NOT monotonically better—it can inflate confidence and false positives. We enforce the following limits:
 - **Codex `independent_reviewer`:** `medium` for routine/contract-bound review; `high` for hard adversarial passes (risk paths, contract surfaces, concurrency/security, or round-2-after-High).
-- **Claude fallback reviewer:** `--effort high` (NOT `max`).
+- **Claude fallback reviewer (`tools/Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer -PermissionMode bypassPermissions -ReasoningEffort high`):** `high` (NOT `max`). A fresh session every round; the wrapper refuses both continuation switches for this class.
 - **Reserve `max`/`xhigh`** for explicitly-tagged **verifiable deep sub-reviews only** (security exploitability, concurrency/races, architecture/dependency-rule). Never the default verdict effort.
 - **Pin Model and Effort explicitly** in every wrapper dispatch so reviewer behavior does not drift with global configuration.
 - Cross-vendor minority-veto: Run Codex + Claude independently on the same rubric; any evidence-backed High finding from EITHER vendor vetoes (raises true-negative rate against over-acceptance bias).
@@ -319,7 +377,7 @@ When Codex CLI is rate-limited or unavailable:
 |---------|-----------|------------|-------------------|
 | Codex `independent_reviewer` | Validation review (deep/infra) | **A different-vendor CLI you have configured** | Cross-vendor is the requirement. Run at high effort. |
 | Codex `independent_reviewer` | Validation review | Same model family via web (manual) | Same family; no file access, requires manual copy-paste of results. Still cross-*context*, so it beats self-review. |
-| Any | Validation review | Headless `claude -p` (`fallback_reviewer`) | Same-vendor when the author is too, and flagged so in the verdict. Only on a rate-limit receipt; see §Same-vendor fallback below. |
+| Any | Validation review | Headless Claude: `Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer` | Same-vendor when the author is too, and flagged so in the verdict. Only on a rate-limit receipt; see §Same-vendor fallback below. |
 
 #### Same-vendor fallback
 
@@ -333,7 +391,7 @@ When it is limited too, the escalation is the **human handoff path in §0**. Con
 
 ### 3. Fallback Steps
 0. **If PROFILE forbids egress (C1/C2/C3b or E5):** stop for B4's named human reviewer. Do not write `<provider>-web-prompt.md` and do not request manual external submission. Skip the rest of this section.
-1. **Advance to the next reviewer rung** (`model-routing.md` §Independent-reviewer chain), the flagged same-vendor rung included.
+1. **Advance to the next reviewer rung** (`model-routing.md` §Independent-reviewer chain), the flagged same-vendor rung included (`tools/Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer -PermissionMode bypassPermissions -ReasoningEffort high`, a fresh session).
 2. **If every machine rung is exhausted:** Save the prompt to a file at `{{RECEIPTS_DIR}}/dispatch/<provider>-web-prompt.md`.
 3. **Present to user (HARD STOP):** Inform them all rungs are rate-limited, as a Decision Brief (`.agent/docs/human-decision-protocol.md` §5): recommendation first (manual web submission of the saved prompt, or a timed retry — whichever the evidence favours, with why), the other option compared against it, and the default if unanswered.
 4. **Collect results:** User pastes the web response into `{{RECEIPTS_DIR}}/dispatch/<provider>-web-response.md`.

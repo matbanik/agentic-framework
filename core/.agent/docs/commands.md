@@ -54,6 +54,10 @@ uv run python tools/issue_triage.py promote <ID>                     # Promote c
 uv run python tools/issue_triage.py dismiss <ID>                     # Dismiss candidate → dismissed
 uv run python tools/issue_triage.py render --include-candidates      # Render with candidate section
 
+# CLI dispatch: resume and fork (.agent/skills/cli-dispatch/SKILL.md §Resume and Fork)
+pwsh -NoProfile -File tools/Invoke-CodexDispatch.ps1 -ModelClass <non-review class> -NonReviewDispatch -ResumeDispatchId <id> | -ForkDispatchId <id> -DispatchId <new> ...  # Continue (resume) or branch (fork) the Codex session recorded in <OutputDir>/<id>/status.json session_id; the switches are exclusive; review classes, -Kind and -LoopId dispatches refuse both (resume_refused_review_class); every refusal is named resume_* on stderr, exit 1, before any launch. POSIX: tools/Invoke-CodexDispatch.sh --ResumeDispatchId|--ForkDispatchId
+pwsh -NoProfile -File tools/Invoke-ClaudeDispatch.ps1 -ModelClass <class> [-ResumeDispatchId <id> | -ForkDispatchId <id>] -ValidateOnly ...  # Headless Claude through the wrapper (registry class for the claude-p harness, --session-id recorded in status.json); -ValidateOnly checks the arguments, paths and continuation source and prints dispatch_args_ok without launching claude; same resume_* refusals as the Codex wrapper
+
 # Development (current scaffold)
 pytest --cov=packages/core --cov-report=term            # Coverage (advisory)
 
@@ -79,7 +83,7 @@ pytest --cov=packages/core --cov-report=term            # Coverage (advisory)
 | Completion Timestamp | `.agent/skills/timestamp/SKILL.md` | Generate the canonical completion timestamp from the system clock using the skill's registered exact-receipt command; do NOT derive time from UTC tool response headers. |
 | Issue Triage | `.agent/skills/issue-triage/SKILL.md` | Record, query, verify, and manage known issues via the YAML SSOT (`known-issues.yaml`). Use when discovering bugs or reviewing issue status. |
 | Subagent Delegation | `.agent/skills/subagent-delegation/SKILL.md` | In-harness subagent detection + delegation gate (Claude Code `.claude/agents/`). Resolves `fresh_worker`, routes eligible `task.md` rows to `{{PROJECT_NAME}}-builder`/`{{PROJECT_NAME}}-verifier`, and enforces the never-delegate categories. |
-| CLI Dispatch | `.agent/skills/cli-dispatch/SKILL.md` | External CLI routing: Codex wrapper and Claude `-p`. Isolated workers run on headless Claude `-p`; independent review follows the chain in `.agent/docs/model-routing.md`. |
+| CLI Dispatch | `.agent/skills/cli-dispatch/SKILL.md` | External CLI routing: the Codex wrapper and the headless Claude wrapper (`tools/Invoke-ClaudeDispatch.ps1`), with session resume and fork. Isolated workers run on headless Claude through the wrapper; independent review follows the chain in `.agent/docs/model-routing.md`. |
 | Deep Research Prompting | `.agent/skills/deep-research-prompting/SKILL.md` | Portal-ready deep research prompt procedure: Pomera MCP preflight hard gate, provider capability recon query bank (Tavily/Exa routing), 14-day capability snapshots, D1/D2/D3 prompt templates, triangulation synthesis. Driven by `/inspiration-research`. |
 
 ## MCP Servers

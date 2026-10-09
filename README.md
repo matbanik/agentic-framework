@@ -60,6 +60,7 @@ core/
   tools/               preflight.sh (run first: 8 environment checks — receipts dir, rg
                        proven able to match, python + deps, registry home, codex version),
                        issue_triage + meu_status CLIs, Invoke-CodexDispatch.ps1/.sh,
+                       Invoke-ClaudeDispatch.ps1 (headless Claude; both resume/fork by ID),
                        review_ledger.py (bounded review loop: budgets, mechanism stop),
                        validate_closeout_artifacts.py + lint_task_contract.py (the
                        closeout and Task-Table gates the templates call)
