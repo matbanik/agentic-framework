@@ -299,6 +299,8 @@ function New-CmdStartInfo {
     $psi.FileName = 'cmd.exe'
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    # A dispatched child is not the human's session: its stops never send email.
+    $psi.EnvironmentVariables['AGENT_NOTIFY'] = 'off'
     $log = New-Object System.Collections.Generic.List[string]
     $words = @()
     for ($i = 0; $i -lt $Command.Count; $i++) {
@@ -368,6 +370,9 @@ function Get-CodexCliVersionString {
         $versionPsi.UseShellExecute = $false
         $versionPsi.CreateNoWindow = $true
     }
+    # Every preflight shape, not only New-CmdStartInfo: a dispatched child never
+    # sends a stop email (AGENT_NOTIFY, R3-F1).
+    $versionPsi.EnvironmentVariables['AGENT_NOTIFY'] = 'off'
     $versionPsi.RedirectStandardOutput = $true
     $versionPsi.RedirectStandardError = $true
 

@@ -293,6 +293,50 @@ workflows already call it, so there is nothing to install. It never loosens a ha
 
 ---
 
+## Step 4d — Stop notifications (optional)
+
+Do this only if **F7** = yes. The stop notifier (`tools/agent_notify.py`, skill
+`.agent/skills/agent-notify/SKILL.md`) emails the human each time a session stops: done, a
+decision is needed, an approval or input is awaited, a hard stop, or a failure. It is off
+until the last step here, and it never blocks a stop.
+
+1. **Copy the settings.** `notify/notify.json` and `schema/notify.v1.schema.json` go into the
+   registry home with the rest of the package-root `.agent/` (Step 4,
+   `.agent/INSTANTIATE.md` §2).
+2. **Write `notify.local.json`** in `<home>/notify/` with `to`, `from`, `smtp.user` and
+   `"enabled": false` (the example is in `.agent/INSTANTIATE.md` §5). Never commit it.
+3. **Create the Gmail app password** by following
+   [`.agent/INSTANTIATE.md` §5 — Gmail app password](.agent/INSTANTIATE.md#gmail-app-password).
+   It covers where Google keeps the setting, why it can be missing, and how to revoke it.
+4. **Store the password.** From the project root, run
+   `python tools/agent_notify.py setup --user <sender address>` and paste at the hidden
+   prompt. Run this in a terminal yourself: never through an agent, a receipt or a chat.
+5. **Check and test.**
+   - `python tools/agent_notify.py status` must show `credential: present`.
+   - `python tools/agent_notify.py test-send --dry-run` writes the message to
+     `<home>/notify/state/outbox/` instead of sending it. Read it.
+   - `python tools/agent_notify.py test-send` sends one real message. Confirm it arrived.
+6. **Turn it on.** Set `"enabled": true` in `notify.local.json`.
+7. **Wire the harness** (`stop_notify` in `.agent/docs/harness-profiles.md`):
+   - **Claude Code (`hook`):** merge the `hooks` block of
+     `.claude/settings.notify.example.json` into `.claude/settings.json`. If your project
+     has its own stop-gate hook, it may call `agent_notify.on_stop` instead of the `Stop`
+     entry.
+   - **Codex CLI (`notify-config`):** add
+     `notify = ["python", "<repo>/tools/agent_notify.py", "hook", "--harness", "codex"]`
+     to `~/.codex/config.toml`.
+   - **Cursor (`hook`):** add a `stop` hook to `.cursor/hooks.json` that runs
+     `python tools/agent_notify.py hook --harness cursor`.
+   - **Prose-only driver (`prose`):** the agent runs
+     `python tools/agent_notify.py send --class <class> --text "<one-line summary>"` before
+     its end-turn signal.
+
+The dispatch wrappers set `AGENT_NOTIFY=off` for every child they start, so a review or
+worker session never emails. To stop all email at once, create an empty `notify.off` file in
+`<home>/notify/`.
+
+---
+
 ## Provider substitution — Pomera MCP (manual adopter edit)
 
 > **Not provider-neutral.** The shipped `/inspiration-research` workflow and
@@ -393,8 +437,9 @@ Do not declare adoption complete until all of these are true:
   on the actual supported OS/shell. ReviewReadOnly is workspace-write plus receipt access,
   not OS read-only. FullAccess is an explicitly justified exception, not a temp-path default.
 - Exercise C-forbidden/human-only and no-RTK paths without external calls. Confirm durable
-  evidence redaction. Hooks remain disabled; scanner/snapshot/lease adapters are optional
-  follow-on work with separate negative tests.
+  evidence redaction. Hooks remain disabled, except the opt-in notify hooks of Step 4d after
+  a passing `test-send --dry-run`; scanner/snapshot/lease adapters are optional follow-on
+  work with separate negative tests.
 
 ## Step 9 — First run
 

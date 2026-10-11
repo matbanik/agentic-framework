@@ -116,6 +116,7 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 | `.agent/skills/issue-triage/SKILL.md` | **required for issue→MEU loop** |
 | `.agent/skills/meu-status/SKILL.md` | **required for issue→MEU loop** |
 | `.agent/skills/deep-research-prompting/SKILL.md` | **required for `/inspiration-research`** (Pomera MCP — manual adopter edit if substituting) |
+| `.agent/skills/agent-notify/SKILL.md` | **hand-merge, never recopy** — the package copy drops the source's stop-gate wiring, plan paths and `uv run`, and writes receipts under `{{RECEIPTS_DIR}}` |
 
 **After copy:** replace `subagent-delegation/verification-log.md` with the **portable stub**
 (not the source repo's live probe receipts). Keep the stub's `{{RECEIPTS_DIR}}` tokens.
@@ -130,6 +131,9 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 | `tools/Invoke-ClaudeDispatch.ps1` | `core/tools/` | scrub (see §Accepted divergences) |
 | `tools/issue_triage.py` + `tools/issue_triage/**` | `core/tools/` |
 | `tools/meu_status.py` + `tools/meu_status/**` | `core/tools/` |
+| `tools/agent_notify.py` | `core/tools/agent_notify.py` | **Re-copy.** Byte-identical (stop notifications, ADOPTION-GUIDE Step 4d) |
+| `tests/unit/test_agent_notify.py` | `core/tools/tests/test_agent_notify.py` | **Re-copy.** Byte-identical; it never opens a socket |
+| _(package)_ | `core/.claude/settings.notify.example.json` | opt-in `Stop` / `Notification` / `StopFailure` hook block; never wired by default |
 | _(package seeds, not live YAML)_ | `core/.agent/context/known-issues.yaml` (empty) |
 | _(package seeds)_ | `core/.agent/context/meu-status.yaml` (starter phase only) |
 | _(package)_ | `core/.agent/context/{known-issues.md,known-issues-archive.md,meu-registry.md,grouping/README.md,triage-output.EXAMPLE.yaml}` |
@@ -143,8 +147,8 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 
 Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 
-> **Full tools set:** the packaged `core/tools/` tree ships **33 files** as of 2026-10-08 (both CLIs +
-> packages, the three dispatch wrappers, the gates, `tests/`, and `__init__.py`). After copy, confirm
+> **Full tools set:** the packaged `core/tools/` tree ships **35 files** as of 2026-10-10 (both CLIs +
+> packages, the three dispatch wrappers, the gates, `agent_notify.py`, `tests/`, and `__init__.py`). After copy, confirm
 > the count with `find core/tools -type f -not -path '*__pycache__*' | wc -l` and that no `__pycache__` ships.
 
 ### Subagent agent definitions (required for subagent flows)
@@ -178,13 +182,15 @@ changes. Do not recopy the package to move a `model:` value.
 The only group whose source is the **live registry home** — wherever
 `AGENT_MODEL_REGISTRY` / `AGENT_MODEL_REGISTRY_HOME` points on the maintainer's
 machine — rather than the source repo. It is also the only group
-that is not a blind re-copy: three of its six files are deliberately divergent, and
+that is not a blind re-copy: three of its eight files are deliberately divergent, and
 copying them would ship this machine's pins to an adopter.
 
 | Source | Destination | Rule |
 |---|---|---|
 | `<registry home>/schema/model-registry.v1.schema.json` | `.agent/schema/` | **Re-copy.** Byte-identical — the template must validate against the same schema the live tools enforce. |
 | `<registry home>/tools/ModelRegistry.psm1` | `.agent/tools/` | **Re-copy.** Byte-identical; the module is slug-free by construction (it reads compiled JSON and embeds nothing). |
+| `<registry home>/notify/notify.json` | `.agent/notify/` | **Re-copy.** Byte-identical shared defaults (`enabled: false`, no address). Never copy `notify.local.json`, `notify.off` or `state/`. |
+| `<registry home>/schema/notify.v1.schema.json` | `.agent/schema/` | **Re-copy.** Byte-identical — the module validates both notify files against it. |
 | `<registry home>/model-registry.yaml` | `.agent/model-registry.template.yaml` | **Never a copy — hand-merge.** Carry across *new or changed class contracts only*. `catalog`, `bindings`, and `pins` stay empty; `forbid` and `eval_gate` are omitted entirely (they hold catalog ids and machine-local paths). |
 | `<registry home>/README.md` §Bumping a binding | `.agent/INSTANTIATE.md` §6 | **Hand-maintained twin.** Same sequence, no snapshot ids, no machine paths. |
 | — | `.agent/docs/model-classes.md` | **Hand-maintained.** Class list plus the `resolve` dispatch contract. Names no snapshots. |
@@ -437,6 +443,10 @@ Re-run `--ledger` after every refresh and update this table when the count or ro
       machine's layout — dead on macOS/Linux, and on another Windows box with that drive
       letter it silently reads someone else's registry. The slug gate does not catch this:
       a drive letter is not the source project's name.
+- [ ] **No real email address.** `grep -rnIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z.]{2,}' core .agent`
+      → every hit is a documented placeholder (`example.com`, `example.invalid`, a git
+      remote or a commit trailer). A personal inbox belongs only in the adopter's
+      gitignored `notify.local.json`, never in the package.
 
 ---
 
@@ -466,4 +476,5 @@ disposable adoption after updates. Budget targets are AGENTS 170 lines/20,000 UT
 GUARDRAILS 90 lines/8,000 bytes after substitution. Registry headings must match. Preserve
 existing user edits; a planted slug remains a release failure until its owner removes it.
 M4 citation scanning, rule audits, hooks and snapshot/lease/reuse adapters are follow-on,
-not installed mechanisms. No baseline/hook settings from the source are shipped here.
+not installed mechanisms. No baseline/hook settings from the source are shipped here, except
+the opt-in `core/.claude/settings.notify.example.json` (stop notifications, ADOPTION-GUIDE Step 4d).

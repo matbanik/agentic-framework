@@ -76,6 +76,8 @@ docs/model-classes.md                  →  <home>/docs/model-classes.md
 tools/ModelRegistry.psm1               →  <home>/tools/ModelRegistry.psm1
 tools/resolve_model.py                 →  see step 3
 tools/check_model_slugs.py             →  see step 3
+notify/notify.json                     →  <home>/notify/notify.json (optional, §5)
+schema/notify.v1.schema.json           →  <home>/schema/notify.v1.schema.json (optional, §5)
 INSTANTIATE.md                         →  keep as the how-to, or drop it
 ```
 
@@ -215,6 +217,74 @@ Every resolution that should honour the overlay must name the project —
 Both dispatch wrappers pass `{{PROJECT_ROOT}}` for you. A resolution without it
 answers with global policy and no error, which is the failure mode worth
 knowing about: nothing looks wrong.
+
+### Stop notifications (optional)
+
+The stop notifier (`tools/agent_notify.py`, skill `agent-notify`) emails you each time an
+agent session stops. It is off until you turn it on. Its settings live in the home's
+`notify/` folder, which `AGENT_MODEL_REGISTRY_HOME` already points the module at (or set
+`AGENT_NOTIFY_HOME` to another folder):
+
+```text
+<home>/notify/
+  notify.json          the copied template: no address, "enabled": false
+  notify.local.json    you write it, this machine only: to, from, smtp.user, enabled
+  notify.off           optional empty file: every email off
+  state/               the module writes it: log, ledger, pending, dry-run outbox
+```
+
+Write `<home>/notify/notify.local.json`. Only the four fields below are needed; every
+other key falls back to `notify.json`, and the schema (`schema/notify.v1.schema.json`)
+rejects an unknown key:
+
+```json
+{
+  "enabled": false,
+  "to": ["<inbox that receives the email>"],
+  "from": "<sender address>",
+  "smtp": { "user": "<sender address>" }
+}
+```
+
+Keep `"enabled": false` until `test-send` has delivered a message. The password is never in
+this file; the next subsection stores it.
+
+#### Gmail app password
+
+Gmail needs an app password for SMTP; your normal account password does not work.
+Use a sending Google account you control. Do these steps once per machine.
+
+1. **Create.**
+   1. Sign in to the sending Google account. Turn on 2-Step Verification:
+      `https://myaccount.google.com/security` → How you sign in to Google →
+      2-Step Verification.
+   2. Open `https://myaccount.google.com/apppasswords` (or search "App passwords" in the
+      Google Account page).
+   3. If the page says the setting is not available, the cause is one of:
+      Advanced Protection is on; 2-Step Verification uses a security key only; or a
+      Workspace admin turned app passwords off. Use another sending account.
+   4. Name the app `agent-notify` and click Create. Copy the 16-character password now:
+      Google shows it once. The spaces do not matter.
+2. **Store.** From the project root, run
+   `python tools/agent_notify.py setup --user <sender address>` and paste the password at
+   the hidden prompt. Where it goes:
+   - Windows: Credential Manager, generic credential `agent-notify:smtp:<sender address>`
+     (Control Panel → Credential Manager → Windows Credentials → Generic Credentials).
+   - macOS and Linux: the system keyring, through the `keyring` package.
+   - No keyring (CI only): the user-profile environment variable
+     `AGENT_NOTIFY_SMTP_PASSWORD`.
+
+   Never put it in `notify.json`, `notify.local.json`, a `.env` file, a script or a chat
+   with an agent.
+3. **Test.** `python tools/agent_notify.py status` shows `credential: present`. Run
+   `python tools/agent_notify.py test-send --dry-run` and read the `.eml` file in
+   `state/outbox/`. Then run `python tools/agent_notify.py test-send` and confirm the
+   message arrived. Then set `"enabled": true` in `notify.local.json`.
+4. **Revoke or rotate.** To revoke, delete `agent-notify` on the App passwords page. To
+   rotate, create a new one and rerun `setup`; it replaces the stored one. Changing the
+   Google account password revokes every app password.
+
+Hook wiring for each harness is in `ADOPTION-GUIDE.md` Step 4d.
 
 ## 6. Bumping a binding
 
@@ -418,3 +488,5 @@ every case. Run it when you suspect drift from what callers historically got.
   across adopters; they need no substitution.
 - Do not recopy this package to bump a model. A bump is a live-registry edit
   plus `resolve sync` for AUTOGEN-marked agent-definition files.
+- Do not commit `notify/notify.local.json`, `notify/notify.off` or `notify/state/`. They
+  hold your addresses, your switch and your send log; add them to the home's ignore file.

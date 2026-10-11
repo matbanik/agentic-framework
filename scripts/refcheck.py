@@ -147,6 +147,10 @@ ADOPTER_CREATED = frozenset(
         ".agent/model-registry.local.yaml",
         ".agent/model-registry.yaml",
         ".agent/model-registry.json",
+        # Harness hook files. The package ships hooks disabled; ADOPTION-GUIDE Step 4d
+        # tells the adopter to merge the opt-in notify block into their own copy.
+        ".claude/settings.json",
+        ".cursor/hooks.json",
     }
 )
 

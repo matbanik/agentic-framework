@@ -295,6 +295,8 @@ function New-CmdStartInfo {
     $psi.FileName = 'cmd.exe'
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    # A dispatched child is not the human's session: its stops never send email.
+    $psi.EnvironmentVariables['AGENT_NOTIFY'] = 'off'
     $log = New-Object System.Collections.Generic.List[string]
     $words = @()
     for ($i = 0; $i -lt $Command.Count; $i++) {

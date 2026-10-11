@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "enabled": false,
+  "events": {
+    "stop": true,
+    "permission_prompt": true,
+    "idle_prompt": false,
+    "stop_failure": true
+  },
+  "classes": {
+    "done": true,
+    "decision": true,
+    "approval": true,
+    "waiting": true,
+    "blocked": true,
+    "error": true
+  },
+  "smtp": {
+    "host": "smtp.gmail.com",
+    "port": 587,
+    "starttls": true,
+    "timeout_s": 5
+  },
+  "subject_prefix": "[agent]",
+  "excerpt_chars": 600,
+  "min_gap_s": 300,
+  "dedupe_window_s": 120,
+  "auth_backoff_s": 1800,
+  "hourly_cap": 20,
+  "daily_cap": 200,
+  "dry_run": false,
+  "log_dir": null
+}

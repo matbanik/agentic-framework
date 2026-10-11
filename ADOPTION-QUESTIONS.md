@@ -186,6 +186,7 @@ external inputs? Reuse stays disabled without proof. Manual work names observer/
 | F4 | Is there **version control**? Which? | the commit gate | assume git; never auto-commit |
 | F5 | Which **snapshots** will you put in your registry catalog for coordinator / builder / router classes? | `model-routing.md` names classes; the catalog binds them (see `.agent/INSTANTIATE.md`) | one snapshot for every class if that is all you have |
 | F6 | Any **cost constraints**? (metered API vs flat subscription) | how aggressively to delegate to subagents | assume metered |
+| F7 | Should the agent **email you when a session stops**? If yes: which inbox, which SMTP host and port, where the password is kept (OS credential store), and which events. The email carries a redacted excerpt of the last reply, so check Block C first. | `<home>/notify/notify.local.json`, the opt-in hook block, `stop_notify` (ADOPTION-GUIDE Step 4d) | **no** — `enabled: false` |
 
 ---
 

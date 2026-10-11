@@ -30,6 +30,7 @@
 | `context_compaction` (A7) | | `none` ⇒ ~50% checkpoint becomes a hand-back |
 | `web_search_tool` | research MCP \| native \| `codex-search` \| `none` | surface for `human-decision-protocol.md` §3; `none` needs a reason (e.g. Block C forbids it) |
 | `plan_to_exec_gate` (A8) | `human` \| `reviewer-auto` | **default `human`** |
+| `stop_notify` (A1, F7) | `hook` \| `notify-config` \| `prose` \| `none` | derived from the driver (A1); **default `none`** until F7 = yes and Step 4d's `test-send` passed |
 | Builder/verifier classes (A9) | | only if A6 is yes; bind in the A10 registry |
 | Registry home + deferral (A10) | path \| `deferred` | default `<project>/.agent-registry/` via **session-scoped** `AGENT_MODEL_REGISTRY_HOME`; `deferred` forbids dispatch until compiled JSON exists |
 | Instruction loader + capabilities (A11) | | Record root/nested/import order and byte limit; verify sandbox repo/receipt writes; hooks disabled until tested |
@@ -112,6 +113,7 @@
 | Version control + commit gate (F4) | |
 | Models: coordinator / builder / router (F5) | |
 | Cost constraints (F6) | metered / flat |
+| Stop-notification email (F7) | `no` \| `yes`: events, inbox role, credential store (**default `no`**, `enabled: false`; never write the address here) |
 
 ---
 

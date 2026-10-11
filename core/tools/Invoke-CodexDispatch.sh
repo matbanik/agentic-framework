@@ -753,6 +753,9 @@ else
   RESOLVED_EXECUTABLE="$(command -v "$CODEX_EXECUTABLE")"
 fi
 
+# A dispatched child is not the human's session: its stops never send email.
+export AGENT_NOTIFY=off
+
 CLI_VERSION="unknown"
 version_out="$("$RESOLVED_EXECUTABLE" --version 2>&1 || true)"
 if [[ -n "$(echo "$version_out" | tr -d '[:space:]')" ]]; then

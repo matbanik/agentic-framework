@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-notify.local/schema/notify.v1.schema.json",
+  "title": "Stop notifier settings v1",
+  "description": "Closed contract for notify/notify.json and notify/notify.local.json, read by tools/agent_notify.py. The local file is merged over the committed one, one level deep for events, classes and smtp. Every object is closed (additionalProperties: false) so a typo is a validation failure. The SMTP password is never in either file; agent_notify.py setup stores it in the OS credential store.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "enabled": {
+      "type": "boolean",
+      "description": "Master switch. False in the committed file; the machine's notify.local.json sets it true."
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which hook events may send.",
+      "properties": {
+        "stop": { "type": "boolean" },
+        "permission_prompt": { "type": "boolean" },
+        "idle_prompt": { "type": "boolean" },
+        "stop_failure": { "type": "boolean" }
+      }
+    },
+    "classes": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which stop classes may send.",
+      "properties": {
+        "done": { "type": "boolean" },
+        "decision": { "type": "boolean" },
+        "approval": { "type": "boolean" },
+        "waiting": { "type": "boolean" },
+        "blocked": { "type": "boolean" },
+        "error": { "type": "boolean" }
+      }
+    },
+    "smtp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "starttls": { "type": "boolean" },
+        "user": { "type": "string", "minLength": 1 },
+        "timeout_s": { "type": "integer", "minimum": 1, "maximum": 30 }
+      }
+    },
+    "from": { "type": "string", "minLength": 1 },
+    "to": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "subject_prefix": { "type": "string", "maxLength": 20 },
+    "excerpt_chars": { "type": "integer", "minimum": 0, "maximum": 2000 },
+    "min_gap_s": { "type": "integer", "minimum": 0, "maximum": 86400 },
+    "dedupe_window_s": { "type": "integer", "minimum": 0, "maximum": 86400 },
+    "auth_backoff_s": { "type": "integer", "minimum": 0, "maximum": 86400 },
+    "hourly_cap": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "daily_cap": { "type": "integer", "minimum": 1, "maximum": 1000 },
+    "dry_run": { "type": "boolean" },
+    "log_dir": { "type": ["string", "null"], "minLength": 1 }
+  },
+  "if": {
+    "properties": { "enabled": { "const": true } },
+    "required": ["enabled"]
+  },
+  "then": {
+    "required": ["to", "from", "smtp"],
+    "properties": {
+      "smtp": { "required": ["user"] }
+    }
+  }
+}

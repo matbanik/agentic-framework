@@ -29,6 +29,8 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `.agent/schema/model-registry.v1.schema.json` — Same schema as the live registry.
 - `.agent/tools/resolve_model.py` — Thin locate-and-forward wrapper. Swap in the real tool once this home is live.
 - `.agent/tools/check_model_slugs.py` — Thin wrapper, same reason (the live implementation embeds catalog examples).
+- `.agent/notify/notify.json` — Stop-notifier defaults (opt-in, `"enabled": false`, no address). Copied to `<home>/notify/`; the adopter adds a gitignored `notify.local.json` beside it (`INSTANTIATE.md` §5).
+- `.agent/schema/notify.v1.schema.json` — Schema for `notify.json` and `notify.local.json` (`additionalProperties: false`).
 - `.agent/tools/ModelRegistry.psm1` — Slug-free copy. Exports `resolve <class> [-Harness x] [-AuthorVendor y]`; prints the bare slug; infers harness when a class binds exactly one; raises `ambiguous_harness` rather than guessing.
 
 ---
@@ -120,6 +122,7 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `subagent-delegation/verification-log.md` — Portable stub for the resolved-driver smoke + builder write-route probe. Adopters replace the placeholders with real receipt paths after a live probe; a `[B]` is never a pass.
 - `issue-triage/SKILL.md` — Record/query/verify/bucket/triage known issues via `tools/issue_triage.py` and `.agent/context/known-issues.yaml`.
 - `meu-status/SKILL.md` — Query/update/render MEU completion status via `tools/meu_status.py` and `.agent/context/meu-status.yaml`.
+- `agent-notify/SKILL.md` — Opt-in stop notifier: one short email each time a session stops (done, decision, approval, waiting, blocked, error). Settings home and lookup order, the six `tools/agent_notify.py` actions, three off switches, privacy rules, Gmail setup summary, and per-harness wiring keyed by `stop_notify`.
 - `deep-research-prompting/SKILL.md` — Pomera MCP preflight gate, provider capability recon, and portal-ready deep-research prompt templates; driven by `/inspiration-research`. **Manual adopter edit required** if Pomera is not your search surface (see `ADOPTION-GUIDE.md` §Provider substitution).
 
 ## 5b. `core/.claude/agents/` (in-harness subagents)
@@ -172,6 +175,8 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `tools/validate_json_schema.py` — Minimal `jsonschema` front end (`<document.json> <schema.json>`) used for the dispatch wrappers' post-validation. Exit `0` valid / `1` invalid / `2` usage / `3` could not check (no `jsonschema`, unreadable file). The `3` matters: an **absent** validator used to leave the wrapper with an empty `if` and no `else`, so "never checked" and "checked and passed" produced the same result and a verdict could be recorded having never been validated. Arms: `--selftest` (9 arms, 1 must-OK — a validator that refused everything would fail).
 - `tools/validate_build_plan.py` — Structural gate for the build plan, run at Step 10 of `/build-plan-authoring`. Discovers phase specs by file name (`NN-name.md`), so it carries no phase list. Errors: missing hub, unbalanced AUTOGEN markers, broken relative links, heading/file number mismatch, duplicate matrix order numbers, MEU status drift. Warnings (fail only under `--strict`): unreachable spec, duplicate phase id, missing `Goal` / `Exit Criteria`, missing or forward `Prerequisites:`, leftover `[FILL: …]` prompts. `--hub` / `--plan-dir` for a non-default D3 path. `--selftest`: 15 arms, 9 must-OK.
 - `tools/__init__.py` — Package marker so `python tools/<cli>.py` imports resolve.
+- `tools/agent_notify.py` — Opt-in stop notifier, standard library only (`hook`/`deliver`/`send`/`test-send`/`setup`/`status`). Classifies each stop, sends one capped, redacted email over SMTP with the password from the OS credential store, and never blocks a stop. Off until `ADOPTION-GUIDE.md` Step 4d.
+- `tools/tests/test_agent_notify.py` — pytest suite for `agent_notify.py` (44 tests: classifier, home lookup, off switches, redaction, limits, credential lookup, delivery modes). Finds the module from its own location; a recording SMTP class and a socket layer that refuses to connect keep it off the network.
 
 > **Adopter edits required:** `tools/issue_triage/model.py` → `VALID_COMPONENTS` (Block D8).
 > Python deps: `pyyaml`, `jsonschema`. macOS/Linux adopters: read `macos-setup.md` before first dispatch.
@@ -191,6 +196,10 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 > `python tools/lint_task_contract.py --task docs/execution/plans/<slug>/task.md` — and
 > **read the exempt counts in the `OK:` line**, not just the word OK: they are the rows
 > the command checks did not reach.
+
+## 5e. `core/.claude/` — opt-in hook examples
+
+- `.claude/settings.notify.example.json` — The stop notifier's Claude Code hooks: `Stop`, `Notification` (`permission_prompt|idle_prompt`) and `StopFailure`, each `python "${CLAUDE_PROJECT_DIR}/tools/agent_notify.py" hook --harness claude` with `async: true` and `timeout: 20`. Not a settings file: merge its `hooks` block into `.claude/settings.json` only after `test-send --dry-run` passes (`ADOPTION-GUIDE.md` Step 4d).
 
 ## 6. `core/.agent/schemas/`
 
