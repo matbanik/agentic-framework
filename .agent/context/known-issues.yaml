@@ -1,0 +1,221 @@
+# Known Issues SSOT — managed by tools/issue_triage.py
+version: 1
+issues:
+- id: SANITIZE-VERIFY-AUTOGEN-DRIFT-UNDETECTED
+  title: sanitize --verify reports no AUTOGEN drift against a registry whose SHA cannot match the shipped stamps
+  severity: high
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: 'Unconfirmed. The four shipped agent templates carry an AUTOGEN model-registry SHA stamp (core/.claude/agents/{{PROJECT_NAME}}-builder.md line 8). With AGENT_MODEL_REGISTRY pointed at a copy
+    of the live registry that has one catalog field changed, --verify exits 0 and prints ''model-slugs: OK (tier1=0, autogen-drift=0)''. Probable causes: the checker does not walk the shipped templates
+    (their file names hold the unresolved {{PROJECT_NAME}} token), or it does not compare their stamps with the registry it loaded.'
+  blast_radius: The release gate passes on stale agent-definition stamps, which is the drift it claims to detect. An adopter can receive templates stamped against a registry they do not have.
+  category: TECH-DEBT
+  priority: P1
+  effort: S
+  resolution_path: Run the checker directly against the alternate registry and print which files it scanned for AUTOGEN stamps. Make the scan include the shipped templates, then keep the source project's
+    test_verify_reports_autogen_drift_distinctly_from_a_tier1_slug as the negative control.
+  notes: Found by the source project's test_framework_sanitize.py::test_verify_reports_autogen_drift_distinctly_from_a_tier1_slug with AGENT_MODEL_REGISTRY_HOME set. Without that variable the same test
+    fails earlier on registry_not_found (see SANITIZE-VERIFY-REGISTRY-HOME-UNDOCUMENTED).
+  verification:
+    last_checked: '2026-10-08'
+    method: 'source project: uv run pytest tests/tooling/test_cs15_crossrepo.py tests/tooling/test_framework_registry_template.py tests/tooling/test_framework_sanitize.py -q --tb=line (AGENT_MODEL_REGISTRY_HOME
+      set)'
+    result: 'AssertionError: --verify passed against a registry whose SHA cannot match the shipped stamps. Fails the same way at 11210cb (before the resume/fork port) and at 80461f6.'
+- id: CLI-DISPATCH-KIND-ARMS-LEDGER-BEGIN-ARGS
+  title: wrapper-contract dispatch-kind arms fail because the fixture calls ledger begin without its required arguments
+  severity: medium
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: 'Test drift. The arms open two loops with ''review_ledger.py begin --loop-id --review-mode --producer''. begin now also requires --goal-anchor and --ac-file, so it exits 2 and no loop opens.
+    The fixture arm reports ''exec=False plan=False''. The three arms that use those loops then fail closed with exit 3: ''execution kind raises the timeout floor'', ''plan kind keeps the effort default'',
+    ''-Kind disagreeing with the ledger rejected''.'
+  blast_radius: Four of the five red wrapper-contract arms. The gate cannot prove the 2700s execution-review timeout floor or the kind_mismatch refusal, so a real regression in either is masked.
+  category: TECH-DEBT
+  priority: P2
+  effort: XS
+  resolution_path: In Test-CliDispatch.ps1 (dispatch-kind block, near line 470), pass --goal-anchor and an --ac-file that points at a temp plan file. Re-run the gate and expect those four arms to pass.
+  verification:
+    last_checked: '2026-10-08'
+    method: AGENT_MODEL_REGISTRY_HOME=<registry home> pwsh -NoProfile -File core/.agent/skills/cli-dispatch/tests/Test-CliDispatch.ps1 -Test wrapper-contract
+    result: '[FAIL] kind fixtures: two loops opened - exec=False plan=False; three kind arms exit=3. Totals 26/31 PASS at 11210cb, 34/39 PASS at 80461f6.'
+- id: CLI-DISPATCH-NULL-STRIP-ARM-RED
+  title: wrapper-contract null-strip arm finds nulls left in final.json
+  severity: medium
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: Unconfirmed. The schema end-to-end arm drives Invoke-CodexDispatch.ps1 with a fake codex that returns a verdict with null fields. The wrapper keeps final.raw.json (with nulls), but final.json
+    still has nulls. The strip step (schema adapter 'strip-nulls', near line 1477 of the wrapper) either failed or wrote elsewhere. The run's status.json records the reason in null_strip_error.
+  blast_radius: A strict post-validation of reviewer output can reject a valid verdict that has optional fields set to null. Also one red arm in the wrapper-contract gate.
+  category: TECH-DEBT
+  priority: P2
+  effort: S
+  resolution_path: Re-run the arm with -Retention Keep, read null_strip_error from the schema-e2e run's status.json, and fix the cause it names. Keep the arm's rawHadNull precondition.
+  verification:
+    last_checked: '2026-10-08'
+    method: AGENT_MODEL_REGISTRY_HOME=<registry home> pwsh -NoProfile -File core/.agent/skills/cli-dispatch/tests/Test-CliDispatch.ps1 -Test wrapper-contract
+    result: '[FAIL] Wrapper strips nulls from the CLI''s output - pre-strip copy kept=True with nulls=True; final.json nulls=True; verdict preserved=True. Fails the same way at 11210cb (before the resume/fork
+      port) and at 80461f6.'
+- id: SANITIZE-VERIFY-REGISTRY-HOME-UNDOCUMENTED
+  title: sanitize --verify exits 3 unless the registry home variable is set, and the checklist gate list does not say so
+  severity: medium
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: 'With AGENT_MODEL_REGISTRY_HOME unset, --verify fails: ''registry_not_found: no live check_model_slugs.py in the S2 locate order. Searched: <user profile>/.agent''. The failure is correct
+    (fail closed). The UPDATE-CHECKLIST.md gate list runs the command without the variable, so a maintainer who follows the list gets exit 3 on a clean tree.'
+  blast_radius: Every package update. The gate looks broken on a clean tree, and a maintainer can learn to ignore its exit code.
+  category: DOCUMENTATION
+  priority: P2
+  effort: XS
+  resolution_path: Add the variable to each registry-dependent gate command in UPDATE-CHECKLIST.md, or add a preamble step that sets it. Keep the fail-closed behavior.
+  verification:
+    last_checked: '2026-10-08'
+    method: python scripts/sanitize.py --verify (variable unset, then set)
+    result: 'unset: exit 3 registry_not_found; set: all checks OK.'
+- id: PACKAGE-ROOT-CONTEXT-LIVE-MODEL-SLUGS
+  title: Root .agent/context handoffs and evidence notes carry 31 live model slugs inside the registry-home template tree
+  severity: medium
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: The root .agent/ directory is the registry-home template (its INSTANTIATE.md says so), and the framework also keeps its own working context there. Six files under .agent/context/ (the 2026-09-18
+    evidence note and five 2026-09-19 and 2026-09-26 handoffs and reviews) name live catalog ids, harness ids and one vendor-slug-shaped id.
+  blast_radius: The source project's test_a_live_catalog_token_cannot_reach_the_template_tree fails. An adopter who copies the template tree receives model names that go stale at the next registry bump.
+    This known-issues store is in the same directory and writes no model slug.
+  category: ARCH-DECISION
+  priority: P2
+  effort: S
+  resolution_path: 'Decide one: (a) move the framework''s working context out of the template tree, (b) exclude .agent/context/ from the template-tree check and from what an adopter copies, or (c) replace
+    the slugs with class names and mark the rest historical.'
+  verification:
+    last_checked: '2026-10-08'
+    method: 'source project: uv run pytest tests/tooling/test_cs15_crossrepo.py tests/tooling/test_framework_registry_template.py tests/tooling/test_framework_sanitize.py -q --tb=line'
+    result: 'AssertionError: live slug reached the package-root template: 31 items. Fails the same way at 11210cb (before the resume/fork port) and at 80461f6.'
+- id: SOURCE-PROJECT-CROSSREPO-TESTS-DRIFT
+  title: Source-project tests that read this repo fail on five independent drifts
+  severity: medium
+  component: core
+  status: open
+  discovered: '2026-10-08'
+  root_cause: 'The source project''s framework tests encode facts that this repo no longer matches. Each needs a direction decision (update the package or update the test): (1) core/.agent holds 86 files;
+    the test pins 80 from an older proof. (2) .agent/schema/model-registry.v1.schema.json has a $id on source-project.local; the test expects the live schema''s own $id byte for byte and expects sanitize
+    to skip the file. (3) .agent/INSTANTIATE.md does not mention ''workspace''. (4) The packaged ModelRegistry.psm1 differs from the shared registry-home module: the packaged locate order reads AGENT_MODEL_REGISTRY_HOME,
+    the live one names a fixed drive path. (5) The lifecycle doc does not equal the source doc after sanitize; the title line differs ({{PROJECT_NAME_TITLE}} against the unsanitized name) and about 1,250
+    further lines differ. Item 5 is not diagnosed further.'
+  blast_radius: Eight tests fail in the source project with the registry home set, ten without it. The cross-repo checks no longer warn about new drift, because they are already red.
+  category: TECH-DEBT
+  priority: P2
+  effort: M
+  resolution_path: Reconcile in one session with both repos open. For (4) the packaged module looks like the newer one; copy it into the shared registry home or record why they differ. For (1) re-prove
+    the count after this port and update the pin. For (2) decide whether the schema $id is document identity (keep it unsanitized) or a project name (placeholder).
+  related:
+  - SANITIZE-VERIFY-REGISTRY-HOME-UNDOCUMENTED
+  - PACKAGE-ROOT-CONTEXT-LIVE-MODEL-SLUGS
+  - SANITIZE-VERIFY-AUTOGEN-DRIFT-UNDETECTED
+  verification:
+    last_checked: '2026-10-08'
+    method: 'source project: uv run pytest tests/tooling/test_cs15_crossrepo.py tests/tooling/test_framework_registry_template.py tests/tooling/test_framework_sanitize.py -q --tb=line'
+    result: 'registry home set: 8 failed, 43 passed; unset: 10 failed, 41 passed. The same at 11210cb and 80461f6.'
+- id: DURABLE-EVIDENCE-SCRATCH-HANDOFF-FIXTURE
+  title: Durable-evidence test fixture lacks a Decision Log, so a different refusal fires first
+  severity: low
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: core/tools/tests/test_durable_evidence.py::EvidenceTests::test_closeout_consumer_rejects_scratch_only_handoff expects 'no evidence.v1'. The closeout validator (--handoff-structure-only) first
+    refuses the fixture handoff for a missing '## Decision Log' section. The refusal is correct; the fixture is incomplete.
+  blast_radius: One red test in core/tools/tests. The scratch-only evidence refusal it was written to prove is not exercised.
+  category: TECH-DEBT
+  priority: P3
+  effort: XS
+  resolution_path: Add a '## Decision Log' section to the fixture handoff so the evidence.v1 clause is the one that fires.
+  verification:
+    last_checked: '2026-10-08'
+    method: python -m pytest core/tools/tests -q
+    result: '1 failed, 35 passed; AssertionError: ''no evidence.v1'' not found in ''REFUSE: handoff ... is missing required section(s): ## Decision Log.'' Fails the same way at 11210cb (before the resume/fork
+      port) and at 80461f6.'
+- id: UPDATE-CHECKLIST-LEDGER-MOJIBAKE
+  title: UPDATE-CHECKLIST.md divergence-ledger rows contain double-decoded characters
+  severity: low
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: 'Four ledger rows (lines 390, 393, 397, 398 at 80461f6) were saved through a wrong code page: the section sign shows as ''┬º'' and the em dash as ''ΓÇö''. The rows are the execution-critical-review.md,
+    cli-dispatch SKILL.md, preflight.sh and terminal-preflight rows.'
+  blast_radius: Readability of the ledger only; a text search for the original characters misses these rows.
+  category: DOCUMENTATION
+  priority: P3
+  effort: XS
+  resolution_path: Re-decode each damaged cell (encode cp437, decode utf-8) and check that no other file in the repo has the same byte pattern.
+  verification:
+    last_checked: '2026-10-08'
+    method: python scan of UPDATE-CHECKLIST.md for the two damaged sequences
+    result: 4 lines match.
+- id: CHECKLIST-COUNTS-HAND-MAINTAINED
+  title: UPDATE-CHECKLIST tool count and divergence ledger are maintained by hand
+  severity: low
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: The tools count read 19 while core/tools held 33 files; 80461f6 corrected it by hand. The accepted-divergence ledger is reconciled by hand from the source project's hash-diff ledger report.
+    Nothing fails when either goes stale.
+  blast_radius: Maintainers trust a stale count or ledger; drift is found only during a port.
+  category: TECH-DEBT
+  priority: P3
+  effort: S
+  resolution_path: Add a selftest or refcheck arm that counts core/tools files (excluding __pycache__) and compares with the checklist figure, and one that checks that every ledger row names a file that
+    exists.
+- id: HYPOTHESIS-DIR-NOT-GITIGNORED
+  title: pytest creates an untracked .hypothesis/ directory at the repo root
+  severity: low
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: The Hypothesis-based tests write their example database to .hypothesis/, and .gitignore does not list it.
+  blast_radius: A 'git add -A' after a test run stages the cache.
+  category: CONFIGURATION
+  priority: P4
+  effort: XS
+  resolution_path: Add '.hypothesis/' to .gitignore.
+- id: STRAY-GIT-WORKTREES
+  title: Two stray git worktrees are registered against this repo
+  severity: low
+  component: infrastructure
+  status: open
+  discovered: '2026-10-08'
+  root_cause: '''git worktree list'' at 80461f6 shows .kilo/worktrees/tide-paneer (detached, marked prunable) and C:/temp/agentic-framework-migration/commit-checkout (detached). Both are left over from
+    earlier sessions.'
+  blast_radius: Clutter; a prunable entry can confuse tools that enumerate worktrees.
+  category: CONFIGURATION
+  priority: P4
+  effort: XS
+  resolution_path: Confirm with the owner that neither holds unsaved work, then 'git worktree prune' and 'git worktree remove' the migration checkout.
+- id: UNINSTANTIATED-WRAPPERS-PS51-PARSE
+  title: Shipped PowerShell wrappers do not parse before instantiate
+  severity: low
+  component: infrastructure
+  status: candidate
+  discovered: '2026-10-08'
+  root_cause: 'By design: the wrappers hold {{...}} placeholders, which Windows PowerShell 5.1 reports as 8 parse errors. A parse check means something only after instantiate.'
+  blast_radius: None today. A parse error introduced in a wrapper is found only by an adopter.
+  category: MEU-NEW
+  priority: P4
+  effort: S
+  resolution_path: 'Candidate gate: instantiate into a temp tree, then parse every .ps1 under Windows PowerShell 5.1 and PowerShell 7.'
+- id: CODEX-WRAPPER-NO-VALIDATEONLY
+  title: Packaged Codex wrapper has no -ValidateOnly dry run
+  severity: low
+  component: infrastructure
+  status: candidate
+  discovered: '2026-10-08'
+  root_cause: The packaged Invoke-CodexDispatch.ps1 has -GateOnly but no -ValidateOnly. The packaged Invoke-ClaudeDispatch.ps1 and the source project's Codex wrapper both have -ValidateOnly. The ledger
+    records this as an accepted divergence.
+  blast_radius: 'Feature gap: an adopter cannot dry-run a Codex non-review dispatch''s argument checks.'
+  category: DESIGN-DECISION
+  priority: P4
+  effort: S
+  resolution_path: Decide whether to port -ValidateOnly; if yes, add it with a wrapper-contract arm.
