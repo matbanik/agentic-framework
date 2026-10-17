@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": "python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/credits_inbox.py\"" }]
+      }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "python \"${CLAUDE_PROJECT_DIR}/tools/stop_gate.py\" \"${CLAUDE_PROJECT_DIR}\"" }] },
+      { "hooks": [{ "type": "command", "command": "python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/credits_inbox.py\"" }] }
+    ]
+  }
+}

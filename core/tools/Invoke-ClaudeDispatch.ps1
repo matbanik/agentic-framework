@@ -43,6 +43,13 @@ param(
     [Parameter(Mandatory = $false)]
     [double]$MaxBudgetUsd,
 
+    # Tools the run may use without a permission prompt, passed as
+    # `--allowedTools`. A headless run denies every prompt, so a tool such as
+    # WebSearch must be listed here. Names or rules, e.g. 'WebSearch','WebFetch'.
+    # `pwsh -File` passes 'A,B' as one string, so items are also split on commas.
+    [Parameter(Mandatory = $false)]
+    [string[]]$AllowedTools,
+
     # 0 = derive from the effort (low/medium=900, high=1800, xhigh=2700, max=3600).
     [Parameter(Mandatory = $false)]
     [ValidateRange(0, 86400)]
@@ -72,13 +79,42 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$ForkDispatchId,
 
+    # The ID of the new session, a lowercase UUID. Omitted: a random UUID.
+    # Refused with -ResumeDispatchId, which keeps the source session's ID.
+    [Parameter(Mandatory = $false)]
+    [string]$SessionId,
+
+    # What the run is for, recorded as status.json `kind`. Omitted: null.
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('plan', 'exec')]
+    [string]$Kind,
+
     # Check the arguments, the paths and a continuation source, print
     # `dispatch_args_ok` and exit 0 without creating a directory or starting a process.
     [Parameter(Mandatory = $false)]
     [switch]$ValidateOnly,
 
     [Parameter(Mandatory = $false)]
-    [string]$ClaudeExecutable = 'claude'
+    [string]$ClaudeExecutable = 'claude',
+
+    # A file whose first non-empty line is a Claude Console API key. The key goes
+    # to the child only, as ANTHROPIC_API_KEY, so the run bills that Console org
+    # instead of the inherited login. It is never logged or written to a run file.
+    # Omitted: the child inherits the caller's auth.
+    [Parameter(Mandatory = $false)]
+    [string]$ApiKeyFile,
+
+    # With -ValidateOnly only: check that -ApiKeyFile exists, opens for read and
+    # sits outside a git work tree, but do not read its contents. The credits
+    # front end passes it (its -ValidateOnly checks presence and ACL only).
+    [Parameter(Mandatory = $false)]
+    [switch]$KeyFileMetadataOnly,
+
+    # Starts the CLI in place of Process.Start. It gets the final start info
+    # (after the CREDITS_* names are removed) and returns the started Process.
+    # The credits wrapper uses it to create the child suspended inside a job.
+    [Parameter(Mandatory = $false)]
+    [scriptblock]$LaunchHook
 )
 
 # The repository that holds this wrapper. It is always the registry project,
@@ -98,6 +134,12 @@ $ResumeReviewDenyClasses = @(
 
 $DispatchIdPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}\z'
 $SessionIdPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z'
+# -SessionId: the lowercase RFC 4122 form only. Match it with -cmatch.
+$NewSessionIdPattern = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
+# Creation times in running.json. RFC 3339 allows a space in place of the `T`;
+# with the space, pwsh 7 ConvertFrom-Json keeps the value a string and does not
+# turn it into a DateTime that a later string cast shifts or truncates.
+$CreationTimeFormat = "yyyy-MM-dd HH:mm:ss.fffffff'Z'"
 
 # Write a named continuation refusal on stderr and stop with exit 1. Every
 # refusal runs before the run directory exists and before claude is started.
@@ -408,6 +450,70 @@ function Get-JsonProp {
     return $prop.Value
 }
 
+# A cost value from parsed JSON as a double, or $null when it is not a number.
+function ConvertTo-CostOrNull {
+    param($Value)
+    if ($Value -is [double] -or $Value -is [single] -or $Value -is [decimal] -or
+        $Value -is [int] -or $Value -is [long]) {
+        return [double]$Value
+    }
+    return $null
+}
+
+# The UTC creation time of a process in $CreationTimeFormat, or $null when the
+# process is gone or cannot be read.
+function Get-ProcessCreationUtc {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+    try {
+        $p = Get-Process -Id $ProcessId -ErrorAction Stop
+        return $p.StartTime.ToUniversalTime().ToString($CreationTimeFormat, [System.Globalization.CultureInfo]::InvariantCulture)
+    } catch {
+        return $null
+    }
+}
+
+# The Windows boot counter (BootId). It changes at every boot, so a process id
+# recorded in an earlier boot is never read as live. $null when it cannot be read.
+function Get-BootId {
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters'
+    try {
+        $value = (Get-ItemProperty -LiteralPath $key -Name BootId -ErrorAction Stop).BootId
+        if ($null -eq $value) { return $null }
+        return "bootid:$value"
+    } catch {
+        return $null
+    }
+}
+
+# The CLI process that cmd.exe started: its first child that is not conhost.exe.
+# Waits up to $WaitMs for it. $null when cmd.exe exits first or none appears.
+function Find-CliProcess {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Launcher,
+        [int]$WaitMs = 10000
+    )
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($watch.ElapsedMilliseconds -lt $WaitMs) {
+        $children = @()
+        try {
+            $children = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($Launcher.Id)" -ErrorAction Stop |
+                Where-Object { $_.Name -ne 'conhost.exe' } | Sort-Object CreationDate)
+        } catch {
+            [Console]::Error.WriteLine("claude dispatch: child process query failed: $($_.Exception.Message)")
+        }
+        if ($children.Count -gt 0) {
+            $childId = [int]$children[0].ProcessId
+            $created = Get-ProcessCreationUtc -ProcessId $childId
+            if ($null -ne $created) {
+                return [pscustomobject]@{ ProcessId = $childId; CreationUtc = $created }
+            }
+        }
+        if ($Launcher.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    return $null
+}
+
 # Every path argument is checked once, before any use. The characters below
 # are illegal in a Windows path under both PowerShell editions; GetFullPath
 # catches the rest, such as a colon after the drive under Windows PowerShell.
@@ -437,6 +543,10 @@ Assert-PathArgument -Name 'PromptFile' -Value $PromptFile
 Assert-PathArgument -Name 'OutputDir' -Value $OutputDir
 Assert-PathArgument -Name 'WorkingDirectory' -Value $WorkingDirectory
 Assert-PathArgument -Name 'RepoRoot' -Value $RepoRoot
+Assert-PathArgument -Name 'ApiKeyFile' -Value $ApiKeyFile
+if ($KeyFileMetadataOnly -and -not $ValidateOnly) {
+    Stop-DispatchArgs "key_file_metadata_only_needs_validate_only: -KeyFileMetadataOnly is used only with -ValidateOnly."
+}
 if ([string]::IsNullOrWhiteSpace($ModelClass)) {
     Stop-DispatchArgs "ModelClass must be specified."
 }
@@ -467,14 +577,28 @@ if ($continuationMode -ne 'fresh' -and $ResumeReviewDenyClasses -contains $Model
     Stop-ContinuationRefused -Name 'resume_refused_review_class' `
         -Detail "class '$ModelClass' is a review class; every review round starts fresh"
 }
+$requestedSessionId = $null
+if ($PSBoundParameters.ContainsKey('SessionId')) {
+    if ([string]::IsNullOrEmpty($SessionId) -or $SessionId -cnotmatch $NewSessionIdPattern) {
+        Stop-DispatchArgs "session_id_invalid: -SessionId must be a lowercase UUID"
+    }
+    if ($continuationMode -eq 'resume') {
+        Stop-ContinuationRefused -Name 'session_id_with_resume' `
+            -Detail 'a resumed session keeps the source session ID; omit -SessionId'
+    }
+    $requestedSessionId = $SessionId
+}
+$kindValue = if ($PSBoundParameters.ContainsKey('Kind')) { $Kind } else { $null }
 
 # 2. Model selection through the registry (harness claude-p)
 $modelWasGiven = $PSBoundParameters.ContainsKey('Model')
 if ($modelWasGiven -and ([string]::IsNullOrEmpty($Model) -or $Model -notmatch '^[a-zA-Z0-9.-]+\z')) {
     Stop-DispatchArgs "Invalid Model format."
 }
-if ([string]::IsNullOrWhiteSpace($AuthorVendor) -and $env:{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR) {
-    $AuthorVendor = $env:{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR
+# GetEnvironmentVariable, not $env:, so the template file parses before the name is substituted.
+$envAuthorVendor = [Environment]::GetEnvironmentVariable('{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR')
+if ([string]::IsNullOrWhiteSpace($AuthorVendor) -and $envAuthorVendor) {
+    $AuthorVendor = $envAuthorVendor
 }
 
 $registryModulePath = $null
@@ -666,6 +790,55 @@ if ($continuationMode -ne 'fresh') {
     $sourceSessionId = $sourceSid
 }
 
+# 4b. API key file. Checked before -ValidateOnly; the key is never printed.
+$apiKey = $null
+$authMode = 'inherited'
+$allowedToolList = @($AllowedTools | ForEach-Object { "$_" -split ',' } |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ })
+foreach ($tool in $allowedToolList) {
+    if ($tool -notmatch '^[A-Za-z][A-Za-z0-9_]*(\([^()\r\n]*\))?$') {
+        Stop-DispatchArgs "allowed_tools_invalid: '$tool' is not a tool name or rule"
+    }
+}
+
+$canonicalKeyFile = $null
+if (-not [string]::IsNullOrEmpty($ApiKeyFile)) {
+    $canonicalKeyFile = Get-PhysicalPath $ApiKeyFile
+    if (-not (Test-Path -LiteralPath $canonicalKeyFile -PathType Leaf)) {
+        Stop-DispatchArgs "api_key_file_not_found: $ApiKeyFile"
+    }
+    if ($KeyFileMetadataOnly) {
+        # Presence and ACL only: open for read and close at once. The contents are
+        # not read; the launch that follows checks them.
+        try {
+            [System.IO.File]::Open($canonicalKeyFile, 'Open', 'Read', 'ReadWrite').Dispose()
+        } catch {
+            Stop-DispatchArgs "api_key_file_unreadable: $ApiKeyFile ($($_.Exception.GetType().Name))"
+        }
+    } else {
+        $keyLines = @(Get-Content -LiteralPath $canonicalKeyFile -Encoding UTF8 |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+        $apiKey = if ($keyLines.Count -gt 0) { ([string]$keyLines[0]).Trim() } else { '' }
+        # Console API keys: sk-ant-api03-... and the newer sk-ant-usr-... Subscription
+        # OAuth tokens (sk-ant-oat/ort) and admin keys are not API keys and are refused.
+        if ($apiKey -notmatch '^sk-ant-(api\d{2}|usr)-[A-Za-z0-9_-]{20,}\z') {
+            Stop-DispatchArgs "api_key_file_invalid: $ApiKeyFile does not hold a Console API key (sk-ant-api03-.. or sk-ant-usr-..)"
+        }
+    }
+    # A key file inside a work tree is one `git add` away from a commit.
+    $keyInRepo = $false
+    try {
+        $null = & git -C (Split-Path -Parent $canonicalKeyFile) rev-parse --is-inside-work-tree 2>$null
+        $keyInRepo = ($LASTEXITCODE -eq 0)
+    } catch {
+        $keyInRepo = $false
+    }
+    if ($keyInRepo) {
+        Stop-DispatchArgs "api_key_file_in_repo: $ApiKeyFile is inside a git work tree; move it out"
+    }
+    $authMode = 'api_key_file'
+}
+
 # -ValidateOnly stops here: every argument, path and source rule above has
 # passed, and no directory, executable lookup or process has been touched.
 if ($ValidateOnly) {
@@ -759,17 +932,20 @@ if ($PSBoundParameters.ContainsKey('MaxBudgetUsd')) {
     $maxBudgetText = $MaxBudgetUsd.ToString([System.Globalization.CultureInfo]::InvariantCulture)
     $argsList += @('--max-budget-usd', $maxBudgetText)
 }
+if ($allowedToolList.Count -gt 0) {
+    $argsList += @('--allowedTools', ($allowedToolList -join ','))
+}
 $preassignedSessionId = $null
 switch ($continuationMode) {
     'fresh' {
-        $preassignedSessionId = [guid]::NewGuid().ToString()
+        $preassignedSessionId = if ($null -ne $requestedSessionId) { $requestedSessionId } else { [guid]::NewGuid().ToString() }
         $argsList += @('--session-id', $preassignedSessionId)
     }
     'resume' {
         $argsList += @('--resume', $sourceSessionId)
     }
     'fork' {
-        $preassignedSessionId = [guid]::NewGuid().ToString()
+        $preassignedSessionId = if ($null -ne $requestedSessionId) { $requestedSessionId } else { [guid]::NewGuid().ToString() }
         $argsList += @('--resume', $sourceSessionId, '--fork-session', '--session-id', $preassignedSessionId)
     }
 }
@@ -789,10 +965,47 @@ $startUtc = $start.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 # A launch that fails stops here: polling a process that never started would
 # wait through -TimeoutSec and then report a timeout.
 $proc = $null
+$cachingEnvRemoved = @()
+$creditsEnvRemoved = @()
 try {
     $psi = $launchCmd.StartInfo
     $psi.WorkingDirectory = $canonicalWorkDir
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    if ($authMode -eq 'api_key_file') {
+        $psi.EnvironmentVariables['ANTHROPIC_API_KEY'] = $apiKey
+        # ANTHROPIC_AUTH_TOKEN outranks the API key in the CLI's auth order.
+        if ($psi.EnvironmentVariables.ContainsKey('ANTHROPIC_AUTH_TOKEN')) {
+            $psi.EnvironmentVariables.Remove('ANTHROPIC_AUTH_TOKEN')
+        }
+    }
+    # DISABLE_PROMPT_CACHING* turns prompt caching off, so every call resends
+    # the whole context at the full input price. A long-lived parent (an IDE
+    # started before the variable was removed) still carries it; the child
+    # never gets it. Names are upper-cased: Windows PowerShell lists them lower.
+    foreach ($name in @($psi.EnvironmentVariables.Keys)) {
+        if ($name -match '^DISABLE_PROMPT_CACHING') {
+            $psi.EnvironmentVariables.Remove($name)
+            $cachingEnvRemoved += $name.ToUpperInvariant()
+        }
+    }
+    $cachingEnvRemoved = @($cachingEnvRemoved | Sort-Object -Unique)
+    if ($cachingEnvRemoved.Count -gt 0) {
+        [Console]::Error.WriteLine("claude dispatch: removed $($cachingEnvRemoved -join ', ') from the child environment; prompt caching stays on")
+    }
+    # CREDITS_RUN_ID, CREDITS_STATE_DB, CREDITS_SEGMENT and CREDITS_BASE_COMMIT
+    # (CREDITS_ENV) name the scheduled credits run that launched this wrapper.
+    # The CLI session is not that run, so no CREDITS_* name reaches the child.
+    foreach ($name in @($psi.EnvironmentVariables.Keys)) {
+        if ($name -match '^CREDITS_') {
+            $psi.EnvironmentVariables.Remove($name)
+            $creditsEnvRemoved += $name.ToUpperInvariant()
+        }
+    }
+    $creditsEnvRemoved = @($creditsEnvRemoved | Sort-Object -Unique)
+    if ($null -ne $LaunchHook) {
+        $proc = @(& $LaunchHook $psi) | Where-Object { $_ -is [System.Diagnostics.Process] } | Select-Object -Last 1
+    } else {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+    }
 } catch {
     Remove-Item -LiteralPath $promptTempFile -ErrorAction SilentlyContinue
     Stop-DispatchArgs "claude dispatch failed: launch failed: $($_.Exception.Message)"
@@ -801,6 +1014,42 @@ if ($null -eq $proc) {
     Remove-Item -LiteralPath $promptTempFile -ErrorAction SilentlyContinue
     Stop-DispatchArgs 'claude dispatch failed: launch failed: no process started'
 }
+$apiKey = $null
+
+# running.json marks a live run: status.json is written only at the end, so a
+# reader (tools/Get-ClaudeDispatch.ps1) uses this file's pid and session_id to
+# tell a running dispatch from a dead one and to find its live transcript.
+# A process id alone is not proof of life: Windows reuses ids. The reader
+# matches each recorded id with its creation time and the boot it ran in.
+# `pid` is cmd.exe; `claude_pid` is the CLI process cmd.exe started, and
+# `launcher_pid` is this wrapper, which writes status.json when the CLI ends.
+# model_class, kind and permission_mode let a recovered status.json
+# (Get-ClaudeDispatch.ps1 -RecoverStatus) be resumed with the same mode.
+$liveSessionId = if ($null -ne $preassignedSessionId) { $preassignedSessionId } else { $sourceSessionId }
+$cliProcess = Find-CliProcess -Launcher $proc
+$runningManifest = [ordered]@{
+    schema_version = "dispatch-running.v1"
+    dispatch_id = $DispatchId
+    pid = $proc.Id
+    claude_pid = if ($null -ne $cliProcess) { $cliProcess.ProcessId } else { $null }
+    claude_creation_utc = if ($null -ne $cliProcess) { $cliProcess.CreationUtc } else { $null }
+    launcher_pid = $PID
+    launcher_creation_utc = Get-ProcessCreationUtc -ProcessId $PID
+    boot_id = Get-BootId
+    session_id = $liveSessionId
+    session_mode = $continuationMode
+    source_dispatch_id = $sourceDispatchId
+    model = $Model
+    model_class = $ModelClass
+    kind = $kindValue
+    permission_mode = $PermissionMode
+    auth_mode = $authMode
+    start_utc = $startUtc
+    working_directory = $canonicalWorkDir
+    prompt_caching_env_removed = $cachingEnvRemoved
+    credits_env_removed = $creditsEnvRemoved
+}
+Write-TextNoBom "$runDir/running.json" ($runningManifest | ConvertTo-Json -Depth 2)
 
 $timedOut = $false
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -879,8 +1128,38 @@ if ($timedOut) {
     $resultText = if ($result -is [string]) { $result } else { '' }
     if ($resultText.Length -gt 200) { $resultText = $resultText.Substring(0, 200) }
     $errorSummary = "claude reported is_error: $resultText"
+    # Promotional / monthly API credits cover `claude -p` run by the human, not
+    # runs launched from a Claude Code session (billed as Claude Code).
+    if ($authMode -eq 'api_key_file' -and $resultText -match 'credit balance' -and $env:CLAUDE_CODE_ENTRYPOINT) {
+        $errorSummary += " (launched from a Claude Code session, entrypoint '$($env:CLAUDE_CODE_ENTRYPOINT)'," +
+            " which bills as Claude Code; API credits do not cover it. Run the dispatch from a terminal.)"
+    }
 }
 $wrapperExitCode = if ([string]::IsNullOrEmpty($errorSummary)) { 0 } else { 1 }
+
+# total_cost_usd from the CLI is the running total of the whole session, not of
+# this run. The segment's own cost is that total minus the session's total at
+# the end of the run this one continues: 0 for a fresh session, the source's
+# total for a resume. A fork has no measured baseline (no probe shows whether
+# its total carries the source's), so its delta stays unknown. A total that is
+# zero, missing or not above the baseline cannot be a real segment cost; the
+# delta is then null and cost_untrusted is true.
+$previousSessionTotal = $null
+switch ($continuationMode) {
+    'fresh' { $previousSessionTotal = 0.0 }
+    'resume' {
+        $previousSessionTotal = ConvertTo-CostOrNull (Get-JsonProp $sourceStatus 'session_total_usd')
+        if ($null -eq $previousSessionTotal) {
+            $previousSessionTotal = ConvertTo-CostOrNull (Get-JsonProp $sourceStatus 'total_cost_usd')
+        }
+    }
+}
+$sessionTotalUsd = ConvertTo-CostOrNull (Get-JsonProp $parsed 'total_cost_usd')
+$segmentDeltaUsd = $null
+if ($null -ne $sessionTotalUsd -and $null -ne $previousSessionTotal -and
+    $sessionTotalUsd -gt 0 -and $sessionTotalUsd -gt $previousSessionTotal) {
+    $segmentDeltaUsd = [math]::Round($sessionTotalUsd - $previousSessionTotal, 10)
+}
 
 # 10. status.json (dispatch-status.v1), written atomically
 $wrapperSha256 = Get-Sha256File -Path $PSCommandPath
@@ -897,11 +1176,12 @@ $statusManifest = [ordered]@{
     resolution = $modelResolution
     # Session record. A later -ResumeDispatchId / -ForkDispatchId reads
     # cli, dispatch_kind, model_class, working_directory and session_id from
-    # here. A headless Claude run is never bound to a review loop, so its kind
-    # is always 'non-review', the value Invoke-CodexDispatch.ps1 writes for a
-    # -NonReviewDispatch run.
+    # here. A headless Claude run is never bound to a review loop, so its
+    # dispatch_kind is always 'non-review', the value Invoke-CodexDispatch.ps1
+    # writes for a -NonReviewDispatch run. kind is what the run is for.
     cli = "claude"
     dispatch_kind = "non-review"
+    kind = $kindValue
     session_id = $sessionId
     session_id_source = $sessionIdSource
     session_mode = $continuationMode
@@ -927,6 +1207,20 @@ $statusManifest = [ordered]@{
     child_exit_code = $childExitCode
     is_error = if ($isError -is [bool]) { $isError } else { $null }
     error_summary = $errorSummary
+    # Billing record. auth_mode is 'api_key_file' or 'inherited'; the key
+    # itself is never written. launch_entrypoint is the caller's
+    # CLAUDE_CODE_ENTRYPOINT (null outside a Claude Code session).
+    auth_mode = $authMode
+    api_key_file = $canonicalKeyFile
+    launch_entrypoint = if ($env:CLAUDE_CODE_ENTRYPOINT) { $env:CLAUDE_CODE_ENTRYPOINT } else { $null }
+    total_cost_usd = Get-JsonProp $parsed 'total_cost_usd'
+    session_total_usd = $sessionTotalUsd
+    segment_delta_usd = $segmentDeltaUsd
+    cost_untrusted = ($null -eq $segmentDeltaUsd)
+    # DISABLE_PROMPT_CACHING* variables kept out of the child (empty: none set).
+    prompt_caching_env_removed = $cachingEnvRemoved
+    # CREDITS_* variables kept out of the child (empty: none set).
+    credits_env_removed = $creditsEnvRemoved
     working_directory = $canonicalWorkDir
     wrapper_sha256 = $wrapperSha256
 }

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "credits-run.v1",
+  "title": "Scheduled credits run manifest",
+  "description": "The registration input of one scheduled credits run (report section 4.1). Register-CreditsRun.ps1 validates it and imports it into the store. Every path is an absolute local path: no UNC path, no relative path and no '..' segment.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run_id", "kind", "project_root", "plan_folder", "brief", "launch", "budget", "messaging", "depends_on", "lane"],
+  "properties": {
+    "schema": { "const": "credits-run.v1" },
+    "run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "kind": { "enum": ["plan", "exec"] },
+    "project_root": { "type": "string", "minLength": 1, "description": "The main tree of the project." },
+    "plan_folder": { "type": "string", "minLength": 1, "description": "The plan folder, relative to project_root." },
+    "brief": { "type": "string", "minLength": 1, "description": "The prompt file of the run." },
+    "launch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["working_directory", "claude_exe", "python_exe", "permission_mode", "effort", "segment_cap_usd", "timeout_sec"],
+      "properties": {
+        "working_directory": { "type": "string", "minLength": 1, "description": "Always the main tree." },
+        "claude_exe": { "type": "string", "minLength": 1 },
+        "python_exe": { "type": "string", "minLength": 1 },
+        "permission_mode": { "enum": ["plan", "acceptEdits", "dontAsk", "bypassPermissions"] },
+        "model": { "type": "string", "minLength": 1 },
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] },
+        "segment_cap_usd": { "type": "number", "exclusiveMinimum": 0 },
+        "timeout_sec": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_cap_usd"],
+      "properties": {
+        "run_cap_usd": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "messaging": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["orchestrator_sessions", "ruling_enabled", "gate_wait_max_min"],
+      "properties": {
+        "orchestrator_sessions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "ruling_enabled": { "type": "boolean" },
+        "gate_wait_max_min": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["run_id", "require"],
+        "properties": {
+          "run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+          "require": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "enum": ["done_verified", "parked_verified", "landed", "committed"] }
+          }
+        }
+      }
+    },
+    "lane": { "type": "string", "minLength": 1 },
+    "executor_worktree": { "type": "boolean", "description": "The run works in an executor worktree at the base B that admission binds (report section 5.4)." },
+    "carry_allowed": {
+      "type": "array",
+      "description": "Repository-relative files or folders (a folder ends with '/') that the worktree may carry as successor inputs. Needs executor_worktree.",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chain_id", "quote", "given_at", "chain_cap_usd"],
+      "properties": {
+        "chain_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "quote": { "type": "string", "minLength": 1, "description": "The user's own chat words that name the runs, their order and the cap." },
+        "given_at": { "type": "string", "minLength": 1 },
+        "chain_cap_usd": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    }
+  }
+}

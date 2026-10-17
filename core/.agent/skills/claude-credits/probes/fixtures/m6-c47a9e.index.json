@@ -1,0 +1,131 @@
+{
+  "steps": {
+    "typed-1": {
+      "line": 3,
+      "origin": "human",
+      "turnOrigin": "human",
+      "promptSource": "sdk",
+      "new_promptId": true,
+      "userType": "external",
+      "isMeta": false
+    },
+    "busy-tool": {
+      "line": 25,
+      "origin": "human",
+      "turnOrigin": "human",
+      "promptSource": "sdk",
+      "new_promptId": true,
+      "userType": "external",
+      "isMeta": false
+    },
+    "check-1": {
+      "line": 41,
+      "origin": "human",
+      "turnOrigin": "human",
+      "promptSource": "sdk",
+      "new_promptId": true,
+      "userType": "external",
+      "isMeta": false
+    },
+    "busy-text": {
+      "line": 46,
+      "origin": "human",
+      "turnOrigin": "human",
+      "promptSource": "sdk",
+      "new_promptId": true,
+      "userType": "external",
+      "isMeta": false
+    },
+    "check-2": {
+      "line": 58,
+      "origin": "human",
+      "turnOrigin": "human",
+      "promptSource": "sdk",
+      "new_promptId": true,
+      "userType": "external",
+      "isMeta": false
+    },
+    "exact_resend": {
+      "line": 63,
+      "origin": "human",
+      "turnOrigin": "human",
+      "promptSource": "sdk",
+      "new_promptId": true,
+      "userType": "external",
+      "isMeta": false
+    },
+    "reworded_resend": {
+      "line": 69,
+      "origin": "human",
+      "turnOrigin": "human",
+      "promptSource": "sdk",
+      "new_promptId": true,
+      "userType": "external",
+      "isMeta": false
+    }
+  },
+  "cases": {
+    "tool": {
+      "enqueue_line": 30,
+      "enqueue_match": "contentless_after_busy_step",
+      "window_end_line": 41,
+      "queued_text_source": "sent_text",
+      "enqueue_during_turn": true,
+      "attachment_lines": [
+        32
+      ],
+      "attachment_delivery_ids": [
+        "4975038f-70b7-4a2b-b7d9-acd2a9f577eb"
+      ],
+      "remove_lines": [
+        33
+      ],
+      "remove_delivery_ids": [
+        "4975038f-70b7-4a2b-b7d9-acd2a9f577eb"
+      ],
+      "dequeue_lines": [
+        40
+      ],
+      "user_entry_lines": [],
+      "assistant_contains_queued": false
+    },
+    "text": {
+      "enqueue_line": 48,
+      "enqueue_match": "contentless_after_busy_step",
+      "window_end_line": 58,
+      "queued_text_source": "sent_text",
+      "enqueue_during_turn": true,
+      "attachment_lines": [],
+      "attachment_delivery_ids": [],
+      "remove_lines": [],
+      "remove_delivery_ids": [],
+      "dequeue_lines": [
+        51,
+        57
+      ],
+      "user_entry_lines": [
+        52
+      ],
+      "assistant_contains_queued": false,
+      "relabeled": [
+        {
+          "line": 52,
+          "origin": "human",
+          "turnOrigin": "human",
+          "promptSource": "sdk",
+          "new_promptId": true,
+          "userType": "external",
+          "isMeta": false,
+          "text_equal": true,
+          "raw_equal": true
+        }
+      ]
+    }
+  },
+  "promptId_without_origin_lines": [
+    31
+  ],
+  "session": "0596bd59-5711-4906-abbf-24bcfe7a7cc5",
+  "fixture": "m6-c47a9e.jsonl",
+  "nonce": "c47a9e"
+}

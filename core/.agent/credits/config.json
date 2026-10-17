@@ -1,0 +1,6 @@
+{
+  "ruling_enabled": false,
+  "gate_wait_max_min": 0,
+  "cache_ttl": "5m",
+  "credits_start_policy": "human-only"
+}

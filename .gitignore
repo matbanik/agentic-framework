@@ -16,3 +16,5 @@ Thumbs.db
 *.log
 framework.vars
 .hypothesis/
+# Package-mode test runs write here: {{RECEIPTS_DIR}} is rendered only in an adopter (EA-86).
+/{{RECEIPTS_DIR}}/

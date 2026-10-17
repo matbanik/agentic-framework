@@ -48,6 +48,9 @@ core/.agent/            → <project>/.agent/          (includes empty context/ 
 core/tools/             → <project>/tools/           (issue_triage + meu_status CLIs)
 core/templates/         → <project>/.agent/templates/   (TEMPLATE_HOME; or F1/F2 override)
 core/.claude/agents/    → <project>/.claude/agents/     (Claude Code Agent/Task defs)
+core/.claude/hooks/     → <project>/.claude/hooks/      (credits inbox hook; scheduled runs)
+core/.claude/settings.hooks.json → <project>/.claude/settings.hooks.json
+                                    (hook fragment; Step 2b merges it into settings.json)
 .agent/INSTANTIATE.md   → <project>/.agent/INSTANTIATE.md  (how-to; docs link ../INSTANTIATE.md)
 ```
 
@@ -82,6 +85,8 @@ Copy-Item -LiteralPath (Join-Path $pkg 'core/.agent')        -Destination (Join-
 Copy-Item -LiteralPath (Join-Path $pkg 'core/tools')         -Destination (Join-Path $dest 'tools') -Recurse
 Copy-Item -LiteralPath (Join-Path $pkg 'core/templates')     -Destination (Join-Path $dest '.agent/templates') -Recurse
 Copy-Item -LiteralPath (Join-Path $pkg 'core/.claude/agents') -Destination (Join-Path $dest '.claude/agents') -Recurse
+Copy-Item -LiteralPath (Join-Path $pkg 'core/.claude/hooks') -Destination (Join-Path $dest '.claude/hooks') -Recurse
+Copy-Item -LiteralPath (Join-Path $pkg 'core/.claude/settings.hooks.json') -Destination (Join-Path $dest '.claude/settings.hooks.json')
 Copy-Item -LiteralPath (Join-Path $pkg '.agent/INSTANTIATE.md') -Destination (Join-Path $dest '.agent/INSTANTIATE.md') -Force
 ```
 
@@ -334,6 +339,48 @@ until the last step here, and it never blocks a stop.
 The dispatch wrappers set `AGENT_NOTIFY=off` for every child they start, so a review or
 worker session never emails. To stop all email at once, create an empty `notify.off` file in
 `<home>/notify/`.
+
+---
+
+## Scheduled credits runs (optional, Windows-only)
+
+This part is optional. Skip it if you do not run headless Claude sessions on an API key from the
+Windows Task Scheduler. The skill is `.agent/skills/claude-credits/SKILL.md`; the run rules are
+§Scheduled headless run in `create-plan.md` and `execution-session.md`. Scheduled runs are
+Windows-only: on another OS, `scripts/instantiate.py` prints `REFUSED: scheduled credits runs are
+Windows-only`, removes the Windows-only files and writes no inbox hook entry. The rest of the
+install continues.
+
+What the install does:
+
+- Step 2 copies `core/.claude/hooks/` and `core/.claude/settings.hooks.json`. The installer
+  merges the fragment into `.claude/settings.json`: the stop gate (`tools/stop_gate.py`) and the
+  credits inbox hook (`.claude/hooks/credits_inbox.py`). The merge keeps your entries first and
+  unchanged. The inbox hook does nothing in a session without `CREDITS_RUN_ID`.
+- The receipts directory must be a local path. The credits store is SQLite in WAL mode, so the
+  installer refuses a UNC path.
+- `.agent/credits/config.json` holds four keys. The package ships both switches off:
+
+  | Key | Package value | What it controls |
+  |---|---|---|
+  | `ruling_enabled` | `false` | The store accepts a `ruling` message: the human's answer to a run's open decision. |
+  | `gate_wait_max_min` | `0` | How long a run waits at a human-decision gate (`gate-wait-then-exit`) before it stops. `0` = no wait. |
+  | `cache_ttl` | `"5m"` | The prompt-cache lifetime. `"1h"` needs a Probe Record with a `p7_result` (`Register-CreditsRun.ps1` refuses `cache_ttl_unproven`). |
+  | `credits_start_policy` | `"human-only"` | Who starts a registered run. `human-only`: only the human, from a terminal, with `-StartedBy human-command`. `agent-on-user-chat`: also the agent, when the human tells it to in a direct chat message. |
+
+  Set the policy at install with `--credits-start-policy human-only` or
+  `--credits-start-policy agent-on-user-chat`.
+
+Before you turn on either switch (`ruling_enabled: true`, or `gate_wait_max_min` above 0):
+
+1. **Review the governance text.** Read the diff of `AGENTS.md`, `GUARDRAILS.md` and
+   `.agent/docs/human-decision-protocol.md` against the package copies. The switches rely on
+   the verified-ruling frame in `GUARDRAILS.md` SIGN 3 and on the bounded wait
+   (`gate-wait-then-exit`) in `AGENTS.md`. If you changed those files, keep both rules.
+2. **Keep the anchor lines.** `Register-CreditsRun.ps1` checks four approved lines in those files
+   (`$script:GovernanceAnchors`). While a switch is on and a line is missing, it refuses to
+   register a run (`messaging_locked`).
+3. **Record the review** (who, when, which commit) in your decision log. Then set the switches.
 
 ---
 

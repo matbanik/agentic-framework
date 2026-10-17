@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "credits-outbox.v1",
+  "title": "credits-outbox.v1",
+  "description": "One run-side event in outbox_events.payload_json (report section 4.6.5). tools/credits_msg.py writes it; semantic_key is unique, so a retry of the same event writes nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "semantic_key", "utc", "run_id", "segment", "kind"],
+  "properties": {
+    "schema": { "const": "credits-outbox.v1" },
+    "semantic_key": { "type": "string", "minLength": 3, "maxLength": 200 },
+    "utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "segment": { "type": "integer", "minimum": 1 },
+    "kind": { "enum": ["ack", "applied", "report", "decision", "decision_resolved", "gate_expired"] },
+    "msg_id": { "type": ["string", "null"] },
+    "decision_id": { "type": ["string", "null"] },
+    "gate_id": { "type": ["string", "null"] },
+    "text": { "type": ["string", "null"], "maxLength": 4000 }
+  }
+}

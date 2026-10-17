@@ -147,9 +147,25 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 
 Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 
-> **Full tools set:** the packaged `core/tools/` tree ships **35 files** as of 2026-10-10 (both CLIs +
-> packages, the three dispatch wrappers, the gates, `agent_notify.py`, `tests/`, and `__init__.py`). After copy, confirm
+> **Full tools set:** the packaged `core/tools/` tree ships **70 files** as of 2026-10-16 (both CLIs +
+> packages, the dispatch wrappers, the gates, `agent_notify.py`, the credits tools, `tests/`, and `__init__.py`). After copy, confirm
 > the count with `find core/tools -type f -not -path '*__pycache__*' | wc -l` and that no `__pycache__` ships.
+
+### Scheduled credits runs (optional, Windows-only)
+
+| Source | Destination | Notes |
+|---|---|---|
+| `.agent/skills/claude-credits/**` | `core/.agent/skills/claude-credits/` | **Hand-merge.** The package drops the source's plan names, task paths and examples, names the monitor task `\{{PROJECT_NAME_TITLE}}\Credits\Monitor`, and adds the `credits_start_policy` check to `Register-CreditsRun.ps1` and `Start-CreditsRunTask.ps1` |
+| `.agent/credits/config.json` | `core/.agent/credits/config.json` | **Do not re-copy.** Four keys (§Accepted divergences); both switches off, `credits_start_policy: "human-only"` |
+| `tools/credits_state.py` | `core/tools/credits_state.py` | Re-copy |
+| `tools/credits_msg.py` | `core/tools/credits_msg.py` | **Hand-merge.** Keep the fourth key in `CONFIG_KEYS` and `START_POLICIES` |
+| `.claude/hooks/credits_inbox.py` | `core/.claude/hooks/credits_inbox.py` | Re-copy |
+| `tools/stop_gate.py` | `core/tools/stop_gate.py` | Re-copy; `RELEASE_REASONS` holds `done` |
+| `tools/executor_worktree.py` | `core/tools/executor_worktree.py` | **Hand-merge.** A missing or invalid worktree config is refused with `worktree_bad:config`; the package has no project defaults |
+| `tools/Invoke-ClaudeDispatch.ps1` | `core/tools/Invoke-ClaudeDispatch.ps1` | **Hand-merge** (§Accepted divergences): the author-vendor variable is read with `GetEnvironmentVariable` |
+| `tools/Get-ClaudeDispatch.ps1` | `core/tools/Get-ClaudeDispatch.ps1` | Re-copy, then scrub project names |
+| _(package)_ | `core/.claude/settings.hooks.json` | Hook fragment: the stop gate and the inbox hook. `scripts/instantiate.py` merges it into the adopter's `.claude/settings.json` |
+| the credits tests (`test_credits_*.py`, `*Credits*.Tests.ps1`) | `core/tools/tests/` | Sibling imports (`from test_credits_... import`), not `tests.unit.` imports |
 
 ### Subagent agent definitions (required for subagent flows)
 
@@ -358,7 +374,7 @@ any more) plus one must-pass arm naming a tool that really is shipped.
 
 - [ ] `core/MANIFEST.md` — new/removed files, §5b AUTOGEN agent templates, package-root `.agent/`
 - [ ] `README.md` — tree diagram matches on-disk layout (includes package-root `.agent/`)
-- [ ] `ADOPTION-GUIDE.md` — copy paths for `.claude/agents`; `fresh_worker` steps; Step 4 points at `.agent/INSTANTIATE.md`
+- [ ] `ADOPTION-GUIDE.md` — copy paths for `.claude/agents`, `.claude/hooks` and `.claude/settings.hooks.json`; §Scheduled credits runs; `fresh_worker` steps; Step 4 points at `.agent/INSTANTIATE.md`
 - [ ] `ADOPTION-QUESTIONS.md` — A6/A9 (or current lettering) cover assistant-addressable workers; registry instantiation points at `INSTANTIATE.md`
 - [ ] `.agent/INSTANTIATE.md` — §6 bump sequence still matches the live registry's `README.md`; §2 copy table lists every template file; no snapshot ids
 - [ ] `.agent/model-registry.template.yaml` — new/changed class contracts merged; `catalog`, `bindings`, `pins` still empty; no `forbid` / `eval_gate` values
@@ -385,7 +401,10 @@ rtk proxy uv run python tools/_fw_hashdiff.py --ledger *> {{RECEIPTS_DIR}}/fw-le
 
 | File | Class | Why the package differs |
 |---|---|---|
-| `.agent/docs/harness-profiles.md` | scrub | The source's `context_window` flag and column are not ported: its 1M-per-row protocol rests on the source's own measured window economics and a user-level toggle skill that does not ship. The `advisor` flag is ported. The Cursor host row keeps `injects_auto_approval: yes` (conservative). |
+| `.agent/credits/config.json` | authored | Four keys; the source has three. The package adds `credits_start_policy` (`human-only` \| `agent-on-user-chat`, default `human-only`), and `credits_msg.py`, `Register-CreditsRun.ps1` and `Start-CreditsRunTask.ps1` check it. Both switches ship off (`ruling_enabled: false`, `gate_wait_max_min: 0`). |
+| `tools/executor_worktree.py` | scrub | No project defaults: a missing or invalid worktree config refuses `create` and `check` with `worktree_bad:config`. |
+| `tools/Invoke-ClaudeDispatch.ps1` | scrub | The author-vendor variable is read with `[Environment]::GetEnvironmentVariable('{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR')`, not `$env:`, so the template parses before token substitution. |
+| `.agent/docs/harness-profiles.md` | scrub | The source's `context_window` flag and column are not ported: its 1M-per-row protocol rests on the source's own measured window economics and a user-level toggle skill that does not ship. The `advisor` flag is ported. The Cursor host row keeps `injects_auto_approval: yes` (conservative). The `mid_run_messages` flag, the `monitor` notify value and the credits scheduler row are ported. |
 | `.agent/docs/model-routing.md` | scrub | Isolated-worker rungs rewritten to `claude -p` only; the 'not an independent-reviewer substitute' rule is kept. **Superseded 2026-09-07:** the same-vendor review rung is now removed outright, not relabelled — see §Independent-reviewer chain. Do not restore it from this row. **Superseded again 2026-10-07:** the rung returns as the conditional `fallback_reviewer` (rate-limit receipt, fresh process, tier floor, flagged verdict); port it from `model-routing.md` in that form only. |
 | `.agent/docs/commands.md` | scrub | Drops the §Serena server lifecycle section and rewrites the CLI Dispatch row to point at the model-routing chain; the row itself is kept because the skill ships. |
 | `.agent/docs/context-tool-decision-gate.md` | scrub | `eligible_tools` and the token-savings prose drop Serena (excluded MCP). |

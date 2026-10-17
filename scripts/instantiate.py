@@ -47,12 +47,27 @@ Config file example (framework.vars)
     # optional overrides if simple casing is wrong (e.g. an acronym):
     # PROJECT_NAME_TITLE=ACME Corp
     # PROJECT_NAME_UPPER=ACMECORP
+    # optional: who may start a scheduled credits run (default human-only):
+    # CREDITS_START_POLICY=agent-on-user-chat
+
+Scheduled credits runs (optional, Windows-only)
+-----------------------------------------------
+When the adopter tree holds ``.claude/settings.hooks.json``, the installer merges its hook
+entries into ``.claude/settings.json``: additive, idempotent, prior entries first and
+unchanged. An invalid ``settings.json`` is refused before any write. On any OS other
+than Windows the installer refuses the scheduler: it removes the Windows-only files and
+writes no ``credits_inbox.py`` hook entry; ``--verify`` checks that refusal. The receipts
+directory must be local, because the credits store is SQLite in WAL mode: a UNC path is
+refused. ``--credits-start-policy`` writes the answer into ``.agent/credits/config.json``.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
+import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -78,6 +93,8 @@ TEXT_SUFFIXES = {
     ".svg",
     ".html",
     ".css",
+    ".psm1",
+    ".psd1",
 }
 #: Directory names skipped at *any* depth: build artefacts and VCS metadata, none of which
 #: an adopter edits or ships.
@@ -103,7 +120,11 @@ ADOPTER_INSTALLED_PREFIXES = (
     "tools/",
     ".cursor/agents/",
     ".claude/agents/",
+    ".claude/hooks/",
 )
+#: Single framework files below the root. The adopter's own ``.claude/settings.json``
+#: is not one: the installer merges into it and never substitutes it.
+ADOPTER_INSTALLED_FILES = {".claude/settings.hooks.json"}
 ADOPTER_INSTALLED_ROOT_FILES = {
     "AGENTS.md",
     "CLAUDE.md",
@@ -120,8 +141,9 @@ PACKAGE_INSTALLED_ROOT_FILES = {
     "UPDATE-CHECKLIST.md",
     "MANIFEST.md",
 }
-AGENT_DEF_ROLES = ("builder", "verifier")
+#: Every ``{{PROJECT_NAME}}-<role>.md`` in these folders is renamed to ``<slug>-<role>.md``.
 AGENT_DEF_FOLDERS = (".cursor/agents", ".claude/agents")
+AGENT_DEF_PREFIX = "{{PROJECT_NAME}}-"
 BOM = b"\xef\xbb\xbf"
 
 CONFIG_KEYS = {
@@ -131,7 +153,62 @@ CONFIG_KEYS = {
     "REPO_URL": "repo_url",
     "PROJECT_NAME_TITLE": "project_name_title",
     "PROJECT_NAME_UPPER": "project_name_upper",
+    "CREDITS_START_POLICY": "credits_start_policy",
 }
+
+# --- scheduled credits runs ---------------------------------------------------------------
+#: The hook fragment the package ships and the adopter settings file it merges into.
+HOOK_FRAGMENT = ".claude/settings.hooks.json"
+HOOK_SETTINGS = ".claude/settings.json"
+CREDITS_CONFIG = ".agent/credits/config.json"
+#: Who may start a scheduled run. ``human-only`` is the default the template ships.
+CREDITS_START_POLICIES = ("human-only", "agent-on-user-chat")
+#: The scheduler needs Task Scheduler, Job Objects and named mutexes. On any other OS
+#: these files are removed; the store, the stop gate and the worktree helper stay.
+WINDOWS_ONLY_MESSAGE = "REFUSED: scheduled credits runs are Windows-only"
+WINDOWS_ONLY_FILES = (
+    "tools/credits_msg.py",
+    ".claude/hooks/credits_inbox.py",
+    # The tests of the removed files, which would otherwise fail to import them.
+    "tools/tests/test_credits_inbox.py",
+    "tools/tests/test_credits_msg.py",
+    "tools/tests/test_credits_port.py",
+    "tools/tests/test_credits_ruling.py",
+    "tools/tests/test_credits_stop_reminder.py",
+    "tools/tests/test_credits_wait.py",
+    "tools/tests/test_credits_authority.py",
+    "tools/tests/test_credits_r1_fixes_inbox.py",
+    "tools/tests/test_credits_r1_fixes_locate.py",
+    "tools/tests/test_credits_r1_fixes_tree.py",
+    "tools/tests/ClaudeCredits.Manual.Tests.ps1",
+    "tools/tests/ClaudeCredits.Wrapper.Tests.ps1",
+    "tools/tests/CreditsChain.Tests.ps1",
+    "tools/tests/CreditsLauncherEnv.Tests.ps1",
+    "tools/tests/CreditsR1Fixes.KeyFile.Tests.ps1",
+    "tools/tests/CreditsR1Fixes.Project.Tests.ps1",
+    "tools/tests/CreditsR1Fixes.Watch.Tests.ps1",
+    "tools/tests/CreditsR2Fixes.Register.Tests.ps1",
+    "tools/tests/CreditsRuling.Tests.ps1",
+    "tools/tests/CreditsRun.Job.Tests.ps1",
+    "tools/tests/CreditsStopPath.Tests.ps1",
+    "tools/tests/CreditsTaskReadback.Tests.ps1",
+    "tools/tests/Get-CreditsRun.Settle.Tests.ps1",
+    "tools/tests/Get-CreditsRun.Tests.ps1",
+    "tools/tests/Register-CreditsRun.Tests.ps1",
+    "tools/tests/Send-CreditsRunMessage.Tests.ps1",
+    "tools/tests/Start-CreditsRun.Tests.ps1",
+    "tools/tests/Start-CreditsRunTask.Tests.ps1",
+    "tools/tests/Start-CreditsRunTask.Policy.Tests.ps1",
+    "tools/tests/Watch-CreditsRuns.Tests.ps1",
+)
+#: The skill folder is removed except these children (the probes are portable Python).
+WINDOWS_ONLY_DIR = ".agent/skills/claude-credits"
+WINDOWS_ONLY_KEEP = ("probes",)
+#: A hook command that holds this text is a Windows-only entry.
+WINDOWS_ONLY_HOOK = "credits_inbox"
+#: Where an installed tree records its receipts directory: the store path default.
+RECEIPTS_PROBE_FILE = ".agent/skills/claude-credits/Register-CreditsRun.ps1"
+RECEIPTS_PROBE_RE = re.compile(r"'([^'\n]*)/credits/state\.db'")
 
 
 def package_root() -> Path:
@@ -188,6 +265,8 @@ def is_framework_installed(rel: Path, *, in_place: bool) -> bool:
         roots = ADOPTER_INSTALLED_ROOT_FILES
     if rel.name in roots and len(rel.parts) == 1:
         return True
+    if not in_place and posix in ADOPTER_INSTALLED_FILES:
+        return True
     return posix.startswith(prefixes)
 
 
@@ -204,13 +283,16 @@ def iter_owned_text_files(root: Path, *, in_place: bool = False):
 def planned_agent_renames(root: Path, slug: str) -> list[tuple[Path, Path]]:
     pairs: list[tuple[Path, Path]] = []
     for folder in AGENT_DEF_FOLDERS:
-        for role in AGENT_DEF_ROLES:
-            src = root / folder / f"{{{{PROJECT_NAME}}}}-{role}.md"
-            dst = root / folder / f"{slug}-{role}.md"
-            if src.is_file():
-                pairs.append((src, dst))
-            elif dst.is_file():
+        agents = root / folder
+        if not agents.is_dir():
+            continue
+        for src in sorted(agents.iterdir()):
+            if not (src.is_file() and src.name.startswith(AGENT_DEF_PREFIX)):
                 continue
+            if src.suffix != ".md":
+                continue
+            role = src.name[len(AGENT_DEF_PREFIX) :]
+            pairs.append((src, agents / f"{slug}-{role}"))
     return pairs
 
 
@@ -236,8 +318,266 @@ def write_text_preserve(path: Path, text: str, bom: bool) -> None:
     path.write_bytes(data)
 
 
-def verify_only(root: Path, *, in_place: bool = False) -> int:
-    """Report any files that still contain placeholder tokens."""
+def scheduler_supported() -> bool:
+    """True when the scheduled credits runs can work on this OS (Windows only).
+
+    Read at call time, so a test can set ``sys.platform``.
+    """
+    return sys.platform == "win32"
+
+
+def is_network_path(path: str) -> bool:
+    """True for a UNC path: ``\\\\server\\share`` or ``//server/share``.
+
+    The credits store is SQLite in WAL mode, which needs a local file system. A mapped
+    drive letter cannot be told apart from a local disk without a system call, so it is
+    not refused here; ADOPTION-GUIDE.md tells the adopter to use a local disk.
+    """
+    return path.replace("\\", "/").startswith("//")
+
+
+def _hook_entries(settings: dict[str, object], label: str) -> list[tuple[str, str, str]]:
+    """Each hook entry of a settings document as (event, matcher, command), in order.
+
+    Raises:
+        ValueError: the ``hooks`` value does not have the Claude Code settings shape.
+    """
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError(f"{label}: 'hooks' is not an object")
+    out: list[tuple[str, str, str]] = []
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            raise ValueError(f"{label}: hooks.{event} is not a list")
+        for group in groups:
+            if not isinstance(group, dict):
+                raise ValueError(f"{label}: a hooks.{event} group is not an object")
+            matcher = group.get("matcher", "")
+            entries = group.get("hooks", [])
+            if not isinstance(matcher, str) or not isinstance(entries, list):
+                raise ValueError(f"{label}: a hooks.{event} group has a bad matcher or hooks")
+            for hook in entries:
+                if not isinstance(hook, dict):
+                    raise ValueError(f"{label}: a hooks.{event} entry is not an object")
+                command = hook.get("command")
+                if isinstance(command, str):
+                    out.append((event, matcher, command))
+    return out
+
+
+def merge_hook_settings(
+    settings: dict[str, object], fragment: dict[str, object]
+) -> dict[str, object]:
+    """Return ``settings`` with each ``fragment`` hook entry added once.
+
+    An entry is the same when its event, matcher and command are the same. The prior
+    entries keep their order and come first; an entry already present is not added
+    again, so a second merge returns an equal document. Neither input is changed.
+
+    Raises:
+        ValueError: either document does not have the Claude Code settings shape.
+    """
+    merged = copy.deepcopy(settings)
+    present = set(_hook_entries(merged, HOOK_SETTINGS))
+    _hook_entries(fragment, HOOK_FRAGMENT)
+    hooks = merged.setdefault("hooks", {})
+    assert isinstance(hooks, dict)  # checked by _hook_entries above
+    fragment_hooks = fragment.get("hooks", {})
+    assert isinstance(fragment_hooks, dict)
+    for event, groups in fragment_hooks.items():
+        for group in groups:
+            matcher = group.get("matcher", "")
+            fresh = [
+                hook
+                for hook in group.get("hooks", [])
+                if (event, matcher, hook.get("command")) not in present
+            ]
+            if not fresh:
+                continue
+            new_group = {k: copy.deepcopy(v) for k, v in group.items() if k != "hooks"}
+            new_group["hooks"] = copy.deepcopy(fresh)
+            hooks.setdefault(event, []).append(new_group)
+            present.update((event, matcher, hook.get("command")) for hook in fresh)
+    return merged
+
+
+def _portable_fragment(fragment: dict[str, object]) -> dict[str, object]:
+    """The fragment without its Windows-only entries; empty groups and events dropped."""
+    out = copy.deepcopy(fragment)
+    hooks = out.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return out
+    for event in list(hooks):
+        kept = []
+        for group in hooks[event]:
+            group["hooks"] = [
+                hook
+                for hook in group.get("hooks", [])
+                if WINDOWS_ONLY_HOOK not in str(hook.get("command", ""))
+            ]
+            if group["hooks"]:
+                kept.append(group)
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+    return out
+
+
+def _load_json_object(path: Path, label: str) -> dict[str, object]:
+    """Parse a JSON file whose top level must be an object.
+
+    Raises:
+        ValueError: the file is not UTF-8, not JSON, or not an object.
+    """
+    try:
+        data = json.loads(path.read_bytes().decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label}: not valid JSON ({exc})") from None
+    if not isinstance(data, dict):
+        raise ValueError(f"{label}: the top level is not a JSON object")
+    return data
+
+
+def _json_bytes(data: dict[str, object]) -> bytes:
+    return (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _expected_fragment(root: Path) -> dict[str, object] | None:
+    """The hook entries this OS must have, or None when the tree ships no fragment."""
+    path = root / HOOK_FRAGMENT
+    if not path.is_file():
+        return None
+    fragment = _load_json_object(path, HOOK_FRAGMENT)
+    return fragment if scheduler_supported() else _portable_fragment(fragment)
+
+
+def windows_only_present(root: Path) -> list[Path]:
+    """The Windows-only paths that exist in ``root``: files and skill-folder children."""
+    out = [root / rel for rel in WINDOWS_ONLY_FILES if (root / rel).is_file()]
+    skill = root / WINDOWS_ONLY_DIR
+    if skill.is_dir():
+        out.extend(
+            child for child in sorted(skill.iterdir()) if child.name not in WINDOWS_ONLY_KEEP
+        )
+    return out
+
+
+class _CreditsPlan:
+    """What ``run`` will do to the credits files, computed before any write."""
+
+    def __init__(self) -> None:
+        self.removals: list[Path] = []
+        self.settings_bytes: bytes | None = None
+        self.added_entries = 0
+        self.config_bytes: bytes | None = None
+
+
+def _plan_credits(root: Path, policy: str | None) -> _CreditsPlan:
+    """Plan the hook merge, the non-Windows refusal and the start-policy answer.
+
+    Raises:
+        ValueError: an invalid ``settings.json``, fragment or ``config.json``, or a
+            policy answer with no ``config.json`` to hold it.
+    """
+    plan = _CreditsPlan()
+    if not scheduler_supported():
+        plan.removals = windows_only_present(root)
+
+    fragment = _expected_fragment(root)
+    if fragment is not None:
+        settings_path = root / HOOK_SETTINGS
+        prior: dict[str, object] = {}
+        if settings_path.exists():
+            prior = _load_json_object(settings_path, HOOK_SETTINGS)
+        merged = merge_hook_settings(prior, fragment)
+        plan.added_entries = len(_hook_entries(merged, HOOK_SETTINGS)) - len(
+            _hook_entries(prior, HOOK_SETTINGS)
+        )
+        if merged != prior or not settings_path.exists():
+            plan.settings_bytes = _json_bytes(merged)
+
+    if policy is not None:
+        config_path = root / CREDITS_CONFIG
+        if not config_path.is_file():
+            raise ValueError(
+                f"credits_start_policy needs {CREDITS_CONFIG}; copy core/.agent first"
+            )
+        config = _load_json_object(config_path, CREDITS_CONFIG)
+        if config.get("credits_start_policy") != policy:
+            config["credits_start_policy"] = policy
+            plan.config_bytes = _json_bytes(config)
+    return plan
+
+
+def _remove(path: Path) -> None:
+    """Remove a file or a whole folder; never follow a link into its target."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _credits_problems(root: Path, receipts_dir: str | None) -> list[str]:
+    """The ``--verify`` findings for the credits install, one line each."""
+    problems: list[str] = []
+    if receipts_dir is not None and is_network_path(receipts_dir):
+        problems.append(
+            f"receipts dir {receipts_dir} is a network path; the credits store needs a local disk"
+        )
+    probe = root / RECEIPTS_PROBE_FILE
+    if probe.is_file():
+        found = RECEIPTS_PROBE_RE.search(read_text_preserve(probe)[0])
+        if found and "{{" not in found.group(1) and is_network_path(found.group(1)):
+            problems.append(
+                f"{RECEIPTS_PROBE_FILE}: the installed receipts dir {found.group(1)} is a "
+                "network path; the credits store needs a local disk"
+            )
+
+    if not scheduler_supported():
+        for path in windows_only_present(root):
+            rel = path.relative_to(root).as_posix()
+            problems.append(f"{rel}: {WINDOWS_ONLY_MESSAGE}, but the file is present")
+
+    try:
+        fragment = _expected_fragment(root)
+    except ValueError as exc:
+        return problems + [str(exc)]
+    settings_path = root / HOOK_SETTINGS
+    if fragment is None and not settings_path.exists():
+        return problems
+    try:
+        have = (
+            _hook_entries(_load_json_object(settings_path, HOOK_SETTINGS), HOOK_SETTINGS)
+            if settings_path.exists()
+            else []
+        )
+    except ValueError as exc:
+        return problems + [str(exc)]
+    if fragment is not None:
+        for event, matcher, command in _hook_entries(fragment, HOOK_FRAGMENT):
+            if (event, matcher, command) not in have:
+                problems.append(
+                    f"{HOOK_SETTINGS}: missing hook entry {event} [{matcher or '-'}] {command}"
+                )
+    if not scheduler_supported():
+        for event, matcher, command in have:
+            if WINDOWS_ONLY_HOOK in command:
+                problems.append(
+                    f"{HOOK_SETTINGS}: {WINDOWS_ONLY_MESSAGE}, but {event} runs {command}"
+                )
+    return problems
+
+
+def verify_only(
+    root: Path, *, in_place: bool = False, receipts_dir: str | None = None
+) -> int:
+    """Report placeholder tokens left, and the credits install checks.
+
+    For an adopter tree it also checks that each hook entry the fragment holds for this
+    OS is in ``.claude/settings.json``, that the non-Windows refusal holds, and that the
+    receipts directory (given, or installed in the store path) is not a network path.
+    """
     token_re = re.compile("|".join(re.escape(t) for t in ph.PLACEHOLDER_TOKENS))
     offenders: list[tuple[str, int]] = []
     for path in iter_owned_text_files(root, in_place=in_place):
@@ -256,20 +596,59 @@ def verify_only(root: Path, *, in_place: bool = False) -> int:
     if leftover_token_names:
         for rel in leftover_token_names:
             offenders.append((rel, 1))
+    problems = [] if in_place else _credits_problems(root, receipts_dir)
     if offenders:
         print(f"VERIFY FAILED: {len(offenders)} file(s) still contain placeholders:")
         for rel, cnt in offenders:
             print(f"  {cnt:>4}  {rel}")
+    if problems:
+        print(f"VERIFY FAILED: {len(problems)} credits install problem(s):")
+        for line in problems:
+            print(f"  {line}")
+    if offenders or problems:
         return 2
     print("verify: OK (0 placeholder tokens remain)")
     return 0
 
 
-def run(values: dict[str, str], dry_run: bool, root: Path, *, in_place: bool = False) -> int:
+def run(
+    values: dict[str, str],
+    dry_run: bool,
+    root: Path,
+    *,
+    in_place: bool = False,
+    credits_start_policy: str | None = None,
+) -> int:
+    """Substitute the tokens, rename the agent files and install the credits pieces.
+
+    ``credits_start_policy`` (or ``values["credits_start_policy"]`` from a config file;
+    the argument wins) is written to ``.agent/credits/config.json``; None keeps the
+    template answer. Every check runs before the first write.
+
+    Raises:
+        ValueError: a bad value, a rename collision, a network receipts directory, an
+            unknown policy, or an invalid settings, fragment or config file.
+    """
+    values = dict(values)
+    policy = values.pop("credits_start_policy", None)
+    if credits_start_policy is not None:
+        policy = credits_start_policy
+    if policy is not None and policy not in CREDITS_START_POLICIES:
+        raise ValueError(
+            f"credits_start_policy {policy!r} is not one of {', '.join(CREDITS_START_POLICIES)}"
+        )
+    receipts = values.get("receipts_dir", "")
+    if is_network_path(receipts):
+        raise ValueError(
+            f"receipts dir {receipts} is a network path; the credits store (SQLite WAL) "
+            "needs a local disk"
+        )
     mapping = ph.derive_values(**values)
     slug = mapping["{{PROJECT_NAME}}"]
     pairs = planned_agent_renames(root, slug)
     refuse_rename_collisions(pairs)
+    credits = _CreditsPlan() if in_place else _plan_credits(root, policy)
+    removed = set(credits.removals)
 
     print("Placeholder -> value:")
     for token in ph.PLACEHOLDER_TOKENS:
@@ -279,6 +658,8 @@ def run(values: dict[str, str], dry_run: bool, root: Path, *, in_place: bool = F
     total_files = changed_files = total_repl = 0
     planned: list[tuple[Path, str, bool, int]] = []
     for path in iter_owned_text_files(root, in_place=in_place):
+        if path in removed or any(parent in removed for parent in path.parents):
+            continue
         total_files += 1
         try:
             original, bom = read_text_preserve(path)
@@ -293,6 +674,14 @@ def run(values: dict[str, str], dry_run: bool, root: Path, *, in_place: bool = F
 
     for src, dst in pairs:
         print(f"  rename {src.relative_to(root).as_posix()} -> {dst.name}")
+    if credits.removals:
+        print(f"\n{WINDOWS_ONLY_MESSAGE} (sys.platform is {sys.platform}); removing:")
+        for path in credits.removals:
+            print(f"  remove {path.relative_to(root).as_posix()}")
+    if credits.settings_bytes is not None:
+        print(f"  merge  {HOOK_FRAGMENT} -> {HOOK_SETTINGS} ({credits.added_entries} added)")
+    if credits.config_bytes is not None:
+        print(f"  write  {CREDITS_CONFIG} credits_start_policy={policy}")
 
     if not dry_run:
         for path, new_text, bom, _n in planned:
@@ -300,6 +689,14 @@ def run(values: dict[str, str], dry_run: bool, root: Path, *, in_place: bool = F
         for src, dst in pairs:
             dst.parent.mkdir(parents=True, exist_ok=True)
             src.replace(dst)
+        for path in credits.removals:
+            _remove(path)
+        if credits.settings_bytes is not None:
+            settings_path = root / HOOK_SETTINGS
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_bytes(credits.settings_bytes)
+        if credits.config_bytes is not None:
+            (root / CREDITS_CONFIG).write_bytes(credits.config_bytes)
 
     mode = "DRY-RUN (no files written)" if dry_run else "APPLIED"
     print("\n" + "=" * 60)
@@ -308,6 +705,8 @@ def run(values: dict[str, str], dry_run: bool, root: Path, *, in_place: bool = F
     print(f"  files changed: {changed_files}")
     print(f"  replacements:  {total_repl}")
     print(f"  renames:       {len(pairs)}")
+    print(f"  removed:       {len(credits.removals)} (Windows-only)")
+    print(f"  hook entries:  {credits.added_entries} added")
     print("=" * 60)
     if not dry_run:
         print("Next: re-run with --verify to confirm no placeholders remain.")
@@ -521,7 +920,7 @@ def selftest() -> int:
         for folder in AGENT_DEF_FOLDERS:
             agents = dest / folder
             agents.mkdir(parents=True)
-            for role in AGENT_DEF_ROLES:
+            for role in ("builder", "verifier"):
                 (agents / f"{{{{PROJECT_NAME}}}}-{role}.md").write_text(
                     f"name: {{{{PROJECT_NAME}}}}-{role}\n", encoding="utf-8"
                 )
@@ -613,6 +1012,12 @@ def main() -> int:
     parser.add_argument("--repo-url")
     parser.add_argument("--project-name-title", help="override derived Title-case")
     parser.add_argument("--project-name-upper", help="override derived UPPER-case")
+    parser.add_argument(
+        "--credits-start-policy",
+        choices=CREDITS_START_POLICIES,
+        help="who may start a scheduled credits run: human-only (the default the "
+        "template ships) or agent-on-user-chat; written to .agent/credits/config.json",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--verify",
@@ -639,7 +1044,9 @@ def main() -> int:
         )
     root = args.root.resolve() if args.root else package_root()
     if args.verify:
-        return verify_only(root, in_place=args.in_place_package)
+        return verify_only(
+            root, in_place=args.in_place_package, receipts_dir=args.receipts_dir
+        )
 
     values: dict[str, str] = {}
     if args.config:
@@ -666,7 +1073,13 @@ def main() -> int:
         )
 
     try:
-        return run(values, dry_run=args.dry_run, root=root, in_place=args.in_place_package)
+        return run(
+            values,
+            dry_run=args.dry_run,
+            root=root,
+            in_place=args.in_place_package,
+            credits_start_policy=args.credits_start_policy,
+        )
     except ValueError as exc:
         parser.error(str(exc))
 

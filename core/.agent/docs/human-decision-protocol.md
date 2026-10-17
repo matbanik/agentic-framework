@@ -160,7 +160,8 @@ Rules:
 - **The reader decides from the brief alone.** No "I can research further if you want".
 - **Batch at the existing stop.** Briefs are presented at the workflow's own human gate (plan
   `## Decision Log`, the §5d TL;DR, the triage Step 8 report, the grouping §8 table). Presenting
-  them ends the turn per the harness `end_turn_signal`; do not poll or monitor for the reply.
+  them ends the turn per the harness `end_turn_signal`; do not poll or monitor for the reply
+  (`gate-wait-then-exit` is the one bounded wait, defined in `harness-profiles.md`).
 - **Advisory, not authorizing.** A recommendation never substitutes for the human's explicit
   message where a hard gate applies (`GUARDRAILS.md` SIGN 3 (a)).
 

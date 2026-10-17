@@ -47,6 +47,11 @@ export AGENT_MODEL_REGISTRY_HOME="$PWD/.agent-registry"
 
 Leaving both overrides unset is a valid choice: the order then uses rung 3.
 
+A scheduled credits run does not get the variables of your session: a Windows task
+starts it with the logon environment. Put the home of a scheduled run in
+`launcher.env.json` beside the credits store (`.agent/skills/claude-credits/SKILL.md`
+§Schedule, step 2). That file is per project, so it is not a user-wide persist.
+
 `AGENT_MODEL_REGISTRY` must name the file, not the directory holding it. A
 directory passes the existence test, so the resolver returns it and the read
 then fails with a `PermissionError` rather than a registry error. (The thin

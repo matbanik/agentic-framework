@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "credits-msg.v1",
+  "title": "credits-msg.v1",
+  "description": "One orchestrator message to a credits run (report section 4.6.2). Send-CreditsRunMessage.ps1 checks each message against this schema before credits_state.py send writes it. A ruling (S6b) needs the quote, the decision, the gate, the orchestrator session and the uuid of the typed entry that the inbox hook checks (report section 4.6.3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run_id", "kind", "body"],
+  "properties": {
+    "schema": { "const": "credits-msg.v1" },
+    "run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "kind": { "enum": ["info", "query", "stop-after-row", "ruling"] },
+    "body": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "human_quote": { "type": ["string", "null"], "minLength": 1, "maxLength": 4000 },
+    "decision_id": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "gate_id": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "orchestrator_session_id": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "user_message_uuid": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+  },
+  "if": { "properties": { "kind": { "const": "ruling" } }, "required": ["kind"] },
+  "then": {
+    "required": ["human_quote", "decision_id", "gate_id", "orchestrator_session_id", "user_message_uuid"],
+    "properties": {
+      "human_quote": { "type": "string" },
+      "decision_id": { "type": "string" },
+      "gate_id": { "type": "string" },
+      "orchestrator_session_id": { "type": "string" },
+      "user_message_uuid": { "type": "string" }
+    }
+  }
+}
