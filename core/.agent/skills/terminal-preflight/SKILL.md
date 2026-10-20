@@ -58,6 +58,7 @@ Satisfy ALL before every `run_command`:
 - [ ] **Routing check**: verified native RTK for compact output; `rtk proxy` for
   unsupported commands and exact evidence
 - [ ] **Exit check**: save `$LASTEXITCODE` before reading any receipt and propagate it
+- [ ] **Path check**: `rm -rf` takes a literal path; never `rm`/`rmdir` a worktree — use `tools/executor_worktree.py remove <path>`
 
 > This list is an operational restatement for the moment before a command runs; it is
 > **not** an authority. Where it and

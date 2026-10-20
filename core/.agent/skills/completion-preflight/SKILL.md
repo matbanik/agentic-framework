@@ -82,6 +82,23 @@ The other sanctioned outcomes are review cap, reviewer unavailable and human dec
 At one of those gates, report the unresolved condition and saved state even with open
 rows; do not relabel it DONE. Compaction is continuation, not a separate stop outcome.
 
+## Stages (`--stage`)
+
+`tools/completion_preflight.py` and `tools/validate_closeout_artifacts.py` take the same three
+stages with the same pending sets (the rows that may still be open):
+
+| Stage | Pending set | stop_gate | PLAN_TASK_STATUS |
+| :- | :- | :- | :- |
+| structural (H2-4) | {H2-4, H2-5, COMMIT, H2-6} | armed | in_progress |
+| readiness (H2-5) | {H2-5, COMMIT, H2-6} | armed | in_progress |
+| final (audit) | none | released:done | complete |
+
+A stage reports every check honestly and pre-marks nothing: H2-5 is marked `[x]` only after its
+own readiness stage passes. H2-6's `[x]` is provisional (`provisional_mark`): the gate and the
+audit treat it as an open row until the finalize op is `reconciled`, or, under
+`commit_exec: false`, until the final audit's receipt exists. A task without a
+`run_parameters` block keeps the stage-free checks above.
+
 ## Structural Marker Checklist
 
 When Step 6 (artifact structural compliance) fires, run these checks on each artifact created this session:

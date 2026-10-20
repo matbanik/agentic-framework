@@ -4,7 +4,9 @@ Use this when the originating project's governance or subagent flows change and 
 need `_transfer-out/agentic-framework/` to match again. The package is **not** critical
 runtime data — use selective contract merges for divergent files; recopy only files whose behavior still matches, then re-sanitize.
 
-Last refreshed: **2026-10-08** (dispatch resume and fork: `-ResumeDispatchId` / `-ForkDispatchId`
+Source commit: 02eb4e37e513fe10579c9984d62227ae83ba834e + tree dfdaf8e6d3cdc33d8aade62d2a3eea920edf9ea6 (uncommitted at port time)
+
+Last refreshed: **2026-10-19** (run parameters: the `run_parameters` block, the M-list, the exact-scope commit route, the commit hook and the activation policy template). Previous: **2026-10-08** (dispatch resume and fork: `-ResumeDispatchId` / `-ForkDispatchId`
 on both Codex wrappers, the new `Invoke-ClaudeDispatch.ps1`, review classes refused, docs routed
 through the Claude wrapper). Previous: **2026-10-07** (Cursor worker templates and the Gemini review rung
 retired; `scout` and `peer_reviewer` classes and agent templates added, `effort:` pinned in
@@ -166,6 +168,27 @@ Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 | `tools/Get-ClaudeDispatch.ps1` | `core/tools/Get-ClaudeDispatch.ps1` | Re-copy, then scrub project names |
 | _(package)_ | `core/.claude/settings.hooks.json` | Hook fragment: the stop gate and the inbox hook. `scripts/instantiate.py` merges it into the adopter's `.claude/settings.json` |
 | the credits tests (`test_credits_*.py`, `*Credits*.Tests.ps1`) | `core/tools/tests/` | Sibling imports (`from test_credits_... import`), not `tests.unit.` imports |
+
+### Run parameters (required: `create-plan.md` Step 0 reads them)
+
+The tools that `.agent/run-parameters.policy.json` lists by digest. `tools/stop_gate.py` and
+`tools/executor_worktree.py` are in the group above; a project without scheduled credits runs
+still copies them.
+
+| Source | Destination | Notes |
+|---|---|---|
+| `tools/run_parameters.py` | `core/tools/run_parameters.py` | **Hand-merge.** Keep `TEMPLATE_HOME = ".agent/templates"`, `TRANSCRIPT_ADAPTER`, the FW policy-validator pairs and the review-round cap the package passes |
+| `tools/commit_batch.py` | `core/tools/commit_batch.py` | Re-copy, then scrub project names |
+| `tools/validate_closeout_artifacts.py` | `core/tools/validate_closeout_artifacts.py` | **Hand-merge.** Keep the package's stage mode and its handoff and reflection formats |
+| `tools/validate_agent_files.py` | `core/tools/validate_agent_files.py` | **Hand-merge.** Keep `--policy run-parameters` reading its pairs from `.agent/run-parameters/governance/` |
+| `tools/completion_preflight.py` | `core/tools/completion_preflight.py` | Re-copy |
+| `.claude/hooks/commit_gate.py`, `.claude/hooks/_hook_common.py` | `core/.claude/hooks/` | Re-copy, then scrub. `settings.hooks.json` wires `commit_gate.py` in `PreToolUse` and carries the six `ask` rules |
+| `.agent/skills/git-workflow/scripts/agent-commit.ps1` | same under `core/` | **Hand-merge.** Exact-scope mode delegates to `tools/commit_batch.py` under the gate lease (Windows byte lock at `2**20`) |
+| _(package)_ | `core/.agent/skills/git-workflow/scripts/agent-commit.sh` | Package-authored POSIX twin: the `flock` lease, the same reentrancy rule |
+| `docs/execution/plans/<plan>/artifacts/schemas/*.schema.json` | `core/.agent/run-parameters/schemas/` | Re-copy |
+| _(approved framework texts)_ | `core/.agent/run-parameters/governance/0{1,2}-*.diff` | The approved ledger diffs; never edit by hand (M-3) |
+| _(package)_ | `core/.agent/run-parameters.policy.json.template` | Placeholder digests: a copy left unedited keeps `status` at `disabled` |
+| the run-parameters tests and `run_parameters_fixtures/` | `core/tools/tests/` | Adapted to the package's formats; `scripts/tests/test_run_parameters_template.py` checks an instantiated adopter |
 
 ### Subagent agent definitions (required for subagent flows)
 

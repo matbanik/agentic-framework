@@ -23,7 +23,7 @@ Anthropic's billing rule (Help Center, "Monthly API credits for Max and Team pla
 | Interactive Claude Code (terminal, IDE, desktop, web) | No |
 | Runs started by an IDE extension, the desktop app or the GitHub Action, **even with `-p`** | No |
 
-Verified 2026-10-12: with the key, a plain-terminal `claude -p` succeeded ($0.0022, Haiku);
+Verified 2026-10-12: with the key, a plain-terminal `claude -p` succeeded ($0.0022, Haiku at the time);
 the same call inheriting `CLAUDE_CODE_ENTRYPOINT=claude-vscode` returned
 `Credit balance is too low`.
 
@@ -70,7 +70,7 @@ The run blocks until the CLI ends, then prints `final.md` on stdout and
 | Parameter | Default | Notes |
 |-----------|---------|-------|
 | `-PromptText` / `-PromptFile` | — | One of them (sent on stdin) |
-| `-ModelClass` | `isolated_worker` | Registry class for the check. `architect` (Fable) has no `claude-p` binding yet, so the check refuses it (`unresolvable_on_harness`) |
+| `-ModelClass` | `isolated_worker` | Registry class for the check. `architect` has no `claude-p` binding yet, so the check refuses it (`unresolvable_on_harness`) |
 | `-Model` | registry default | Snapshot id, checked by the model registry against `-ModelClass`. When it is not given, the wrapper uses the registry default for the class on `claude-p` |
 | `-Effort` | `high` | `low` / `medium` / `high` / `xhigh` / `max` |
 | `-PermissionMode` | `plan` | Read-only. `acceptEdits` to change files |
@@ -284,7 +284,7 @@ a workflow such as `/execution-session` on a plan, or a follow-up to an earlier 
 
    Keep `-ModelClass`, `-Model` and `-Effort` at their defaults (`isolated_worker`,
    the registry default, `high`) unless the human asks.
-   When the human names Fable, tell them it cannot run here yet: `architect` has no
+   When the human asks for the `architect` model by name, tell them it cannot run here yet: `architect` has no
    `claude-p` binding, and the check refuses it. Do not pick another class instead.
    Set `-WorkingDirectory` to the main tree (`{{PROJECT_ROOT}}`), even when the run creates its
    own worktree.

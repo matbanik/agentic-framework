@@ -20,7 +20,7 @@ runs `inbox_hook.py` and `wait_msg.py` directly, and checks the kit was not modi
 
 ## Run the live gate
 
-Live cases call `claude` with the Haiku model on your subscription. They cost money.
+Live cases call `claude` with the cheapest model alias (`kit.py`) on your subscription. They cost money.
 
 ```
 python run_gate.py --out <scratch dir> --project <project dir> [--python <exe>] [--claude <exe>] [--cases T1,T2,T6c,T7,T9]

@@ -8,12 +8,14 @@ gives a session its own tree beside the repository and moves its work back
 without a commit::
 
     uv run python tools/executor_worktree.py create <slug> [--branch NAME] [--base REV] [--carry PATH]...
+        [--run-id ID --op OP --plan PLAN]
     uv run python tools/executor_worktree.py check <path>
     uv run python tools/executor_worktree.py land <path>
     uv run python tools/executor_worktree.py sync <path> <rel>...
-    uv run python tools/executor_worktree.py remove <path> [--discard]
+    uv run python tools/executor_worktree.py remove <path> [--discard | --ad-hoc]
 
-``create`` checks the base out with LF endings into ``<root>-<slug>``, carries
+``create`` checks the base out with LF endings into ``WORKTREE_PARENT/<slug>``
+(``{{PROJECT_ROOT}}-wt``, B-8; commit candidates go under its ``.candidates``), carries
 the named planning inputs across, links the dependency trees, copies the env
 files and the frozen directories, builds the worktree's own ``.venv`` and pins
 a baseline tree as ``refs/executor-worktrees/<slug>``. The project parts come
@@ -29,6 +31,24 @@ differs from that baseline onto the main tree, uncommitted, under the main
 tree's gate lease, after checking that no sibling session changed the same
 file. ``sync`` refreshes one file from the main tree after such a refusal.
 ``remove`` deletes the worktree once everything in it has landed.
+
+``remove`` refuses a worktree outside ``WORKTREE_PARENT`` that is not a
+grandfathered lane (``worktree_bad:containment``; a lane matches by the path it
+is given, never through a link), the current folder or a folder that holds it
+(``worktree_bad:cwd``) and a folder another process works in or runs from
+(``worktree_bad:held:<pid>``); it never ends a process. When the manifest names a
+run (``create --run-id --op --plan``), it writes the H2-3c records
+``worktree_removal_started`` and ``worktree_removed`` through
+``run_parameters.record_removal`` (``worktree_bad:record:<reason>`` when the store
+refuses). ``remove <path> --ad-hoc`` is the guarded plain-git route for a listed
+worktree with no manifest (a hand-made commit worktree): it removes it only when
+``git status`` shows no tracked change (``worktree_bad:dirty:<rel>``) and no
+untracked or ignored file (``worktree_bad:unknown:<rel>``).
+
+A commit candidate (``<git dir>/candidate-worktree.json`` of schema
+``candidate-worktree/1``, built by ``tools/commit_batch.py``) is not an
+executor worktree: ``check``, ``land`` and ``sync`` refuse it with
+``worktree_bad:candidate`` and ``remove`` deletes it as it stands.
 
 The base is ``--base``, else ``CREDITS_BASE_COMMIT`` (the commit B that a
 credits run's admission recorded, R§5.4), else ``HEAD``. A base that does not
@@ -59,6 +79,8 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
+import importlib
 import json
 import os
 import re
@@ -72,6 +94,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import ModuleType
 
 if sys.platform == "win32":
     import msvcrt
@@ -84,6 +107,8 @@ _REPO_ROOT = Path(os.path.abspath(__file__)).parent.parent
 WORKTREE_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,40}")
 WORKTREE_REF_PREFIX = "refs/executor-worktrees/"
 TEMP_INDEX = "executor-index.tmp"
+CANDIDATE_MANIFEST = "candidate-worktree.json"
+CANDIDATE_SCHEMA = "candidate-worktree/1"
 OVERLAY_FILE = ".agent/model-registry.local.json"
 VENV_MARKER = ".venv/pyvenv.cfg"
 ENV_BASE_COMMIT = "CREDITS_BASE_COMMIT"
@@ -103,6 +128,17 @@ LEASE_TOKEN_ENV = "{{PROJECT_NAME_UPPER}}_GATE_LEASE_TOKEN"
 # any body; the body stays readable through other handles.
 LEASE_LOCK_OFFSET = 2**20
 LEASE_BODY_SCHEMA = 1
+# B-8 (AC-G.1): every worktree ``create`` builds sits under this one folder. No flag
+# and no environment variable moves it; tests patch the constant.
+WORKTREE_PARENT = Path("{{PROJECT_ROOT}}-wt")
+CANDIDATE_FOLDER = ".candidates"
+# AC-G.2: the lanes made beside the repository before B-8. Each matches by the path
+# it is given, never by resolving it, so neither a link nor a rename inherits it.
+# A new adopter has none; a project that moves to B-8 lists its old lanes here.
+GRANDFATHERED: frozenset[str] = frozenset()
+IDENTITY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+REMOVAL_BY = "executor_worktree.py remove"
+REMOVAL_ROW = "H2-3c"
 
 _LF_CHECKOUT = ("-c", "core.autocrlf=false")
 # Every git call here that hashes working-tree bytes runs with this pin: the
@@ -209,7 +245,9 @@ def load_worktree_config(root: Path | str) -> dict[str, object]:
         )
     for key in WORKTREE_CONFIG_LISTS:
         if not _is_str_list(data[key]):
-            raise WorktreeConfigError(f"{WORKTREE_CONFIG}: {key} is not a list of strings")
+            raise WorktreeConfigError(
+                f"{WORKTREE_CONFIG}: {key} is not a list of strings"
+            )
     build = data["venv_build"]
     if build is not None and not (_is_str_list(build) and build):
         raise WorktreeConfigError(
@@ -282,7 +320,9 @@ def _lease_path(root: Path | str) -> Path:
             check=False,
         )
     except OSError as exc:
-        raise _GitFailure("rev-parse", f"cannot run git in {root}: {exc}\n".encode()) from exc
+        raise _GitFailure(
+            "rev-parse", f"cannot run git in {root}: {exc}\n".encode()
+        ) from exc
     git_dir = proc.stdout.strip()
     if proc.returncode != 0 or not git_dir:
         raise _GitFailure(
@@ -365,6 +405,39 @@ def _parse_lease_body(raw: bytes) -> dict[str, object] | None:
     if not isinstance(body.get("token"), str):
         return None
     return body
+
+
+def _lease_seen(path: Path) -> str | None:
+    """LEASE_SEEN: the holder pid (or ``unknown``) when the lease looks held.
+
+    Never locks. Empty or absent means free (a release truncates the body); unparseable
+    means held. A parsed body is held when its pid is alive with the same create_time
+    (within 1 ms); without psutil any parsed body counts as held.
+    """
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    if not raw:
+        return None
+    body = _parse_lease_body(raw)
+    if body is None:
+        return "unknown"
+    pid = int(body["pid"])  # type: ignore[call-overload]  # _parse_lease_body checked int
+    try:
+        import psutil  # noqa: PLC0415 - optional; absent means "held"
+    except ImportError:
+        return str(pid)
+    try:
+        created = psutil.Process(pid).create_time()
+    except psutil.NoSuchProcess:
+        return None
+    except psutil.AccessDenied:
+        return str(pid)
+    recorded = body.get("create_time")
+    if isinstance(recorded, (int, float)) and not isinstance(recorded, bool):
+        return str(pid) if abs(float(recorded) - created) <= 0.001 else None
+    return str(pid)
 
 
 def _lease_holder_fields(body: dict[str, object] | None) -> dict[str, object]:
@@ -737,6 +810,72 @@ def _atomic_write(target: Path, data: bytes) -> None:
         raise
 
 
+def _real(path: str | Path) -> str:
+    """The physical folder of ``path`` (links resolved), case-folded."""
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _within(outer: str, inner: str) -> bool:
+    """True when ``inner`` is ``outer`` or inside it (both from :func:`_real`)."""
+    return inner == outer or inner.startswith(outer.rstrip("\\/") + os.sep)
+
+
+def contained(path: Path) -> bool:
+    """AC-G.2: a grandfathered lane, or a folder physically inside ``WORKTREE_PARENT``.
+
+    A lane matches by the given path (case and separators folded), never by resolving it;
+    any other path is resolved, and the parent itself is not inside the parent.
+    """
+    given = os.path.normcase(os.path.abspath(path))
+    if given in {os.path.normcase(os.path.abspath(lane)) for lane in GRANDFATHERED}:
+        return True
+    parent, real = _real(WORKTREE_PARENT), _real(path)
+    return real != parent and _within(parent, real)
+
+
+def _refuse_cwd(path: Path) -> None:
+    """AC-G.3: ``worktree_bad:cwd`` when this process works in ``path`` or below it."""
+    if _within(_real(path), _real(os.getcwd())):
+        raise _Refusal(["worktree_bad:cwd"])
+
+
+def _holders(path: Path) -> list[tuple[int, str]]:
+    """(pid, name) of each other process that works in or runs from ``path`` or below it."""
+    import psutil  # noqa: PLC0415 - only remove scans processes
+
+    target, own = _real(path), os.getpid()
+    found: list[tuple[int, str]] = []
+    for proc in psutil.process_iter():
+        if proc.pid == own:
+            continue
+        for place in (proc.cwd, proc.exe):
+            try:
+                where = place()
+            except (psutil.Error, OSError):
+                continue
+            if where and _within(target, _real(where)):
+                try:
+                    name = proc.name()
+                except (psutil.Error, OSError):
+                    name = "?"
+                found.append((proc.pid, name))
+                break
+    return sorted(found)
+
+
+def _refuse_held(path: Path) -> None:
+    """AC-G.3: ``worktree_bad:held:<pid>`` per holder; no process is ever ended.
+
+    D-18 allows ending a process only when a record of this run proves the tool started
+    it; no such record exists, so every holder is refused by name (EA-28).
+    """
+    holders = _holders(path)
+    for pid, name in holders:
+        sys.stderr.write(f"{path.as_posix()} is held by pid {pid} ({name})\n")
+    if holders:
+        raise _Refusal([f"worktree_bad:held:{pid}" for pid, _ in holders])
+
+
 def _worktree_git_dir(path: Path) -> Path | None:
     """The git dir of the working tree at ``path``, or None when git has none."""
     if not path.is_dir():
@@ -783,6 +922,31 @@ def _read_manifest(path: Path) -> tuple[Path, dict[str, object]] | None:
     return git_dir, raw
 
 
+def _read_candidate(path: Path) -> dict[str, object] | None:
+    """The candidate manifest of the worktree at ``path``; None when absent or invalid.
+
+    A commit candidate is the detached worktree ``tools/commit_batch.py`` builds for one
+    op (run-parameters R§4.5, EA-8 (g)); it is never checked, landed or synced.
+    """
+    git_dir = _worktree_git_dir(path)
+    if git_dir is None:
+        return None
+    try:
+        raw = json.loads((git_dir / CANDIDATE_MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("schema") != CANDIDATE_SCHEMA or raw.get("kind") != "candidate":
+        return None
+    if not all(
+        isinstance(raw.get(key), str) and raw.get(key)
+        for key in ("op", "run_id", "plan")
+    ):
+        return None
+    return raw
+
+
 def _baseline(main: Path, ref: str) -> str | None:
     """The tree ``ref`` names, or None when it is missing or not a tree."""
     proc = _run_git(["cat-file", "-t", ref], cwd=main)
@@ -795,11 +959,13 @@ def _open_worktree(root: Path, path: Path) -> _Worktree:
     """Resolve a worktree for check, land, sync and remove.
 
     Raises:
-        _Refusal: ``worktree_bad:unlisted``, ``:manifest`` or ``:baseline``,
-            in that order.
+        _Refusal: ``worktree_bad:unlisted``, ``:candidate``, ``:manifest`` or
+            ``:baseline``, in that order.
     """
     if not _listed(root, path):
         raise _Refusal(["worktree_bad:unlisted"])
+    if _read_candidate(path) is not None:
+        raise _Refusal(["worktree_bad:candidate"])
     found = _read_manifest(path)
     if found is None:
         raise _Refusal(["worktree_bad:manifest"])
@@ -1035,7 +1201,9 @@ def _carried_files(root: Path, carries: Sequence[str]) -> list[str]:
     return files
 
 
-def _populate(build: _Build, slug: str, carries: Sequence[str]) -> None:
+def _populate(
+    build: _Build, slug: str, carries: Sequence[str], identity: dict[str, str]
+) -> None:
     """Everything ``create`` does after ``git worktree add``.
 
     Raises:
@@ -1090,6 +1258,7 @@ def _populate(build: _Build, slug: str, carries: Sequence[str]) -> None:
         "copies": sorted(copies),
         "carry": carried,
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **identity,
     }
     (git_dir / WORKTREE_MANIFEST).write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -1125,6 +1294,50 @@ def _resolve_base(root: Path, flag: str | None) -> str:
     return commit
 
 
+def candidate_root() -> Path:
+    """The commit-candidate root ``WORKTREE_PARENT/.candidates`` (``commit_batch``'s default)."""
+    return Path(WORKTREE_PARENT) / CANDIDATE_FOLDER
+
+
+def worktree_path(root: Path, slug: str) -> Path:
+    """The folder ``create <slug>`` builds: ``WORKTREE_PARENT/<slug>`` for any main tree.
+
+    ``credits_msg.py phase`` reads it for τ4 and, with :func:`slug_taken`, for the τ3
+    ``path_free`` fact (EA-21, EA-28), so both name the same folder.
+    """
+    del root
+    return Path(WORKTREE_PARENT) / slug
+
+
+def legacy_worktree_path(root: Path, slug: str) -> Path:
+    """The ``<root>-<slug>`` sibling that ``create`` built before B-8."""
+    return root.parent / f"{root.name}-{slug}"
+
+
+def slug_taken(root: Path, slug: str) -> bool:
+    """True when the folder of ``slug`` exists at its B-8 place or at its legacy one."""
+    return os.path.lexists(worktree_path(root, slug)) or os.path.lexists(
+        legacy_worktree_path(root, slug)
+    )
+
+
+def _identity(ns: argparse.Namespace) -> dict[str, str]:
+    """The run identity of ``create`` (all three flags or none), as manifest fields.
+
+    Raises:
+        _Refusal: ``worktree_bad:identity`` for a partial set or an unsafe name.
+    """
+    given = {"run_id": ns.run_id, "op_id": ns.op, "plan": ns.plan}
+    present = [value for value in given.values() if value is not None]
+    if not present:
+        return {}
+    if len(present) != len(given) or not all(
+        isinstance(value, str) and IDENTITY_RE.fullmatch(value) for value in present
+    ):
+        raise _Refusal(["worktree_bad:identity"])
+    return {key: str(value) for key, value in given.items()}
+
+
 def _cmd_create(
     root: Path, ns: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> int:
@@ -1132,12 +1345,16 @@ def _cmd_create(
     slug: str = ns.slug
     if not WORKTREE_SLUG_RE.fullmatch(slug):
         raise _Refusal(["worktree_bad:slug"])
+    identity = _identity(ns)
     carries = [_rel_arg(parser, "--carry", value) for value in ns.carry]
-    path = root.parent / f"{root.name}-{slug}"
-    if os.path.lexists(path):
+    path = worktree_path(root, slug)
+    if slug_taken(root, slug):
         raise _Refusal(["worktree_bad:exists"])
+    if not contained(path):
+        raise _Refusal(["worktree_bad:containment"])
     base = _resolve_base(root, ns.base)
     config = _config(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     branch: str | None = ns.branch
     place = ["-b", branch] if branch is not None else ["--detach"]
@@ -1150,7 +1367,7 @@ def _cmd_create(
         config=config,
     )
     try:
-        _populate(build, slug, carries)
+        _populate(build, slug, carries, identity)
     except _Refusal as refusal:
         for line in refusal.lines:
             _say(line)
@@ -1404,12 +1621,131 @@ def _cmd_sync(
 # ------------------------------------------------------------------ remove
 
 
+def _run_parameters() -> ModuleType:
+    """``tools/run_parameters.py``, imported only by a removal that writes H2-3c records."""
+    return importlib.import_module("tools.run_parameters")
+
+
+def _removal_run(wt: _Worktree) -> dict[str, str] | None:
+    """(plan, run_id, manifest digest) of a worktree ``create`` made for a run; else None."""
+    raw = (wt.git_dir / WORKTREE_MANIFEST).read_bytes()
+    manifest = json.loads(raw.decode("utf-8"))
+    plan, run_id = manifest.get("plan"), manifest.get("run_id")
+    if not (isinstance(plan, str) and isinstance(run_id, str)):
+        return None
+    return {"plan": plan, "run_id": run_id, "digest": hashlib.sha256(raw).hexdigest()}
+
+
+def _record_removal(wt: _Worktree, run: dict[str, str], event: str) -> None:
+    """Write one H2-3c removal record (AC-G.4).
+
+    Raises:
+        _Refusal: ``worktree_bad:record:<reason>`` when the store refuses the record.
+    """
+    rp = _run_parameters()
+    try:
+        rp.record_removal(
+            wt.main,
+            plan=run["plan"],
+            run_id=run["run_id"],
+            event=event,
+            path=wt.path.as_posix(),
+            manifest_digest=run["digest"],
+            by=REMOVAL_BY,
+            row=REMOVAL_ROW,
+        )
+    except rp.Refusal as refusal:
+        raise _Refusal([f"worktree_bad:record:{refusal.reason}"]) from None
+
+
+def _git_status_lines(path: Path) -> list[str]:
+    """A refusal per tracked change, untracked file and ignored file of ``path``."""
+    raw = _git(
+        ["status", "--porcelain=v1", "-z", "--ignored", "--untracked-files=all"],
+        cwd=path,
+    )
+    entries = raw.decode("utf-8", "replace").split("\0")
+    lines: list[str] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        code, rel = entry[:2], entry[3:]
+        if code in ("??", "!!"):
+            lines.append(f"worktree_bad:unknown:{rel}")
+            continue
+        lines.append(f"worktree_bad:dirty:{rel}")
+        if code[0] in "RC":
+            index += 1
+    return lines
+
+
+def _main_worktree(root: Path) -> str | None:
+    """The main worktree of ``root``'s repository: the first ``git worktree list`` entry."""
+    listing = _git(["worktree", "list", "--porcelain"], cwd=root)
+    for line in listing.decode("utf-8", "replace").splitlines():
+        if line.startswith("worktree "):
+            return line[len("worktree ") :]
+    return None
+
+
+def _remove_ad_hoc(root: Path, path: Path) -> int:
+    """``remove <path> --ad-hoc``: the guarded plain-git route (AC-G.3, D-18).
+
+    Raises:
+        _Refusal: ``worktree_bad:unlisted``, ``:main``, ``:managed``, ``:cwd``,
+            ``:containment``, ``:dirty:<rel>`` / ``:unknown:<rel>`` or ``:held:<pid>``,
+            in that order.
+    """
+    if not _listed(root, path):
+        raise _Refusal(["worktree_bad:unlisted"])
+    main = _main_worktree(root)
+    if main is not None and _same_path(main, path):
+        raise _Refusal(["worktree_bad:main"])
+    git_dir = _worktree_git_dir(path)
+    if git_dir is None or any(
+        os.path.lexists(git_dir / name)
+        for name in (WORKTREE_MANIFEST, CANDIDATE_MANIFEST)
+    ):
+        raise _Refusal(["worktree_bad:managed"])
+    _refuse_cwd(path)
+    if not contained(path):
+        raise _Refusal(["worktree_bad:containment"])
+    unknown = _git_status_lines(path)
+    if unknown:
+        raise _Refusal(unknown)
+    _refuse_held(path)
+    _git(["worktree", "remove", str(path)], cwd=root)
+    _git(["worktree", "prune"], cwd=root)
+    _say(f"worktree_removed:{path.as_posix()}")
+    return 0
+
+
 def _cmd_remove(
     root: Path, ns: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> int:
-    """``remove <path> [--discard]``: delete a worktree whose work has landed."""
+    """``remove <path> [--discard | --ad-hoc]``: delete a worktree whose work has landed.
+
+    A commit candidate is deleted as it stands: its content reaches the branch only
+    through ``tools/commit_batch.py``, so it has nothing to land. An executor worktree
+    must be contained (AC-G.2), must not hold this process's folder and must not be held
+    by another process (AC-G.3); a run's worktree gets the two H2-3c records (AC-G.4).
+    """
     path = Path(os.path.abspath(ns.path))
+    if _listed(root, path) and _read_candidate(path) is not None:
+        _git(["worktree", "remove", "--force", str(path)], cwd=root)
+        _git(["worktree", "prune"], cwd=root)
+        _say(f"worktree_removed:{path.as_posix()}")
+        return 0
+    if ns.ad_hoc:
+        return _remove_ad_hoc(root, path)
     wt = _open_worktree(root, path)
+    if not contained(path):
+        raise _Refusal(["worktree_bad:containment"])
+    _refuse_cwd(path)
+    _refuse_held(path)
     links = [path / name for name in wt.links]
     for name, link in zip(wt.links, links, strict=True):
         if os.path.lexists(link) and not _is_link(link):
@@ -1423,10 +1759,15 @@ def _cmd_remove(
             ) from None
         if now != wt.baseline:
             raise _Refusal(["worktree_bad:unlanded"])
+    run = _removal_run(wt)
+    if run is not None:
+        _record_removal(wt, run, "worktree_removal_started")
     _drop_links(links)
     _git(["worktree", "remove", "--force", str(path)], cwd=wt.main)
     _git(["worktree", "prune"], cwd=wt.main)
     _git(["update-ref", "-d", wt.ref], cwd=wt.main)
+    if run is not None:
+        _record_removal(wt, run, "worktree_removed")
     _say(f"worktree_removed:{path.as_posix()}")
     return 0
 
@@ -1455,7 +1796,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    create = commands.add_parser("create", help="build <root>-<slug> beside the root")
+    create = commands.add_parser("create", help="build <parent>/<slug>")
     create.add_argument("slug", help="lowercase letters, digits and dashes")
     create.add_argument("--branch", help="create this branch instead of detaching")
     create.add_argument(
@@ -1469,6 +1810,9 @@ def _parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="root-relative file or directory to copy across (repeatable)",
     )
+    create.add_argument("--run-id", help="the credits run (with --op and --plan)")
+    create.add_argument("--op", help="the admission op of the run")
+    create.add_argument("--plan", help="the plan folder slug of the run")
 
     check = commands.add_parser("check", help="validate the worktree's environment")
     check.add_argument("path")
@@ -1482,8 +1826,14 @@ def _parser() -> argparse.ArgumentParser:
 
     remove = commands.add_parser("remove", help="delete a landed worktree")
     remove.add_argument("path")
-    remove.add_argument(
+    mode = remove.add_mutually_exclusive_group()
+    mode.add_argument(
         "--discard", action="store_true", help="abandon work that has not landed"
+    )
+    mode.add_argument(
+        "--ad-hoc",
+        action="store_true",
+        help="remove a clean worktree that has no manifest (plain git)",
     )
     return parser
 

@@ -2,7 +2,7 @@
 
 > **Scope:** every place a workflow would hand a decision or question to the human — plan
 > Open Questions (`create-plan.md` §2B), reviewer human-decision items (§5b), the round-cap
-> TL;DR (§5d), reviewer questions with no local-canon answer (§5e), triage architecture
+> TL;DR (§5e), reviewer questions with no local-canon answer (§5f), triage architecture
 > decisions (`issue-triage.md` Step 8), grouping §8 tables (`session-grouping.md`), execution-time
 > forks where an acceptance criterion proves unreachable as written, and closeout.
 > **It never loosens a hard gate.** Commit/push/merge/deploy, destructive data operations, the
@@ -125,6 +125,62 @@ When any fails, the decision is human-gated. Classify it so the brief says why:
 | `governance-value` | 4 | A new quota, cap, or retention window |
 | `externally-blocked` | — | Needs a credential, purchase, or third-party answer |
 
+## 4a. Mandatory-human criteria and the `decisions:` modes
+
+The plan's `run_parameters.decisions` value (`create-plan.md` Step 0) selects one of two modes. A
+plan without a `run_parameters` block uses `hdp`.
+
+- **`hdp`** (default): check the M-list below **before** the §4 test. An M hit is human-gated
+  whatever the obviousness test says, and it is logged with `mandatory: [M-n, …]`. A question
+  with no M hit goes through the §4 test and is logged with `mandatory: none`.
+- **`human-all`**: every *unresolved discretionary decision* in this protocol's scope (a
+  question with two or more materially different plausible answers that the Planning Contract
+  order does not settle) is human-gated. The precedent sweep and the research rung still run,
+  and the brief still leads with a recommendation. Use it for an unfamiliar domain or a
+  sensitive phase.
+
+In both modes, implementation choices with one plausible answer, bookkeeping, and the
+carrying-out of approved rows are not decisions. In a headless run, an M hit, or any brief under
+`human-all`, is a `[B]` (c) row with the bounded gate wait (`.agent/skills/claude-credits/SKILL.md`),
+then `STOPPED:decision` when no ruling arrives.
+
+| Id | Always human | Source |
+| :- | :- | :- |
+| M-1 | Push to any remote; **every** merge (shared or lane branch); tag; release; deploy. No parameter covers these. This restates `AGENTS.md` §Authority and Approval; it narrows nothing and adds nothing. | `AGENTS.md` §Authority and Approval |
+| M-2 | Destructive data operations (`AGENTS.md` §Authority and Approval, unchanged: the rule has no disposable-data exemption and this list grants none); deletion of backups; secret or credential rotation; a change to who may read a secret. | `AGENTS.md` §Authority and Approval; this protocol's scope note |
+| M-3 | **New policy**: a new or changed threshold, cap, budget, round cap or retention window; any edit to `AGENTS.md`, `GUARDRAILS.md`, a hook, `stop_gate.py`, `commit_gate.py`, the model registry or this protocol that changes what is allowed. A mechanical repair under existing policy (a broken path, a typo, a test that pins the current rule) is not an M-3 hit, and carrying out an approved plan row that makes an M-3 edit is not one either; deciding to make an edit the plan does not hold is. | §4 test 4 |
+| M-4 | One-way doors not already in the approved plan: a schema migration that drops or rewrites data, a public API or MCP tool shape, a published or external contract (the public repo's docs, an interface a third party consumes), licence or vendor lock-in, and **any** external spend that the approved plan did not declare (a declared budget authorizes spend up to it; nothing authorizes spend outside it). | §4 class table (`one-way-door`) |
+| M-5 | A user-visible product fork with no local canon **and** materially different plausible behaviours: palette, a surface split, a feature on or off, UX wording that changes meaning. A wording choice with one plausible reading is the agent's. | §4 class table (`product-preference`) |
+| M-6 | A source conflict that the Planning Contract order (local canon, then primary sources) does not settle, and any conflict with a prior `USER_EXPLICIT` ruling. | §4 class table (`source-conflict`) |
+| M-7 | A change to an existing test's assertion that no approved plan row specifically calls for (a row that names the test and the new assertion; a general "fix the tests" row is not one). The setup-and-fixture repair carve-out stays the agent's. | `AGENTS.md` §Testing & TDD Protocol |
+| M-8 | A change to an approved plan's *acceptance or scope*: a new or dropped MEU (or work unit) or acceptance criterion, a moved session order, a reviewer finding adopted as new scope. Bookkeeping rows (a receipt, a status flip, an evidence row) and ordinary review corrections inside the approved acceptance criteria are not scope changes and never stop. | `AGENTS.md` §Planning Contract |
+| M-9 | Review-loop exits that are already sanctioned stops: every round cap, the stagnation rule, every reviewer rung unavailable. The late-round materiality bar is the agent's judgement inside the loop, not a permission. | `AGENTS.md` §Execution Contract (review cap, reviewer unavailable) |
+| M-10 | A required **human action**: a credential, a purchase, a third-party answer, a physical action (a VM console, an installer). A transient failure the plan authorizes the agent to retry (a flaky network call, a busy file) is not an M-10 hit. | §4 class table (`externally-blocked`) |
+| M-11 | Waiving a **blocking** quality gate, test or review step: a skip, `xfail`, `--no-verify`, a waived external validation, a bypassed hook, a lowered floor that the gate enforces. Advisory floors (coverage, the security scans) stay advisory and are not M-11 hits. | `AGENTS.md` §Validation Pipeline, §Independent Review |
+| M-12 | A new external disclosure: a push to a public repository, an email or issue to a third party, a published artifact, a message to another organization's session. | `AGENTS.md` §Authority and Approval |
+| M-13 | Widening the agent's own permissions: a settings allow rule, a bypass flag, a sandbox or classifier exemption, a new MCP server, a new trusted remote. | the harness permission model (`harness-profiles.md`) |
+| M-14 | Headless start, resume or fork authority: who may start a scheduled run, resume a stopped one, or fork it, and with which grants. | `GUARDRAILS.md` SIGN 3 (b) |
+
+Everything else is the agent's to decide under §4, logged as `autonomous` with
+`mandatory: none`. Six notes:
+
+- The list gates *new decisions*, never the carrying-out of rows the human already approved. A
+  plan row that edits `GUARDRAILS.md`, changes a test or rotates a credential was an M hit at
+  planning time and is executed as approved.
+- The list is a floor on top of every existing human-only gate; gates the list does not name
+  stay in force (for example the model-routing rules,
+  `model-routing.md`).
+- M-3 covers edits to this list and to this protocol: they are human-approved, never
+  autonomous.
+- `human-all` adds every unresolved discretionary decision; there is no per-item mode table.
+- Neither mode exempts anything: `human-all` never overrides a hard gate, and `hdp` still
+  escalates every question that fails the obviousness test, M hit or not.
+- An M hit names every matching item (`mandatory: [M-3, M-11]`), and the brief states each.
+
+Outside the M-list and the failing tests, do not ask the human to confirm a choice the
+obviousness test already settled: that is the over-clarification cost of §4, and it is the one
+thing this section never adds.
+
 ---
 
 ## 5. Decision Brief — how a human-gated decision is presented
@@ -159,7 +215,7 @@ Rules:
   choice; never pad with straw options.
 - **The reader decides from the brief alone.** No "I can research further if you want".
 - **Batch at the existing stop.** Briefs are presented at the workflow's own human gate (plan
-  `## Decision Log`, the §5d TL;DR, the triage Step 8 report, the grouping §8 table). Presenting
+  `## Decision Log`, the §5e TL;DR, the triage Step 8 report, the grouping §8 table). Presenting
   them ends the turn per the harness `end_turn_signal`; do not poll or monitor for the reply
   (`gate-wait-then-exit` is the one bounded wait, defined in `harness-profiles.md`).
 - **Advisory, not authorizing.** A recommendation never substitutes for the human's explicit
@@ -178,6 +234,7 @@ decision_log:
     question: "one line"
     resolution: autonomous | human
     class: two-way | one-way-door | product-preference | source-conflict | governance-value | externally-blocked
+    mandatory: [M-n, …] | none                  # §4a; omitted when the plan has no run_parameters block
     chosen: "option"
     source_tag: Local Canon | Research-backed | Human-approved
     precedents: ["path:line — what it decided"]
@@ -187,6 +244,10 @@ decision_log:
     reasoning: "why this option; why the alternatives lost"
     human_message_reference: "USER_EXPLICIT YYYY-MM-DD '<quote>'"   # human-resolved only
 ```
+
+A brief written before any plan file exists (the Step 0 intake of `create-plan.md` or
+`session-grouping.md`) uses `stage: planning` and lists its unruled items under
+`open_decisions:`. There is no other stage value and no class alias.
 
 Where it lives:
 
@@ -250,7 +311,6 @@ deleted: append the ruling with `human_message_reference` and keep the original 
 ## 7. Anti-patterns
 
 - Bare questions ("Should X be A or B?") with no precedent sweep, research, or recommendation.
-- Asking the human to confirm a choice the obviousness test already settled.
 - Deciding an irreversible or product-shaping question autonomously because the research
   "seemed clear".
 - Listing pros and cons as free-standing bullets that never compare the options.

@@ -190,6 +190,20 @@ external inputs? Reuse stays disabled without proof. Manual work names observer/
 
 ---
 
+## Block G — Run Parameters
+*(Configures: the four plan defaults of `create-plan.md` Step 0, and when a decision must reach
+the human. Ask after Block E: the M-list of `human-decision-protocol.md` §4a grows from E1/E5.)*
+
+| # | Question | Configures | Default |
+|---|---|---|---|
+| G1 | Must every plan decision reach you, or may the agent use the **human decision protocol** (precedent, research, obviousness test) and ask you only the mandatory-human list (§4a M-1..M-14 plus your E1/E5 acts)? | `decisions: hdp \| human-all` | `hdp` |
+| G2 | Must the **approved plan be committed** before execution starts? | `commit_plan` (the `PC` row) | `true` |
+| G3 | May **execution start right after** the plan is approved, with no second "proceed"? | `exec_after_plan` | `true` |
+| G4 | Must the work be **committed when execution completes**? Push is never automatic. | `commit_exec` (the `COMMIT` row) | `true` |
+| G5 | Who may **grant** these, for how long, and on which branch and paths? Which harness transcript proves the grant (`claude-code` or `none`)? May a **headless** run start, resume or fork, and commit? | PROFILE G5–G9; the policy's `capabilities` | the E4 human; `none`; no headless |
+
+---
+
 **F3b clarification:** Receipt retention is independent of durable proof. In either mode,
 promote exact command/exit/decisive output (or manual procedure/observation) into F1/F2
 artifacts before closeout; apply C redaction. Scratch paths alone cannot support claims.

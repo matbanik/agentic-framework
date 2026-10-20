@@ -167,6 +167,15 @@ fields:
       count: { type: integer, minimum: 0, required: true }
       auto: { type: integer, minimum: 0, required: true }
       manual: { type: integer, minimum: 0, required: true }
+  mandatory:
+    description: |
+      The M-n items (human-decision-protocol.md §4a) that made a decision
+      human-gated, or the sole value `none`. Optional.
+    required: false
+    type: array
+    items:
+      type: string
+      pattern: "^(M-(?:[1-9]|1[0-4])|none)$"
 
 # Example (typical session):
 #

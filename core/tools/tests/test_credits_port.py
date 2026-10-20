@@ -5,7 +5,7 @@ AC-J.1  Port step 1: ``Invoke-ClaudeDispatch.ps1`` takes ``-ApiKeyFile`` and eve
         ``stop_gate.py`` (with the ``done`` release) are in ``core/tools/``.
 AC-J.2  Every file of the port inventory is at its framework path in template form: it
         compiles, the ported tests collect, the probe kit self-test passes, and the lines
-        added under ``core/`` hold no local drive path, no source-project name and no model
+        added under ``core/`` hold no local drive path, no source project name and no model
         slug. ``executor_worktree.py`` reads the project parts from an adopter config file.
 
 These tests check the package itself, so they skip in an adopter tree, which has no
@@ -385,7 +385,7 @@ def test_probe_kit_self_test_passes(tmp_path: Path) -> None:
 
 def test_added_lines_hold_no_project_leak() -> None:
     """AC-J.2: the lines added under ``core/`` hold no drive path, user profile path,
-    source-project name or model slug."""
+    source project name or model slug."""
     added = _added_core_lines()
     assert any(rel.startswith("core/.agent/skills/claude-credits/") for rel, _ in added), (
         "no claude-credits lines were added under core/"

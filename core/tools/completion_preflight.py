@@ -35,6 +35,18 @@ The checks, in order:
 
 The markers are the patterns of ``.agent/skills/completion-preflight/SKILL.md``.
 They match without regard to case, as ``Select-String`` does there.
+
+The stage mode (plan docs/execution/plans/2026-10-17-run-parameters, B-4; report
+R§4.6 "Check-by-stage matrix") checks a run that is still closing out::
+
+    completion_preflight.py --stage structural|readiness|final --plan <folder> --tree <path>
+
+stdout is one JSON object: ``ok``, ``stage``, ``missing`` and ``details``. The checks
+are the six above plus ``plan_task_status``, with three changes: ``task_rows`` lets
+the rows of the stage's pending set (``PENDING_SETS``) stay open, ``stop_gate`` is
+``armed`` before ``final`` and ``released:done`` at it, and ``plan_task_status``
+wants the plan's and the task's ``status`` equal to the stage's value. ``--stage``
+with ``--json`` is a usage error, and so is a stage outside ``STAGES``.
 """
 
 from __future__ import annotations
@@ -64,6 +76,32 @@ CHECK_IDS = (
     "reflection",
     "metrics",
 )
+
+#: The closeout stages, in order (R§4.6).
+STAGES = ("structural", "readiness", "final")
+
+#: The rows each stage lets stay open: the matrix's pending-rows column. The closeout
+#: validator imports this constant, so both validators read one set.
+PENDING_SETS: dict[str, frozenset[str]] = {
+    "structural": frozenset({"H2-4", "H2-5", "COMMIT", "H2-6"}),
+    "readiness": frozenset({"H2-5", "COMMIT", "H2-6"}),
+    "final": frozenset(),
+}
+
+#: The plan and task ``status`` each stage expects.
+STAGE_STATUS = {
+    "structural": "in_progress",
+    "readiness": "in_progress",
+    "final": "complete",
+}
+
+#: The task ``stop_gate`` each stage expects.
+STAGE_GATE = {"structural": "armed", "readiness": "armed", "final": "released:done"}
+
+#: The stage checks: the six legacy ids, then the plan and task status pair.
+STAGE_CHECK_IDS = (*CHECK_IDS, "plan_task_status")
+
+PLAN_FILE = "implementation-plan.md"
 
 REVIEW_MARKERS = ("verdict:", "findings_count:", "Finding|Severity")
 HANDOFF_MARKERS = (
@@ -117,6 +155,11 @@ def build_parser() -> _Parser:
     parser.add_argument("--plan", required=True, help="plan folder, relative to --tree")
     parser.add_argument("--tree", required=True, help="the tree root")
     parser.add_argument("--json", action="store_true", help="write one JSON line")
+    parser.add_argument(
+        "--stage",
+        choices=STAGES,
+        help="check one closeout stage instead of done (not with --json)",
+    )
     return parser
 
 
@@ -236,8 +279,11 @@ def row_id(cell: str) -> str:
     return cell.strip().strip("*_`").strip()
 
 
-def check_task_rows(text: str) -> str | None:
-    """Return why the task rows fail, or None when every row is done or validly blocked."""
+def check_task_rows(text: str, pending: frozenset[str] = frozenset()) -> str | None:
+    """Return why the task rows fail, or None when every row is done or validly blocked.
+
+    A row in ``pending`` may also be open (``[ ]`` or ``[/]``): a stage's pending set.
+    """
     open_rows: list[str] = []
     bad_blocks: list[str] = []
     rows = 0
@@ -252,6 +298,8 @@ def check_task_rows(text: str) -> str | None:
         mark = status.group(1)
         rid = row_id(cells[0])
         if mark in ("x", "X"):
+            continue
+        if mark in (" ", "/") and rid in pending:
             continue
         if mark == "B" and valid_block(text, line, rid):
             continue
@@ -275,10 +323,35 @@ def valid_block(text: str, line: str, rid: str) -> bool:
     return bool(FOLLOW_UP_RE.search(line) and cite.search(line) and block.search(text))
 
 
-def check_stop_gate(meta: dict[str, str]) -> str | None:
-    """Return why the stop gate fails, or None when it is ``released:done``."""
+def check_stop_gate(
+    meta: dict[str, str], expected: str = "released:done"
+) -> str | None:
+    """Return why the stop gate fails, or None when it is ``expected``."""
     gate = unquote(meta.get("stop_gate", ""))
-    return None if gate == "released:done" else f"stop_gate is {gate or 'absent'}"
+    if gate == expected:
+        return None
+    reason = f"stop_gate is {gate or 'absent'}"
+    return (
+        reason
+        if expected == "released:done"
+        else f"{reason}; the stage wants {expected}"
+    )
+
+
+def check_plan_task_status(
+    task_meta: dict[str, str], plan_text: str | None, expected: str
+) -> str | None:
+    """Return why the plan and task statuses fail, or None when both are ``expected``."""
+    if plan_text is None:
+        return f"no {PLAN_FILE}"
+    task_status = unquote(task_meta.get("status", ""))
+    plan_status = unquote(frontmatter(plan_text).get("status", ""))
+    if task_status == expected and plan_status == expected:
+        return None
+    return (
+        f"PLAN_TASK_STATUS: task status is {task_status or 'absent'} and plan status "
+        f"is {plan_status or 'absent'}; the stage wants {expected}"
+    )
 
 
 def check_review(path: Path) -> str | None:
@@ -339,16 +412,24 @@ def check_metrics(path: Path, plan: str, meus: list[str] | None) -> str | None:
     return "no metrics row names the plan or its MEUs"
 
 
-def run_checks(tree: Path, plan_dir: Path) -> dict[str, str]:
-    """Return the failing check ids, each with its reason, in ``CHECK_IDS`` order."""
+def run_checks(tree: Path, plan_dir: Path, stage: str | None = None) -> dict[str, str]:
+    """Return the failing check ids, each with its reason, in check order.
+
+    With no ``stage`` these are the six ``CHECK_IDS`` of ``done``; with a stage they
+    are ``STAGE_CHECK_IDS``, read against that stage's pending set, gate and status.
+    """
     plan = plan_dir.name
     task_text = read_text(plan_dir / "task.md")
     meta = frontmatter(task_text) if task_text is not None else {}
     meus = parse_meus(meta.get("meus")) if task_text is not None else None
     handoffs = tree / HANDOFFS_DIR
+    pending = PENDING_SETS[stage] if stage is not None else frozenset[str]()
+    gate = STAGE_GATE[stage] if stage is not None else "released:done"
     results: dict[str, str | None] = {
-        "task_rows": "no task.md" if task_text is None else check_task_rows(task_text),
-        "stop_gate": "no task.md" if task_text is None else check_stop_gate(meta),
+        "task_rows": "no task.md"
+        if task_text is None
+        else check_task_rows(task_text, pending),
+        "stop_gate": "no task.md" if task_text is None else check_stop_gate(meta, gate),
         "approved_verdict": check_review(
             handoffs / f"{plan}-implementation-critical-review.md"
         ),
@@ -360,19 +441,46 @@ def run_checks(tree: Path, plan_dir: Path) -> dict[str, str]:
         ),
         "metrics": check_metrics(tree / METRICS_FILE, plan, meus),
     }
-    return {key: reason for key in CHECK_IDS if (reason := results[key]) is not None}
+    if stage is None:
+        order: tuple[str, ...] = CHECK_IDS
+    else:
+        order = STAGE_CHECK_IDS
+        results["plan_task_status"] = (
+            "no task.md"
+            if task_text is None
+            else check_plan_task_status(
+                meta, read_text(plan_dir / PLAN_FILE), STAGE_STATUS[stage]
+            )
+        )
+    return {key: reason for key in order if (reason := results[key]) is not None}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI; return the exit code."""
     args = build_parser().parse_args(argv)
+    stage: str | None = args.stage
+    if stage is not None and args.json:
+        emit(
+            {"ok": False, "missing": [], "error": "usage: --stage and --json conflict"}
+        )
+        return EXIT_USAGE
     try:
         tree, plan_dir = resolve_plan(args.tree, args.plan)
     except (UsageError, OSError) as exc:
         emit({"ok": False, "missing": [], "error": f"usage: {exc}"})
         return EXIT_USAGE
-    failures = run_checks(tree, plan_dir)
-    emit({"ok": not failures, "missing": list(failures), "details": failures})
+    failures = run_checks(tree, plan_dir, stage)
+    if stage is None:
+        emit({"ok": not failures, "missing": list(failures), "details": failures})
+    else:
+        emit(
+            {
+                "ok": not failures,
+                "stage": stage,
+                "missing": list(failures),
+                "details": failures,
+            }
+        )
     return EXIT_MISSING if failures else EXIT_OK
 
 

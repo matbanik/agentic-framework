@@ -151,6 +151,9 @@ ADOPTER_CREATED = frozenset(
         # tells the adopter to merge the opt-in notify block into their own copy.
         ".claude/settings.json",
         ".cursor/hooks.json",
+        # Run parameters: the adopter copies the shipped ``.json.template`` and computes
+        # its digests (PROFILE §G); an unedited copy keeps ``status`` at ``disabled``.
+        ".agent/run-parameters.policy.json",
     }
 )
 

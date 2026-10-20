@@ -15,11 +15,31 @@
     Branch to push to. Default: main.
 .PARAMETER SkipTests
     Skip the lint + test gate (for WIP commits). Default: false.
+.PARAMETER RepositoryPath
+    Exact-scope mode: the repository of the granted op. The op id is in
+    {{PROJECT_NAME_UPPER}}_COMMIT_GRANT; tools/commit_batch.py runs the op's phases, so this
+    script never commits on its own authority.
+.PARAMETER Phase
+    Exact-scope mode: candidate, publish or index runs one op phase. Without it the three phases
+    run in order and stop at the first that does not succeed.
+.PARAMETER ScopeManifest
+    Exact-scope mode: the op's paths, one per line; they must equal the op's packet paths.
+.PARAMETER ExpectedBase
+    Exact-scope mode: the op's parent commit.
+.PARAMETER ExpectedTree
+    Exact-scope mode: the op's tree.
+.PARAMETER ContentDescriptor
+    Exact-scope mode: JSON with parent, tree, message_sha256, author and signing fingerprint.
+.PARAMETER MessageFile
+    Exact-scope mode: the op's commit message.
+.PARAMETER OutputState
+    Exact-scope mode: where the published commit's state JSON is written.
 .EXAMPLE
     .\agent-commit.ps1 -Message "feat: add new feature"
     .\agent-commit.ps1 -Message "feat: add feature" -Body "Detailed description" -Branch "dev"
     .\agent-commit.ps1 -Message "fix: correct bug" -NoPush
     .\agent-commit.ps1 -Message "wip: save progress" -SkipTests -NoPush
+    $env:{{PROJECT_NAME_UPPER}}_COMMIT_GRANT = "op-1"; .\agent-commit.ps1 -RepositoryPath . -NoPush
 #>
 param(
     [string]$Message,
@@ -33,6 +53,8 @@ param(
     [switch]$SkipTests,
 
     [string]$RepositoryPath,
+
+    [string]$Phase,
 
     [string]$ScopeManifest,
 
@@ -49,185 +71,175 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Invoke-RtkGitExact {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Repo,
-        [Parameter(Mandatory = $true)]
-        [string[]]$Arguments
-    )
+function Write-ExactResult {
+    param([System.Collections.IDictionary]$Result)
+    Write-Output ($Result | ConvertTo-Json -Compress)
+}
 
-    $output = @(& rtk proxy git -C $Repo @Arguments)
-    $code = $LASTEXITCODE
-    if ($code -ne 0) {
-        throw "git command failed with exit code $code`: git $($Arguments -join ' ')"
+function Get-ProjectEnv {
+    # The adopter's project prefix names these variables; reading them by name keeps the
+    # lookup valid before and after the template's {{PROJECT_NAME_UPPER}} is filled.
+    param([string]$Suffix)
+    return [Environment]::GetEnvironmentVariable("{{PROJECT_NAME_UPPER}}_$Suffix")
+}
+
+# The tree's gate lease: the executor lease's protocol (tools/executor_worktree.py).
+# <git dir>/{{PROJECT_NAME}}-gate.lock holds one byte locked at offset 2**20 while held,
+# and a JSON body carrying a 32-hex token; the children get that token in
+# {{PROJECT_NAME_UPPER}}_GATE_LEASE_TOKEN. The file is never deleted: a contender could
+# lock the unlinked file while a third process created and locked a new one.
+$LeaseLockOffset = 1048576
+$script:LeaseStream = $null
+$script:LeaseTokenBefore = $null
+
+function Enter-GateLease {
+    # Takes the lease, or runs nested when the holder's body token is the inherited one;
+    # refuses lease_held otherwise. It writes nothing to the pipeline but a refusal.
+    param([string]$FirstPhase)
+    if (-not $IsWindows -and $PSVersionTable.PSEdition -eq "Core") {
+        # .NET's byte-range lock on Unix is an fcntl record lock, which does not exclude the
+        # flock(1) holders of the same lease; agent-commit.sh takes the lease with flock.
+        [Console]::Error.WriteLine("ERROR: the gate lease needs Windows here; run agent-commit.sh on this OS.")
+        Write-ExactResult ([ordered]@{ result = "refused"; reason = "lease_unsupported"; phase = $FirstPhase })
+        exit 1
     }
-    return (($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+    $gitDir = @(& git -C $RepositoryPath rev-parse --absolute-git-dir 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $gitDir.Count -ne 1 -or [string]::IsNullOrWhiteSpace($gitDir[0])) {
+        [Console]::Error.WriteLine("ERROR: not a git repository: $RepositoryPath")
+        Write-ExactResult ([ordered]@{ result = "usage"; reason = "repository"; phase = $FirstPhase })
+        exit 2
+    }
+    $leasePath = Join-Path ([string]$gitDir[0]) "{{PROJECT_NAME}}-gate.lock"
+    $inherited = Get-ProjectEnv "GATE_LEASE_TOKEN"
+    $stream = [System.IO.File]::Open($leasePath, [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+    try {
+        $stream.Lock($LeaseLockOffset, 1)
+    } catch [System.IO.IOException] {
+        # Held by another handle. Its body lies outside the locked byte, so it reads.
+        $held = ""
+        try {
+            $buffer = New-Object byte[] 4096
+            $stream.Position = 0
+            $count = $stream.Read($buffer, 0, $buffer.Length)
+            $held = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $count)
+        } finally {
+            $stream.Dispose()
+        }
+        $match = [regex]::Match($held, '"token"\s*:\s*"([0-9a-f]{32})"')
+        if ($inherited -and $match.Success -and $match.Groups[1].Value -ceq $inherited) {
+            return
+        }
+        [Console]::Error.WriteLine("ERROR: the gate lease $leasePath is held by another run.")
+        Write-ExactResult ([ordered]@{ result = "refused"; reason = "lease_held"; phase = $FirstPhase })
+        exit 1
+    }
+    $script:LeaseStream = $stream
+    $random = New-Object byte[] 16
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($random)
+    $token = -join ($random | ForEach-Object { $_.ToString("x2") })
+    # The body is written after the lock and never decides who holds the lease.
+    $body = [ordered]@{
+        schema = 1
+        pid = $PID
+        argv = @("agent-commit.ps1")
+        started_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss+00:00")
+        token = $token
+    }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Compress) + "`n")
+    $stream.SetLength(0)
+    $stream.Position = 0
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush()
+    $script:LeaseTokenBefore = Get-ProjectEnv "GATE_LEASE_TOKEN"
+    [Environment]::SetEnvironmentVariable("{{PROJECT_NAME_UPPER}}_GATE_LEASE_TOKEN", $token)
+}
+
+function Exit-GateLease {
+    # Truncate the body, unlock, close, and restore the inherited token. Only a lease this
+    # run took is released.
+    if ($null -eq $script:LeaseStream) { return }
+    $stream = $script:LeaseStream
+    $script:LeaseStream = $null
+    try {
+        $stream.SetLength(0)
+        $stream.Unlock($LeaseLockOffset, 1)
+    } finally {
+        $stream.Dispose()
+        [Environment]::SetEnvironmentVariable("{{PROJECT_NAME_UPPER}}_GATE_LEASE_TOKEN", $script:LeaseTokenBefore)
+    }
 }
 
 function Invoke-ExactScopeCommit {
-    $required = @{
-        RepositoryPath = $RepositoryPath
-        ScopeManifest = $ScopeManifest
-        ExpectedBase = $ExpectedBase
-        ExpectedTree = $ExpectedTree
-        ContentDescriptor = $ContentDescriptor
-        MessageFile = $MessageFile
-        OutputState = $OutputState
+    # tools/commit_batch.py is the authority: this script passes it the granted op and the exact
+    # parameters, one phase at a time, under the tree's gate lease, and prints its JSON
+    # (R§4.5, EA-8 (j), EA-10). agent-commit.sh's exact_scope_commit is the same contract.
+    $allPhases = @("candidate", "publish", "index")
+    if ($Phase -and $allPhases -notcontains $Phase) {
+        Write-ExactResult ([ordered]@{ result = "usage"; reason = "phase"; phase = $Phase })
+        exit 2
     }
-    foreach ($entry in $required.GetEnumerator()) {
-        if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
-            throw "Exact-scope mode requires -$($entry.Key)"
-        }
-    }
+    $phases = if ($Phase) { @($Phase) } else { $allPhases }
     if (-not $NoPush) {
-        throw "Exact-scope mode requires -NoPush; pushing is a separate approved checkpoint"
+        [Console]::Error.WriteLine("ERROR: exact-scope mode requires -NoPush; pushing is a separate approved checkpoint.")
+        Write-ExactResult ([ordered]@{ result = "refused"; reason = "push"; phase = $phases[0] })
+        exit 1
+    }
+    if ([string]::IsNullOrWhiteSpace((Get-ProjectEnv "COMMIT_GRANT"))) {
+        Write-ExactResult ([ordered]@{ result = "refused"; reason = "grant"; phase = $phases[0] })
+        exit 1
     }
 
-    $repo = (Resolve-Path -LiteralPath $RepositoryPath).Path
-    $manifestPath = (Resolve-Path -LiteralPath $ScopeManifest).Path
-    $descriptorPath = (Resolve-Path -LiteralPath $ContentDescriptor).Path
-    $messagePath = (Resolve-Path -LiteralPath $MessageFile).Path
-    $currentBase = Invoke-RtkGitExact -Repo $repo -Arguments @("rev-parse", "HEAD")
-    if ($currentBase -ne $ExpectedBase) {
-        throw "Exact-scope base drift: expected $ExpectedBase, got $currentBase"
+    $pythonOverride = Get-ProjectEnv "PYTHON"
+    $python = @(if ($pythonOverride) { $pythonOverride } else { "uv", "run", "python" })
+    $exact = @()
+    foreach ($pair in @(
+            @("--expect-base", $ExpectedBase),
+            @("--expect-tree", $ExpectedTree),
+            @("--scope-manifest", $ScopeManifest),
+            @("--message-file", $MessageFile),
+            @("--descriptor", $ContentDescriptor))) {
+        if (-not [string]::IsNullOrWhiteSpace($pair[1])) { $exact += @($pair[0], $pair[1]) }
     }
 
-    $scope = @()
-    $seen = @{}
-    foreach ($raw in Get-Content -LiteralPath $manifestPath) {
-        $path = $raw.Trim()
-        if (-not $path -or $path.StartsWith("#")) { continue }
-        if ([IO.Path]::IsPathRooted($path) -or $path.Contains("\") -or $path -match '(^|/)\.\.(/|$)') {
-            throw "Unsafe exact-scope manifest path: $path"
-        }
-        $folded = $path.ToLowerInvariant()
-        if ($seen.ContainsKey($folded)) {
-            throw "Duplicate exact-scope manifest path: $path"
-        }
-        $seen[$folded] = $true
-        $fullPath = Join-Path $repo $path
-        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-            throw "Exact-scope file is missing: $path"
-        }
-        $scope += $path
-    }
-    if ($scope.Count -eq 0) {
-        throw "Exact-scope manifest is empty"
-    }
-
-    $descriptor = Get-Content -LiteralPath $descriptorPath -Raw | ConvertFrom-Json
-    foreach ($property in @("parent", "tree", "message_sha256", "author_name", "author_email", "signing_fingerprint")) {
-        if ($null -eq $descriptor.$property -or [string]::IsNullOrWhiteSpace([string]$descriptor.$property)) {
-            throw "Content descriptor is missing $property"
-        }
-    }
-    if ($descriptor.parent -ne $ExpectedBase -or $descriptor.tree -ne $ExpectedTree) {
-        throw "Content descriptor parent/tree does not match approved values"
-    }
-    $messageHash = (Get-FileHash -LiteralPath $messagePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($descriptor.message_sha256 -ne $messageHash) {
-        throw "Message file hash does not match content descriptor"
-    }
-
-    $signingEnabled = Invoke-RtkGitExact -Repo $repo -Arguments @("config", "--get", "commit.gpgsign")
-    $signingFormat = Invoke-RtkGitExact -Repo $repo -Arguments @("config", "--get", "gpg.format")
-    $signingKey = Invoke-RtkGitExact -Repo $repo -Arguments @("config", "--get", "user.signingkey")
-    if ($signingEnabled -ne "true" -or $signingFormat -ne "ssh" -or -not (Test-Path -LiteralPath $signingKey)) {
-        throw "Exact-scope mode requires a usable local SSH commit-signing configuration"
-    }
-    $publicKey = if (Test-Path -LiteralPath "$signingKey.pub") { "$signingKey.pub" } else { $signingKey }
-    $fingerprintOutput = @(& rtk proxy ssh-keygen -lf $publicKey -E sha256)
-    $fingerprintCode = $LASTEXITCODE
-    if ($fingerprintCode -ne 0) {
-        throw "Unable to derive SSH signing fingerprint"
-    }
-    $fingerprint = ([string]($fingerprintOutput | Select-Object -First 1) -split '\s+' | Where-Object { $_ -like 'SHA256:*' } | Select-Object -First 1)
-    if ($fingerprint -ne $descriptor.signing_fingerprint) {
-        throw "SSH signing fingerprint does not match content descriptor"
-    }
-    $gitDirectoryValue = Invoke-RtkGitExact -Repo $repo -Arguments @("rev-parse", "--git-dir")
-    $gitDirectory = if ([IO.Path]::IsPathRooted($gitDirectoryValue)) {
-        $gitDirectoryValue
-    }
-    else {
-        Join-Path $repo $gitDirectoryValue
-    }
-    $allowedSigners = Join-Path $gitDirectory "{{PROJECT_NAME}}-allowed-signers"
-    $publicKeyText = (Get-Content -LiteralPath $publicKey -Raw).Trim()
-    Set-Content -LiteralPath $allowedSigners -Value "$($descriptor.author_email) $publicKeyText" -Encoding utf8
-    $null = Invoke-RtkGitExact -Repo $repo -Arguments @("config", "gpg.ssh.allowedSignersFile", $allowedSigners)
-
-    $temporaryIndex = Join-Path ([IO.Path]::GetTempPath()) ("{{PROJECT_NAME}}-exact-index-" + [guid]::NewGuid().ToString("N"))
-    $previousIndex = $env:GIT_INDEX_FILE
+    $PSNativeCommandUseErrorActionPreference = $false
+    Enter-GateLease $phases[0]
+    $last = $null
+    $failed = 0
     try {
-        $env:GIT_INDEX_FILE = $temporaryIndex
-        $null = Invoke-RtkGitExact -Repo $repo -Arguments @("read-tree", $ExpectedBase)
-        $null = Invoke-RtkGitExact -Repo $repo -Arguments (@("add", "--") + $scope)
-        $tree = Invoke-RtkGitExact -Repo $repo -Arguments @("write-tree")
-        if ($tree -ne $ExpectedTree) {
-            throw "Exact-scope tree drift: expected $ExpectedTree, got $tree"
-        }
-
-        $previousAuthorName = $env:GIT_AUTHOR_NAME
-        $previousAuthorEmail = $env:GIT_AUTHOR_EMAIL
-        $previousCommitterName = $env:GIT_COMMITTER_NAME
-        $previousCommitterEmail = $env:GIT_COMMITTER_EMAIL
-        $previousAuthorDate = $env:GIT_AUTHOR_DATE
-        $previousCommitterDate = $env:GIT_COMMITTER_DATE
-        try {
-            $env:GIT_AUTHOR_NAME = [string]$descriptor.author_name
-            $env:GIT_AUTHOR_EMAIL = [string]$descriptor.author_email
-            $env:GIT_COMMITTER_NAME = [string]$descriptor.author_name
-            $env:GIT_COMMITTER_EMAIL = [string]$descriptor.author_email
-            if ($null -ne $descriptor.timestamp -and -not [string]::IsNullOrWhiteSpace([string]$descriptor.timestamp)) {
-                $env:GIT_AUTHOR_DATE = [string]$descriptor.timestamp
-                $env:GIT_COMMITTER_DATE = [string]$descriptor.timestamp
+        foreach ($step in $phases) {
+            $childArgs = @($python | Select-Object -Skip 1) + @("-m", "tools.commit_batch", "--repo", $RepositoryPath, "--step", $step) + $exact
+            $lines = @(& $python[0] @childArgs)
+            $code = $LASTEXITCODE
+            $last = $null
+            foreach ($line in $lines) {
+                Write-Output ([string]$line)
+                if (([string]$line).TrimStart().StartsWith("{")) {
+                    try { $last = ([string]$line) | ConvertFrom-Json } catch { $last = $null }
+                }
             }
-            $null = Invoke-RtkGitExact -Repo $repo -Arguments @("commit", "-S", "-F", $messagePath)
+            if ($code -ne 0) { $failed = $code; break }
         }
-        finally {
-            $env:GIT_AUTHOR_NAME = $previousAuthorName
-            $env:GIT_AUTHOR_EMAIL = $previousAuthorEmail
-            $env:GIT_COMMITTER_NAME = $previousCommitterName
-            $env:GIT_COMMITTER_EMAIL = $previousCommitterEmail
-            $env:GIT_AUTHOR_DATE = $previousAuthorDate
-            $env:GIT_COMMITTER_DATE = $previousCommitterDate
-        }
-        $actualSha = Invoke-RtkGitExact -Repo $repo -Arguments @("rev-parse", "HEAD")
-        $actualParent = Invoke-RtkGitExact -Repo $repo -Arguments @("rev-parse", "HEAD^")
-        $actualTree = Invoke-RtkGitExact -Repo $repo -Arguments @("show", "-s", "--format=%T", "HEAD")
-        if ($actualParent -ne $ExpectedBase -or $actualTree -ne $ExpectedTree) {
-            throw "Signed commit parent/tree does not match approved content"
-        }
-        $null = Invoke-RtkGitExact -Repo $repo -Arguments @("verify-commit", $actualSha)
+    } finally {
+        Exit-GateLease
     }
-    finally {
-        if ($null -eq $previousIndex) { Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue }
-        else { $env:GIT_INDEX_FILE = $previousIndex }
-        if (Test-Path -LiteralPath $temporaryIndex) {
-            Remove-Item -LiteralPath $temporaryIndex -Force
-        }
-    }
+    if ($failed -ne 0) { exit $failed }
 
-    # Bring only the committed scope entries in the caller's index to the new HEAD.
-    # Any unrelated staged entries remain byte-for-byte staged.
-    $null = Invoke-RtkGitExact -Repo $repo -Arguments (@("reset", "--quiet", "HEAD", "--") + $scope)
-
-    $state = [ordered]@{
-        schema_version = 1
-        actual_sha = $actualSha
-        parent = $actualParent
-        tree = $actualTree
-        signature_verified = $true
-        content_descriptor_sha256 = (Get-FileHash -LiteralPath $descriptorPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        scope = $scope
+    if ($OutputState -and $null -ne $last -and $last.commit) {
+        $state = [ordered]@{
+            schema_version = 1
+            actual_sha = [string]$last.commit
+            parent = [string]$last.parent
+            tree = [string]$last.tree
+            signature_verified = $true
+            content_descriptor_sha256 = if ($ContentDescriptor) { (Get-FileHash -LiteralPath $ContentDescriptor -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
+            scope = @($last.paths)
+        }
+        $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $OutputState -Encoding utf8
     }
-    $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $OutputState -Encoding utf8
-    Write-Host "Exact-scope signed commit verified: $actualSha"
 }
 
-if ($RepositoryPath -or $ScopeManifest -or $ExpectedBase -or $ExpectedTree -or $ContentDescriptor -or $MessageFile -or $OutputState) {
+if ($RepositoryPath -or $Phase -or $ScopeManifest -or $ExpectedBase -or $ExpectedTree -or $ContentDescriptor -or $MessageFile -or $OutputState) {
     Invoke-ExactScopeCommit
     exit 0
 }

@@ -1,0 +1,427 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://{{PROJECT_NAME}}.local/run-parameters/op.v1.schema.json",
+  "title": "ops/<plan>/<run_id>/: commit journal (R\u00a74.5 step 7) and transition records (R\u00a74.4)",
+  "x-example-root": [
+    "run-parameters-op"
+  ],
+  "x-schema-id": "run-parameters-op/1",
+  "type": "object",
+  "properties": {
+    "run-parameters-op": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "journal": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/journal_entry"
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/transition"
+          }
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "minProperties": 1
+    }
+  },
+  "required": [
+    "run-parameters-op"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}-[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "P-3 plan slug"
+    },
+    "grouping": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        }
+      ],
+      "description": "P-3g grouping slug or the sentinel none"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "P-2 RFC 3339 UTC, seconds, literal Z"
+    },
+    "expires": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      ],
+      "description": "P-2 none or YYYY-MM-DD (23:59:59 UTC of that day)"
+    },
+    "project": {
+      "type": "string",
+      "pattern": "^([A-Z]:(/[^/\\\\]+)+|(/[^/\\\\]+)+)$",
+      "description": "P-1 canonical display path"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^(?!none$)(?!/)(?!.*//)(?!.*\\.\\.)[A-Za-z0-9._/-]+(?<!/)(?<!\\.lock)$",
+      "description": "P-4 refs/heads/<branch> name"
+    },
+    "grants": {
+      "enum": [
+        [
+          "exec_commit"
+        ],
+        [
+          "exec_start"
+        ],
+        [
+          "finalize"
+        ],
+        [
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start"
+        ],
+        [
+          "exec_commit",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ]
+      ],
+      "description": "P-5 non-empty subset of the four acts, byte-sorted; never push; ruling is not a grant"
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      ]
+    },
+    "decisions": {
+      "enum": [
+        "hdp",
+        "human-all"
+      ]
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "anyOf": [
+            {
+              "const": "none"
+            },
+            {
+              "$ref": "#/$defs/slug"
+            }
+          ]
+        },
+        "grouping": {
+          "$ref": "#/$defs/grouping"
+        },
+        "branch": {
+          "$ref": "#/$defs/branch"
+        }
+      },
+      "required": [
+        "plan",
+        "grouping",
+        "branch"
+      ],
+      "additionalProperties": false
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/slug"
+      },
+      "uniqueItems": true,
+      "description": "byte-sorted; checked by the verifier (sort order is not expressible here)"
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plan": {
+          "$ref": "#/$defs/slug"
+        },
+        "act": {
+          "enum": [
+            "exec_commit",
+            "exec_start",
+            "finalize",
+            "plan_commit",
+            "human_directed"
+          ]
+        },
+        "packet_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "op",
+        "run_id",
+        "plan",
+        "act",
+        "packet_digest"
+      ],
+      "additionalProperties": false
+    },
+    "journal_entry": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "enum": [
+            "prepared",
+            "blobs_stored",
+            "candidate_built",
+            "candidate_verified",
+            "published",
+            "index_reconciled",
+            "cleanup_done",
+            "reconciled"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "pattern": "^(started|done|failed:[a-z_:/.\\-A-Za-z0-9]+)$"
+        },
+        "evidence": {
+          "type": "object"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "$ref": "#/$defs/date"
+        }
+      },
+      "required": [
+        "phase",
+        "status",
+        "evidence",
+        "seq",
+        "ts"
+      ],
+      "additionalProperties": false
+    },
+    "transition": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "from": {
+          "enum": [
+            "plan:active",
+            "plan:approved",
+            "plan:pc_done",
+            "transition:prepared",
+            "transition:admitted",
+            "exec:active",
+            "exec:finalizing",
+            "DONE",
+            "PARKED:approved",
+            "STOPPED:decision",
+            "STOPPED:budget",
+            "STOPPED:round_cap",
+            "STOPPED:reviewer_unavailable",
+            "STOPPED:human_stop",
+            "STOPPED:no_record",
+            "STOPPED:ambiguous"
+          ]
+        },
+        "from_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event": {
+          "enum": [
+            "E1",
+            "E2",
+            "E3",
+            "E4",
+            "E5",
+            "E6",
+            "E7",
+            "E8",
+            "E9",
+            "E10",
+            "E11",
+            "E12",
+            "E13",
+            "E14",
+            "E15",
+            "E16",
+            "E17",
+            "E18",
+            "\u03c41",
+            "\u03c42",
+            "\u03c43",
+            "\u03c44"
+          ]
+        },
+        "payload": {
+          "type": "object"
+        },
+        "guard_result": {
+          "type": "string",
+          "pattern": "^(passed|ignored|guard_failed:[a-z_]+|payload_invalid)$"
+        },
+        "to": {
+          "enum": [
+            "plan:active",
+            "plan:approved",
+            "plan:pc_done",
+            "transition:prepared",
+            "transition:admitted",
+            "exec:active",
+            "exec:finalizing",
+            "DONE",
+            "PARKED:approved",
+            "STOPPED:decision",
+            "STOPPED:budget",
+            "STOPPED:round_cap",
+            "STOPPED:reviewer_unavailable",
+            "STOPPED:human_stop",
+            "STOPPED:no_record",
+            "STOPPED:ambiguous"
+          ]
+        },
+        "op_id": {
+          "anyOf": [
+            {
+              "const": "none"
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ]
+        },
+        "ts": {
+          "$ref": "#/$defs/date"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "suspended": {
+          "enum": [
+            "plan:active",
+            "plan:approved",
+            "plan:pc_done",
+            "transition:prepared",
+            "transition:admitted",
+            "exec:active",
+            "exec:finalizing"
+          ]
+        },
+        "pending_op": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parked_by": {
+          "enum": [
+            "exec_after_plan",
+            "authority",
+            "base",
+            "admission"
+          ]
+        }
+      },
+      "required": [
+        "seq",
+        "from",
+        "from_seq",
+        "event",
+        "payload",
+        "guard_result",
+        "to",
+        "op_id",
+        "ts",
+        "by"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

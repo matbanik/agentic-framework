@@ -33,6 +33,9 @@
 | **Known-issues → triage → MEU** | Bug/debt register → `/issue-triage` → MEU batches | Matter issues → elements buckets → work units | Safety events / gaps → care elements | Failed checks / confounds → study components | Control failures → remediation items |
 | **Reflection design rules** | Next-session RULE-N into `/create-plan` | Lessons into next memo checklist | M&M learning into next protocol | Lab notebook rules into next pre-registration | Post-mortem controls into next workpaper |
 | **Irreversible action** (human gate) | Commit, push, deploy, delete data | **Filing, sending client advice, executing a document** | **Any patient-facing recommendation or order** | **Submission, publication, releasing data** | **Executing a transaction, filing a report** |
+| **Commit** (`commit_plan`, `commit_exec`) | A signed commit of the approved scope | Save a dated version to the matter file | Save a dated version to the case record (not the chart) | A dated entry in the lab notebook or data repository | A dated version in the workpaper file |
+| **Push** (M-1: always human) | Push, merge, tag, release | Send to the client, opposing counsel or court | Enter in the chart; send to the patient | Submit, publish, release the data | Submit the filing; release the report |
+| **User-visible product fork** (M-5) | Palette, a surface split, a feature on or off | Tone or form of client-facing work product | Patient-facing wording or format | Figure style or presentation of results | Report layout or disclosure format |
 | **Handoff** | Evidence bundle + changed files | Memo with authority table + open questions | Documented reasoning + evidence grade + uncertainties | Method + results + limitations | Workpaper with tie-outs |
 
 ---

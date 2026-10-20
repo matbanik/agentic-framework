@@ -93,6 +93,7 @@ class EvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp) / "handoff.md"
             file.write_text("## Acceptance Criteria\n\n| AC | Status |\n|---|---|\n| AC-1 | done |\n\n"
+                            "## Decision Log\n\nNone.\n\n"
                             "## Evidence\nSee /tmp/acme/receipt.txt\n", encoding="utf-8")
             command = [sys.executable, str(TOOLS / "validate_closeout_artifacts.py"),
                        "--handoff", str(file), "--handoff-structure-only"]

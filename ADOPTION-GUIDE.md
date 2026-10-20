@@ -18,7 +18,7 @@ Read, in order: this file → `ADOPTION-QUESTIONS.md` → `DOMAIN-MAPPING.md` �
 
 ## Step 1 — Interview the human. Do not skip this. Do not guess.
 
-Work through **`ADOPTION-QUESTIONS.md`**, Blocks A–F. Ask the human directly. Where an answer
+Work through **`ADOPTION-QUESTIONS.md`**, Blocks A–G. Ask the human directly. Where an answer
 is unavailable, take the **fail-safe default** (never a permissive one).
 
 Then write **`PROJECT-PROFILE.md`** at the adopting project's root, recording every answer.
@@ -293,6 +293,10 @@ workflows already call it, so there is nothing to install. It never loosens a ha
 3. **Keep the Decision Log sections** when you adapt the plan, handoff, and reflection templates
    in Step 5. The precedent sweep reads them in later sessions, and the closeout validator
    rejects a handoff without `## Decision Log`. §6 lists where each stage records its decisions.
+5. **Name the mandatory-human list.** §4a lists M-1..M-14: the decisions that always reach
+   the human, in `decisions: hdp` mode too. Add a row for each act from E1/E5 that the list
+   does not cover (PROFILE G10). Under `decisions: human-all` every decision reaches the
+   human. The four Block G answers are the plan defaults of `create-plan.md` Step 0.
 4. **Know that a new project starts with no precedents.** An empty sweep is a normal result;
    expect more briefs in the first sessions and fewer as the logs fill.
 
@@ -349,7 +353,9 @@ Windows Task Scheduler. The skill is `.agent/skills/claude-credits/SKILL.md`; th
 §Scheduled headless run in `create-plan.md` and `execution-session.md`. Scheduled runs are
 Windows-only: on another OS, `scripts/instantiate.py` prints `REFUSED: scheduled credits runs are
 Windows-only`, removes the Windows-only files and writes no inbox hook entry. The rest of the
-install continues.
+install continues. Run parameters (PROFILE §G) list five of those files as activation
+components, so on another OS they stay `disabled` (the manual workflow), and the installer
+also removes their tests and fixtures.
 
 What the install does:
 
@@ -451,13 +457,16 @@ ignored — bloat is itself a failure mode, and there is evidence that overlong 
 
 Do not declare adoption complete until all of these are true:
 
-- [ ] `PROJECT-PROFILE.md` exists and answers Blocks A–F.
+- [ ] `PROJECT-PROFILE.md` exists and answers Blocks A–G.
 - [ ] A harness profile row matches the actual driver; unknown/unmatched ⇒ fail-safe defaults.
 - [ ] `fresh_worker` matches a proven assistant-addressable route (or is explicitly `none`).
 - [ ] If subagents are enabled: agent-def filenames match `name:` frontmatter; verification-log has a real smoke receipt (not directory presence alone).
 - [ ] The reviewer chain is configured **or** external dispatch is disabled with a human reviewer named.
 - [ ] Every irreversible action (E1) has an explicit human gate.
 - [ ] `web_search_tool` is recorded (a ladder rung or `none` with a reason), and the plan, handoff, and reflection templates still carry their Decision Log sections.
+- [ ] `python tools/validate_agent_files.py --policy run-parameters` passes, and
+      `python tools/run_parameters.py status` reports `disabled` until the policy holds real
+      digests and activation evidence (PROFILE G).
 - [ ] Domain guardrails (E3/E5) are written as SIGNs.
 - [ ] The validation checks (D6) are real, runnable, and named in the quality gate.
 - [ ] If D9=yes: `issue_triage.py stats` and `meu_status.py stats` succeed; `VALID_COMPONENTS` matches D8.

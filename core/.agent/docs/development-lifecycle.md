@@ -462,16 +462,16 @@ Before declaring complete, the agent must verify:
 
 **Purpose:** Summarize the session and commit completed work to version control. Human retains full control over commit scope and push timing.
 
-**Human involvement:** 🔴 **Human decides everything** — commit scope, message, push timing.
+**Human involvement:** 🔴 **Human decides everything** — commit scope, message, push timing. A verified `run_parameters` `exec_commit` grant is that decision made in advance, for the `COMMIT` row only; push timing stays the human's.
 
 ### Process
 
 1. **Agent runs session digest** → `.agent/skills/session-digest/` assembles decisions, blockers, and progress from handoffs + decision log + validation rounds into `session_digest.jsonl`
 2. **Agent runs execution TL;DR** → `.agent/skills/execution-tldr/` generates a 2-minute human summary at `.agent/context/EXECUTION_TLDR.md` (`checklist_validator` class, medium effort)
-3. **Agent proposes** commit messages (grouped by logical change), includes TL;DR summary in the commit body, and omits AI attribution trailers or generated-by statements such as `Co-Authored-By: Claude`
+3. **Agent proposes** commit messages (grouped by logical change), includes TL;DR summary in the commit body, and omits AI attribution trailers or generated-by statements such as `Co-Authored-By: Claude`; under a verified `exec_commit` grant the `COMMIT` row commits them (`TASK-TEMPLATE.md` v2.4)
 4. **🧑 Human reviews** TL;DR and commit messages
 5. **🧑 Human decides** commit scope (split, squash, or as-proposed)
-6. **Agent executes** `git commit` per [git-workflow/SKILL.md](https://{{REPO_URL}}/blob/main/.agent/skills/git-workflow/SKILL.md)
+6. **Agent executes** the commit only through the `COMMIT` row (`AGENTS.md` §Authority and Approval), per [git-workflow/SKILL.md](https://{{REPO_URL}}/blob/main/.agent/skills/git-workflow/SKILL.md)
 7. **🧑 Human decides** when to push (never auto-pushed)
 
 > [!NOTE]
@@ -482,10 +482,10 @@ Before declaring complete, the agent must verify:
 
 | Rule | Source |
 |------|--------|
-| Never auto-commit | AGENTS.md §Execution Contract |
+| Never auto-commit | AGENTS.md §Authority and Approval; the `COMMIT` row |
 | Never auto-push | Human decision only |
 | SSH commit signing | git-workflow/SKILL.md |
-| Proposed messages only | Agent suggests, human approves |
+| Proposed messages only, unless a verified `exec_commit` grant | Agent suggests, human approves (in advance through the grant) |
 
 ### 🔄 Adaptability Notes
 

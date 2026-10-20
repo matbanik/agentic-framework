@@ -11,7 +11,7 @@ Use this workflow to start a new build session. Instead of reading a pre-written
 
 // turbo-all
 // NOTE: turbo-all sets SafeToAutoRun=true for non-destructive commands (rg, Get-Content, etc.).
-// It does NOT override AGENTS.md §Authority and Approval: "Never auto-commit." Git commit/push still requires explicit user direction.
+// It does NOT override AGENTS.md §Authority and Approval: a commit runs only on explicit user direction or as the `PC`, `COMMIT` or H2-6 row under a verified `run_parameters` grant; a push always needs explicit user direction.
 
 ## Prerequisites
 
@@ -44,6 +44,43 @@ wait for a direct `USER_EXPLICIT` `use` or `accepted_loss` choice before plannin
 starts. Persist the decision block in both plan artifacts generated in Step 4.
 
 ## Steps
+
+### 0. Resolve run parameters
+
+Resolve the `run_parameters` block before any plan file exists. The human sets the values in
+the chat message that invokes `/create-plan` (or the grouping's `/session-grouping`); an absent
+value takes its default: `decisions: hdp`, `commit_plan: true`, `exec_after_plan: true`,
+`commit_exec: true`. `push: never` is printed in the block but is not a parameter. Fix the
+plan slug first; the block names it. Take the first path that applies:
+
+1. **Standing grant.** The grouping's `Run parameters:` line for this session carries a
+   verified standing grant whose `members` list this plan: no pause. Record the standing
+   reference; the values are the ones the grant presented, and nothing is re-offered.
+2. **Self-contained invocation.** The invocation message holds the offer block
+   (`run-parameters-offer/1`) after nothing but the invocation line: no pause; that message is
+   the reference.
+3. **Manual.** The invocation names `run_parameters: manual`, or the human answers an offer
+   with `manual`: no pause and no grant. Write the block with the three booleans `false`,
+   `decisions` as invoked and `authorization: {schema: manual}`. Step 0 ends here: no
+   `inspect`, no `init`, no store write and no binding; today's rules apply (§5c ends the turn,
+   and every commit is a human-directed step).
+4. **Offer.** Otherwise write the offer block into the reply, name its acceptance word
+   (`proceed`), and end the turn with no plan file written. The human's next message decides
+   by its complete whitespace-normalized text: the acceptance word → the reference; `manual` →
+   path 3; `stop` or `cancel` → nothing is written and the turn ends; any other message is a
+   new instruction. If that instruction changes an offered value, present a new offer with the
+   changed values and end the turn; if it does not, answer it and present the same offer once
+   more. A human who never accepts has not authorized anything.
+
+On paths 1, 2 and an accepted path 4, record the session id, the message uuid and the
+presentation uuid from the transcript, never from memory. Then run
+`tools/run_parameters.py inspect` (read-only, no act), `init` when the store was never created,
+and `bind --pending <slug>`. Step 4 copies the block into the frontmatter of both plan files and
+promotes the binding with `bind --plan` the moment `task.md` exists. A lower carrier (grouping,
+then plan, then `task.md`) may only tighten a value (`true` to `false`, `hdp` to `human-all`).
+The offer pause happens before any plan file exists, so it is not the `GUARDRAILS.md` SIGN 1
+pause. The `decisions` value selects the mode of `human-decision-protocol.md` §4a for every
+question of the plan.
 
 ### 1. Discover What's Completed
 
@@ -417,6 +454,13 @@ When the reviewer returns `approved`:
      for the user's next explicit chat message (e.g. "proceed", "execute") before
      starting Step 6. This is a genuine human-decision gate, not a round-cap or
      rate-limit pause — do not auto-retry or re-dispatch the reviewer while waiting.
+     **Advance grant.** When `task.md` carries `run_parameters` with
+     `exec_after_plan: true` and an `exec_start` grant that `tools/run_parameters.py verify`
+     resolves to the user's typed transcript record, that message is the "proceed", given in
+     advance (`GUARDRAILS.md` SIGN 3 (a)): present the verdict, then continue to §5d in the
+     same turn. Under `exec_after_plan: false`, or when the verification refuses, §5d runs
+     `PC` and then ends the turn at this gate. A plan with no `run_parameters` block, or a
+     `manual` one, keeps this gate unchanged.
    - **`plan_to_exec_gate == reviewer-auto`** (only the legacy Antigravity *driver* profile, dormant — the host does not set this flag):
      Auto-continue to Step 6 below. No human confirmation required.
 
@@ -424,7 +468,33 @@ When the reviewer returns `approved`:
    inherits the safe `human` default. See `GUARDRAILS.md` SIGN 1 and `AGENTS.md`
    §Authority and Approval for the canonical statement of this carve-out.
 
-#### 5d. Round Cap — HARD STOP
+#### 5d. Commit the approved plan (PC)
+
+Runs once, after the final §5 `approved` (never per round), before any execution admission,
+and also under `exec_after_plan: false`. A plan whose `task.md` has no `PC` row skips this
+step.
+
+1. **`commit_plan: true`:** write the `PC` manifest, which lists each path with the blob the
+   commit carries: the plan folder (`implementation-plan.md`, `task.md`, `artifacts/`), the
+   plan-critical-review handoff, and the grouping tracker row flip. Reserve `plan_commit`
+   (`tools/run_parameters.py reserve`), then run `tools/commit_batch.py` in exact-scope mode
+   under `{{PROJECT_NAME_UPPER}}_COMMIT_GRANT=<op id>`: one `docs(plan): …` commit on the current branch,
+   staged from the manifest blobs, never from the working tree, so another lane's hunks in a
+   shared file stay in the tree. Pre-commit hooks run; fix a failure, never bypass it. Mark
+   `PC` `[x]` when its op is `reconciled`. A failed `PC` blocks the first implementation row.
+2. **`commit_plan: false`:** mark `PC` `[x] n/a`.
+3. **`exec_after_plan: true` with a verified `exec_start` grant:** reserve `exec_start`, set
+   `status: "in_progress"` in both plan files, write the tracker note
+   `plan APPROVED R<n>; PC <commit or n/a>; executing per <authorization>`, then continue to
+   §5g and Step 6 (or return to `execution-session.md` Step 4) in the same turn.
+4. **Otherwise:** present the verdict and end the turn at the §5c human gate. Execution starts
+   on the user's next explicit chat message (`/execution-session` or "proceed"), which
+   reserves `exec_start` at that moment.
+
+The plan-review round cap (§5e) stays a HARD STOP; no parameter covers it. A grant never
+covers a push, merge, tag, release or deploy (`AGENTS.md` §Authority and Approval).
+
+#### 5e. Round Cap — HARD STOP
 
 > [!CAUTION]
 > **Plan review round cap: 3 rounds.** If the review loop reaches 3 rounds
@@ -482,7 +552,7 @@ At the round cap:
    - **(a) "continue review loop"** → continue the dispatch/correction loop (round 4+) until `approved`.
    - **(b) direct execution with guarded rows** → this is a `USER_EXPLICIT` authorization to
      enter execution (GUARDRAILS SIGN 3 (a)). First amend `task.md` so every open risk has its
-     guarded row with a real validation command, then proceed to Step 5f and Step 6. Do **not**
+     guarded row with a real validation command, then proceed to Step 5g and Step 6. Do **not**
      enter execution until those rows exist — the guard is the whole basis of the choice.
    - **(c) answer the human-decision items** → fold the answers into the plan as `Human-approved`
      acceptance criteria, then resume the loop at (a).
@@ -490,7 +560,7 @@ At the round cap:
    Any other reply is a new instruction — read it on its own terms rather than forcing it into
    one of these four.
 
-#### 5e. Edge Cases
+#### 5f. Edge Cases
 
 **Missing / unparseable / ambiguous reviewer verdict:**
 - If review file is absent after dispatch completes → re-read once after 5s
@@ -519,7 +589,7 @@ At the round cap:
 >
 > Invalid pauses: "presenting progress", "checking in", "offering to continue"
 
-#### 5f. Context Tool Re-evaluation Before Standalone Execution
+#### 5g. Context Tool Re-evaluation Before Standalone Execution
 
 Immediately before standalone `/create-plan` enters Step 6, re-run
 `.agent/docs/context-tool-decision-gate.md` for the resolved execution scope. Reuse the
@@ -574,7 +644,7 @@ After all MEU TDD cycles and handoffs are complete, **continue immediately** wit
 6. **Auto-dispatch `/execution-critical-review`** and loop corrections until APPROVED (see §6a below). This is NOT optional and is NOT a human gate — a standalone `/create-plan` run owns its own execution review (it does *not* hand off to `/execution-session`). The review now sees the final state (items 1–5). Do not write the reflection/metrics or report completion until the implementation review returns `approved` (or hits the round cap). If the correction loop changes code/tests, re-run the MEU gate (and re-touch items 2–5 if affected) before re-dispatching.
 7. Create reflection file at `docs/execution/reflections/` (see `execution-session.md` §5) — it must record the execution-review rounds/verdict from item 6 and, in its `### Decisions Log`, every decision the session resolved autonomously under `human-decision-protocol.md` §4 with its reasoning, plus every human-gated one with its `human_message_reference`.
 8. Update metrics table in `docs/execution/metrics.md`
-10. Prepare proposed commit messages with no AI attribution trailers or generated-by statements
+10. Commit through the `COMMIT` and H2-6 rows (`TASK-TEMPLATE.md` v2.4): under `commit_exec: true` with a verified `exec_commit` grant, `COMMIT` runs `tools/commit_batch.py` from the H2-5 manifest; otherwise H2-5's proposed commit messages go to the human. Either way, no AI attribution trailers or generated-by statements
 
 **Do NOT return control to the user until all 10 items above are done.**
 
@@ -589,7 +659,7 @@ Follow `.agent/skills/cli-dispatch/SKILL.md` to dispatch `/execution-critical-re
 2. Write the verdict to the canonical `.agent/context/handoffs/{plan-folder-name}-implementation-critical-review.md` (rolling file).
 3. **If `changes_required`:** apply code/test corrections via `/execution-corrections`, re-run the MEU gate, re-dispatch. **If `approved`:** continue to the remaining deliverables.
 4. **Round cap: 6 rounds** → HARD STOP with a TL;DR in the Decision-Brief form of the §5 round-cap block (recommendation first, alternatives compared against it); resume on the user's "continue review loop".
-5. Do NOT auto-commit after approval — present proposed commit messages with no AI attribution trailers or generated-by statements, then wait for explicit human direction.
+5. After approval, commit only through the `COMMIT` and H2-6 rows (item 10): under `commit_exec: false`, or without a verified `exec_commit` grant, present proposed commit messages with no AI attribution trailers or generated-by statements, then wait for explicit human direction.
 
 > The Step 6 execution-review loop is an **atomic non-stop region** (same as the Step 5 plan-review loop): the only valid exits are (1) `approved`, (2) all reviewer rungs rate-limited, (3) reviewer asks a human-decision-required question, (4) round cap reached.
 
@@ -638,9 +708,13 @@ A scheduled run is a headless Claude run on the API key that the credits schedul
 a Windows task (`.agent/skills/claude-credits/SKILL.md` §Schedule). The scheduler is optional and
 Windows-only. Its harness row is the credits scheduler row of `.agent/docs/harness-profiles.md`.
 This section has the rules for the interactive agent that submits the run and for the headless
-coordinator that runs it. A plan run follows this workflow to §5c and stops there: it ends at
-`PARKED:approved` when the §5 loop returns `approved`, and it never starts its own execution.
-§5c keeps the human gate; the exec run needs the human's "proceed" (`GUARDRAILS.md` SIGN 1).
+coordinator that runs it. A plan run follows this workflow through §5d. With
+`exec_after_plan: true` and a verified `exec_start` grant, the plan phase moves into the exec
+phase of the same run after `PC`. Otherwise it ends at `PARKED:approved` when the §5 loop returns
+`approved` and `PC` is done (`parked_by: exec_after_plan` under `false`), and the human's
+"proceed" is the E17 `start_exec` event, the one exit from that park (`GUARDRAILS.md` SIGN 1). A
+plan with no `run_parameters` block, or a `manual` one, parks and never starts its own execution;
+§5c keeps the human gate.
 
 ### Submit a run (interactive agent)
 
@@ -736,9 +810,12 @@ An exec run records what it landed, so the monitor can verify DONE. Keep this or
    only after the product part is in the store. A crash between `land` and the capture leaves the
    worktree; the resumed run captures, then removes. A main-tree run captures at the same row,
    with no `land` and no `remove`.
-3. After H2-5: write `stop_gate: "released:done"`, then run
-   `credits_msg.py landing --part closeout`, then write the final message. The seal is the
-   run's last write to the tree.
+3. After H2-6, which has already written `stop_gate: "released:done"` and `status: complete`:
+   run the final audit (`run_parameters.py final --produce`), then `credits_msg.py landing
+   --part closeout`, then write the final message; the monitor writes the seal
+   (`final --seal`). Nothing after H2-6 edits `task.md`. A task made from `TASK-TEMPLATE.md`
+   v2.3 or older keeps its H2-5a seal row: after H2-5, write `stop_gate: "released:done"`,
+   then run `credits_msg.py landing --part closeout`, then write the final message.
 
 An interactive run (no `CREDITS_RUN_ID`) keeps `land` → `remove` and runs no `credits_msg.py`
 call. A plan run lands nothing; it runs only the start check.
@@ -754,7 +831,8 @@ not lost, and no one resumes it without a human.
   marks the run's successors free to start.
 - `done_unverified`: DONE with evidence missing. No successor starts; the human decides.
 - `parked`: `PARKED:approved` with the approved plan review on disk. The exec run waits for the
-  human's "proceed".
+  human's "proceed"; under `parked_by: exec_after_plan` that word is the E17 `start_exec` event,
+  the one exit from the park.
 - `decision`: `STOPPED:decision`. The notice holds the decision text.
 - `handback`: `STOPPED:handback`, for example after a `stop-after-row`.
 - `round_cap`, `reviewer_unavailable`: the matching `stop_gate` release.
@@ -797,4 +875,4 @@ variants. The project-level implementation critique remains the single rolling f
 - [ ] Reflection file created
 - [ ] Metrics table updated
 - [ ] Session digest: **skip-with-basis** when session-digest tools are unshipped; otherwise create at `.agent/context/sessions/{conversation-id}/digest.md`
-- [ ] Proposed commit messages presented to human with no AI attribution trailers
+- [ ] `COMMIT` and H2-6 done per `commit_exec` (committed under a verified grant, or proposed messages presented to the human); no AI attribution trailers

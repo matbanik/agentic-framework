@@ -117,11 +117,40 @@
 
 ---
 
+## G — Run Parameters  → `create-plan.md` Step 0, `human-decision-protocol.md` §4a
+
+The four plan defaults, and the rules that bind them. A session of the grouping carries them
+on its `Run parameters:` line (`session-grouping.md`); a plan may only tighten them.
+Run parameters activate on Windows only for now: they need the Windows-only credits files, so
+on another OS the tools stay, `status` reports `disabled` and plans keep the manual workflow
+(`ADOPTION-GUIDE.md` §Scheduled credits runs).
+
+| Item | Value |
+|---|---|
+| Decisions (G1) | `hdp` \| `human-all` (**default `hdp`**: the agent runs the decision protocol; the M-list of §4a always reaches the human) |
+| Commit the approved plan before execution (G2) | `true` \| `false` (**default `true`**: the `PC` row) |
+| Start execution right after the approved plan (G3) | `true` \| `false` (**default `true`**) |
+| Commit when execution completes (G4) | `true` \| `false` (**default `true`**: the `COMMIT` row). Push stays `never`; it is M-1. |
+| Who may grant an authorization, and for how long (G5) | *(the E4 human; one plan, or one grouping session)* |
+| Commit scope (G6) | branch, paths *(F4)* |
+| Transcript adapter (G7) | `claude-code` \| `none` (**fail-safe `none`**: every act fails closed and the manual workflow stays). Set `TRANSCRIPT_ADAPTER` in `tools/run_parameters.py`. |
+| Headless runs (G8) | `no` \| `yes`: the acts each may do (the policy's `capabilities`) (**default `no`**) |
+| Resume, fork and revocation (G9) | *(who may resume or fork a stopped run; how a grant is revoked)* |
+| Domain acts that extend the M-list (G10) | *(from E1 and E5; each becomes a §4a row)* |
+
+> The policy `.agent/run-parameters.policy.json` starts as a copy of
+> `.agent/run-parameters.policy.json.template`. The template's digests are placeholders, so
+> `tools/run_parameters.py status` reports `disabled` until you compute the digests from the
+> instantiated tree and record the activation evidence. Links: E1–E5, F4.
+
+---
+
 ## Sign-off
 
 - [ ] All blocks answered, or fail-safe defaults applied and marked.
 - [ ] Every irreversible action (E1) has an explicit human gate.
 - [ ] Reviewer chain configured **or** external dispatch disabled with a human reviewer named.
+- [ ] Run parameters (G) answered, or the four defaults applied and marked.
 - [ ] Domain guardrails (E3/E5) written as SIGNs.
 
 **Confirmed by:** <human> · **Date:** <YYYY-MM-DD>

@@ -63,6 +63,13 @@
       }
     },
     "lane": { "type": "string", "minLength": 1 },
+    "phases": {
+      "type": "array",
+      "description": "The run-parameters phases of the run, in order (report section 4.4). A run with phases is admitted through run_parameters.py inspect and bind --pending, and resumes per its suspended phase state. A run without it is a legacy run.",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["plan", "exec"] }
+    },
     "executor_worktree": { "type": "boolean", "description": "The run works in an executor worktree at the base B that admission binds (report section 5.4)." },
     "carry_allowed": {
       "type": "array",

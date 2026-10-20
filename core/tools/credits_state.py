@@ -62,7 +62,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 EXIT_OK = 0
 EXIT_CHECK_FAILED = 1
@@ -144,6 +144,11 @@ STOP_CLASSES = (
     "base_moved",
     "cancelled",
     "unknown",
+    # R§4.4 Monitor: the terminal names of a run under ``run_parameters``.
+    "budget",
+    "human_stop",
+    "no_record",
+    "ambiguous",
 )
 # The notices that the monitor files with the notice verb (R§7.2 manual proof).
 MONITOR_NOTICE_KINDS = ("manual_child_alive",)
@@ -170,7 +175,29 @@ MANIFEST_KEYS = frozenset(
         "chain",
         "executor_worktree",
         "carry_allowed",
+        "phases",
     }
+)
+# R§4.4 Records: the phases of a run under ``run_parameters``, in this order.
+PHASES = ("plan", "exec")
+# The states of the derived phase view; they mirror ``run_parameters.PHASE_STATES``.
+PHASE_VIEW_STATES: tuple[str, ...] = (
+    "plan:active",
+    "plan:approved",
+    "plan:pc_done",
+    "transition:prepared",
+    "transition:admitted",
+    "exec:active",
+    "exec:finalizing",
+    "DONE",
+    "PARKED:approved",
+    "STOPPED:decision",
+    "STOPPED:budget",
+    "STOPPED:round_cap",
+    "STOPPED:reviewer_unavailable",
+    "STOPPED:human_stop",
+    "STOPPED:no_record",
+    "STOPPED:ambiguous",
 )
 # R§5.4.3: the predicates a ``depends_on`` item can require.
 PREDICATES = ("done_verified", "parked_verified", "landed", "committed")
@@ -568,6 +595,13 @@ SCHEMA_V6: tuple[str, ...] = (
     "ALTER TABLE gates ADD COLUMN resolved_by_msg TEXT",
 )
 
+# Version 7 (run parameters, R§4.4 Records): the derived phase view of a phased run. The
+# authority store's transition record is the truth; these columns follow it.
+SCHEMA_V7: tuple[str, ...] = (
+    "ALTER TABLE runs ADD COLUMN phase_state TEXT",
+    "ALTER TABLE runs ADD COLUMN phase_seq INTEGER",
+)
+
 # The statements that bring a store from version n - 1 to version n.
 SCHEMA_STEPS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
@@ -576,6 +610,7 @@ SCHEMA_STEPS: dict[int, tuple[str, ...]] = {
     4: SCHEMA_V4,
     5: SCHEMA_V5,
     6: SCHEMA_V6,
+    7: SCHEMA_V7,
 }
 
 
@@ -717,6 +752,18 @@ def _arg_class(text: str) -> str:
             f"not a class name ([a-z][a-z0-9_]*): {text!r}"
         )
     return text
+
+
+def _arg_phase_state(text: str) -> str:
+    if text not in PHASE_VIEW_STATES:
+        raise argparse.ArgumentTypeError(f"not a phase state: {text!r}")
+    return text
+
+
+def _arg_seq(text: str) -> int:
+    if not re.fullmatch(r"[0-9]{1,9}", text):
+        raise argparse.ArgumentTypeError(f"not a sequence number: {text!r}")
+    return int(text)
 
 
 def _arg_text(text: str) -> str:
@@ -959,6 +1006,15 @@ def build_parser() -> _Parser:
     p.add_argument("--uuid", required=True, type=_arg_key)
     p = verb("orchestrator_sessions")
     p.add_argument("--run-id", type=_arg_key)
+
+    p = verb("phase_sync")
+    p.add_argument("--run-id", required=True, type=_arg_key)
+    p.add_argument("--state", required=True, type=_arg_phase_state)
+    p.add_argument("--seq", required=True, type=_arg_seq)
+    p = verb("phase_status")
+    p.add_argument("--run-id", required=True, type=_arg_key)
+    p.add_argument("--expect-state", type=_arg_phase_state)
+    p.add_argument("--expect-seq", type=_arg_seq)
     return parser
 
 
@@ -1629,6 +1685,7 @@ class Manifest:
     run_cap_usd: float
     timeout_sec: int
     depends_on: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    phases: tuple[str, ...] = ()
 
 
 def _positive(value: Any, name: str) -> float:
@@ -1709,6 +1766,38 @@ def parse_chain(value: Any) -> tuple[str, float]:
     return chain_id, _positive(value["chain_cap_usd"], "chain.chain_cap_usd")
 
 
+def parse_phases(value: Any) -> tuple[str, ...]:
+    """Validate ``phases`` (R§4.4 Records): a non-empty list of distinct ``PHASES`` in order."""
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(name, str) and name in PHASES for name in value)
+        or len(set(value)) != len(value)
+        or sorted(value, key=PHASES.index) != value
+    ):
+        raise Refusal(
+            "manifest_invalid",
+            f"phases must be a non-empty list of distinct {', '.join(PHASES)}, in that order",
+        )
+    return tuple(str(name) for name in value)
+
+
+def manifest_phases(text: str | None) -> tuple[str, ...]:
+    """The phases of a stored manifest; a legacy or unreadable manifest has none."""
+    if not text:
+        return ()
+    try:
+        loaded = json.loads(text)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(loaded, dict):
+        return ()
+    try:
+        return parse_phases(loaded["phases"]) if "phases" in loaded else ()
+    except Refusal:
+        return ()
+
+
 def load_manifest(path: str, run_id: str) -> Manifest:
     """Read and validate a ``credits-run.v1`` manifest (R§4.1); any defect is refused."""
     try:
@@ -1778,6 +1867,7 @@ def load_manifest(path: str, run_id: str) -> Manifest:
     if carry and not worktree:
         raise Refusal("manifest_invalid", "carry_allowed needs executor_worktree")
     depends = parse_depends_on(data.get("depends_on", []), run_id)
+    phases = parse_phases(data["phases"]) if "phases" in data else ()
     if "chain" in data:
         parse_chain(data["chain"])
     required = {name for _, require in depends for name in require}
@@ -1800,6 +1890,7 @@ def load_manifest(path: str, run_id: str) -> Manifest:
         run_cap_usd=run_cap,
         timeout_sec=timeout,
         depends_on=depends,
+        phases=phases,
     )
 
 
@@ -1933,9 +2024,14 @@ def verb_request(tx: Tx, args: argparse.Namespace) -> Outcome:
                 f"the resume brief is not an absolute path to a file: {args.brief}",
             )
     if args.resume:
-        if state != "stopped":
+        # R§4.4 E15/E16/E17: a phased run leaves PARKED:approved only in a resume segment.
+        parked_phased = state == "parked" and bool(
+            manifest_phases(run["manifest_json"])
+        )
+        if state != "stopped" and not parked_phased:
             raise Refusal(
-                "invalid_transition", f"a resume needs a stopped run; run is {state}"
+                "invalid_transition",
+                f"a resume needs a stopped run (or a parked phased run); run is {state}",
             )
         if args.started_by == "monitor-chain":
             raise Refusal("resume_needs_human", "a chain never covers a resume (D-2)")
@@ -3150,6 +3246,72 @@ def verb_run_status(tx: Tx, run_id: str) -> Outcome:
     )
 
 
+def _phased_run(tx: Tx, run_id: str) -> sqlite3.Row:
+    """Return the run row of a phased run; a legacy run is refused (``not_phased``)."""
+    run = get_run(tx, run_id)
+    if not manifest_phases(run["manifest_json"]):
+        raise Refusal("not_phased", f"run {run_id} has no phases in its manifest")
+    return run
+
+
+def verb_phase_sync(tx: Tx, run_id: str, state: str, seq: int) -> Outcome:
+    """Write the derived phase view after its authoritative record (R§4.4 Records).
+
+    The view only moves forward: a lower ``seq`` is ``seq_stale``, and the same ``seq``
+    with another state is ``state_mismatch`` (two records cannot share a ``seq``).
+    """
+    run = _phased_run(tx, run_id)
+    current = run["phase_seq"]
+    view = {"run_id": run_id, "phase_state": run["phase_state"], "phase_seq": current}
+    if current is not None and seq < int(current):
+        raise Refusal(
+            "seq_stale", f"run {run_id} is at seq {current}, not {seq}", **view
+        )
+    if current is not None and seq == int(current):
+        if run["phase_state"] != state:
+            raise Refusal(
+                "state_mismatch",
+                f"run {run_id} seq {seq} is {run['phase_state']}, not {state}",
+                **view,
+            )
+        return Outcome("no_change", view)
+    tx.con.execute(
+        "UPDATE runs SET phase_state = ?, phase_seq = ?, updated_utc = ? WHERE run_id = ?",
+        (state, seq, tx.ctx.now_utc, run_id),
+    )
+    return Outcome(
+        "changed", {"run_id": run_id, "phase_state": state, "phase_seq": seq}
+    )
+
+
+def verb_phase_status(
+    tx: Tx, run_id: str, expect_state: str | None, expect_seq: int | None
+) -> Outcome:
+    """Read the derived phase view; a legacy run reads ``null``.
+
+    ``--expect-state`` and ``--expect-seq`` make it a check: a view that differs from
+    either is ``state_mismatch`` (the monitor's cross-check before it writes, R§4.4).
+    """
+    run = get_run(tx, run_id)
+    phases = manifest_phases(run["manifest_json"])
+    view: dict[str, Any] = {
+        "run_id": run_id,
+        "phases": list(phases),
+        "phase_state": run["phase_state"] if phases else None,
+        "phase_seq": run["phase_seq"] if phases else None,
+    }
+    if (expect_state is not None and view["phase_state"] != expect_state) or (
+        expect_seq is not None and view["phase_seq"] != expect_seq
+    ):
+        raise Refusal(
+            "state_mismatch",
+            f"run {run_id} is {view['phase_state']} at seq {view['phase_seq']},"
+            f" not {expect_state} at seq {expect_seq}",
+            **view,
+        )
+    return Outcome("ok", view)
+
+
 def verb_termination_pending(tx: Tx, segment_id: str) -> Outcome:
     """``launching`` or ``running`` → ``termination_pending``: a descendant outlived the terminate.
 
@@ -3567,6 +3729,17 @@ def manifest_fields(text: str | None) -> dict[str, Any]:
     }
 
 
+def manifest_python(text: str | None) -> str | None:
+    """The manifest's ``launch.python_exe``, or None when the manifest has none."""
+    try:
+        loaded: Any = json.loads(text) if text else None
+    except json.JSONDecodeError:
+        return None
+    launch = loaded.get("launch") if isinstance(loaded, dict) else None
+    value = launch.get("python_exe") if isinstance(launch, dict) else None  # pyright: ignore[reportUnknownMemberType]
+    return value if isinstance(value, str) and value else None
+
+
 def verb_monitor_view(tx: Tx) -> Outcome:
     """Read only: the open attempts, the open segments and the finalizing runs (R§4.4).
 
@@ -3595,14 +3768,14 @@ def verb_monitor_view(tx: Tx) -> Outcome:
     ]
     runs: list[dict[str, Any]] = []
     for run in tx.rows(
-        "SELECT run_id, kind, supervision, manifest_json FROM runs"
+        "SELECT run_id, kind, supervision, manifest_json, phase_state, phase_seq FROM runs"
         " WHERE state = 'finalizing' ORDER BY run_id"
     ):
         run_id = str(run["run_id"])
         last = tx.row(
             "SELECT segment_id, dispatch_id, boot_id, pid, created, created_utc, last_alive_utc,"
             " finalized_utc, finalized_by, stop_class, exit_code, session_total_usd,"
-            " cancel_requested_utc FROM segments WHERE run_id = ?"
+            " cancel_requested_utc, expected_session_id FROM segments WHERE run_id = ?"
             " ORDER BY created_utc DESC, rowid DESC LIMIT 1",
             (run_id,),
         )
@@ -3621,6 +3794,10 @@ def verb_monitor_view(tx: Tx) -> Outcome:
                 "manifest": manifest_fields(run["manifest_json"]),
                 "segment": None if last is None else dict(last),
                 "landings": landings,
+                "phases": list(manifest_phases(run["manifest_json"])),
+                "phase_state": run["phase_state"],
+                "phase_seq": run["phase_seq"],
+                "python_exe": manifest_python(run["manifest_json"]),
             }
         )
     return Outcome(
@@ -5058,6 +5235,10 @@ def run_verb(ctx: Context, args: argparse.Namespace) -> Outcome:
         ),
         "attach": lambda tx: verb_attach(tx, args.run_id, args.session, args.uuid),
         "orchestrator_sessions": lambda tx: verb_orchestrator_sessions(tx, args.run_id),
+        "phase_sync": lambda tx: verb_phase_sync(tx, args.run_id, args.state, args.seq),
+        "phase_status": lambda tx: verb_phase_status(
+            tx, args.run_id, args.expect_state, args.expect_seq
+        ),
     }
     body = bodies.get(verb)
     if body is None:

@@ -5,8 +5,10 @@
 # interactively, never pass --no-verify. Two modes:
 #
 #   legacy       validate signing -> stage -> lint/test -> commit -> push -> verify
-#   exact-scope  commit ONLY an approved manifest, in an isolated index, against
-#                an approved parent/tree/message/signing fingerprint
+#   exact-scope  run the granted op's phases (candidate, publish, index) through
+#                tools/commit_batch.py under the tree's gate lease; the driver, not
+#                this script, checks the approved parent/tree/message/signing
+#                fingerprint, so this script never commits on its own authority
 #
 # Written for bash 3.2 -- the version Apple ships. No mapfile, no associative
 # arrays, no ${var,,}. Test any change against bash 3.2 semantics, not just the
@@ -16,16 +18,22 @@
 #   agent-commit.sh --message "feat: description" [--body TEXT]
 #                   [--branch NAME] [--no-push] [--skip-tests]
 #
-#   agent-commit.sh --repository-path DIR --scope-manifest FILE \
-#                   --expected-base SHA --expected-tree SHA \
-#                   --content-descriptor FILE --message-file FILE \
-#                   --output-state FILE --no-push
+#   agent-commit.sh --repository-path DIR [--phase candidate|publish|index] \
+#                   [--scope-manifest FILE] [--expected-base SHA] [--expected-tree SHA] \
+#                   [--content-descriptor FILE] [--message-file FILE] \
+#                   [--output-state FILE] --no-push
+#
+#   Exact-scope mode reads the op id from {{PROJECT_NAME_UPPER}}_COMMIT_GRANT and the
+#   interpreter from {{PROJECT_NAME_UPPER}}_PYTHON (default: uv run python). Without
+#   --phase the three phases run in order and stop at the first that does not succeed.
+#   It needs flock(1) for the gate lease (util-linux; Homebrew on macOS).
 #
 # Exit codes
 #   0 success (including "nothing to commit")
 #   1 a gate refused: signing config, lint, tests, commit, push, drift
 #   2 bad invocation (unknown flag, missing required argument)
 #   3 a required host tool is absent, so a check could not be performed
+#   n exact-scope mode: a failing phase's own exit code, passed through
 #
 # Note 3 is distinct from 1 on purpose. "The gate said no" and "the gate could
 # not run" are different facts, and collapsing them is how a repo ends up
@@ -77,6 +85,7 @@ EXPECTED_TREE=""
 CONTENT_DESCRIPTOR=""
 MESSAGE_FILE=""
 OUTPUT_STATE=""
+PHASE=""
 SELFTEST=0
 
 need_value() {
@@ -100,8 +109,9 @@ while [ "$#" -gt 0 ]; do
         --content-descriptor) need_value "$1" "${2-}"; CONTENT_DESCRIPTOR="$2"; shift 2 ;;
         --message-file)       need_value "$1" "${2-}"; MESSAGE_FILE="$2"; shift 2 ;;
         --output-state)       need_value "$1" "${2-}"; OUTPUT_STATE="$2"; shift 2 ;;
+        --phase)              need_value "$1" "${2-}"; PHASE="$2"; shift 2 ;;
         --selftest)           SELFTEST=1; shift ;;
-        -h|--help)            sed -n '2,30p' "$0"; exit 0 ;;
+        -h|--help)            awk 'NR > 1 && /^#/ { print; next } NR > 1 { exit }' "$0"; exit 0 ;;
         # An unknown flag is never ignored. The PowerShell examples in SKILL.md
         # use -Message / -NoPush; someone who copies one of those into this
         # script must get a loud refusal, not a commit with default settings.
@@ -113,35 +123,12 @@ done
 # Shared helpers
 # --------------------------------------------------------------------------
 
-#: The git invocation. The originating repo routes exact-scope git through a
-#: guarded proxy (`rtk proxy git`); an adopter without one gets plain git. Set
-#: AGENT_GIT_PROXY to that proxy's argv prefix -- e.g. AGENT_GIT_PROXY="rtk proxy"
-#: -- and every git call below goes through it. Unset is the normal case.
-#: stderr is deliberately NOT captured: several callers use the return value as a
-#: SHA, and folding a git warning into that string would produce a comparison
-#: against a corrupted value rather than a clean mismatch. Diagnostics go to the
-#: terminal where a human reads them.
-git_x() {
-    local repo="$1"; shift
-    local out status
-    set +e
-    # shellcheck disable=SC2086  # AGENT_GIT_PROXY is an argv prefix; word-split is the point.
-    out="$(${AGENT_GIT_PROXY-} git -C "$repo" "$@")"
-    status=$?
-    set -e
-    if [ "$status" -ne 0 ]; then
-        die "git command failed with exit code $status: git $*"
-    fi
-    printf '%s' "$out"
-}
-
-#: A git config read whose absence is a condition to report, not a crash. git
-#: exits 1 for "key not set", which git_x would turn into an opaque failure and
-#: skip the specific message the caller wants to print.
-git_config_opt() {
-    local repo="$1" key="$2"
-    ${AGENT_GIT_PROXY-} git -C "$repo" config --get "$key" 2>/dev/null || true
-}
+#: The adopter's project prefix names the grant, interpreter and lease-token
+#: variables. printenv and env take any name, so the lookup stays valid before and
+#: after the template's {{PROJECT_NAME_UPPER}} is filled; a shell parameter name
+#: cannot hold the braces.
+PROJECT_ENV_PREFIX='{{PROJECT_NAME_UPPER}}'
+project_env() { printenv "${PROJECT_ENV_PREFIX}_$1" || true; }
 
 sha256_file() {
     if command -v shasum >/dev/null 2>&1; then
@@ -153,249 +140,175 @@ sha256_file() {
     fi
 }
 
-#: Read one scalar field out of the content descriptor. Bash cannot parse JSON,
-#: and hand-rolling a regex for a file whose whole job is to be authoritative
-#: would be the wrong kind of clever. python3 first (present on any machine that
-#: can run this package's other tooling), jq second, fail closed third.
-json_field() {
-    local file="$1" key="$2"
-    if command -v python3 >/dev/null 2>&1; then
-        python3 -c 'import json,sys
-d=json.load(open(sys.argv[1],encoding="utf-8"))
-v=d.get(sys.argv[2])
-sys.stdout.write("" if v is None else str(v))' "$file" "$key"
-    elif command -v jq >/dev/null 2>&1; then
-        jq -r --arg k "$key" '.[$k] // "" | tostring' "$file"
-    else
-        die_toolless "exact-scope mode needs python3 or jq to read $file"
-    fi
+#: One compact JSON result line, the PowerShell twin's Write-ExactResult. The phase is
+#: the caller's text, so it is cut to the characters a phase name can hold before it
+#: is printed inside the quotes.
+exact_result() {
+    # $1=result $2=reason $3=phase
+    local phase
+    phase="$(printf '%s' "$3" | tr -cd 'A-Za-z0-9._-')"
+    printf '{"result":"%s","reason":"%s","phase":"%s"}\n' "$1" "$2" "$phase"
 }
 
-emit_state() {
-    # $1=out $2=sha $3=parent $4=tree $5=descriptor_sha $6=scope-file (one path/line)
+#: The published commit's state, from the driver's last JSON line. Bash cannot parse
+#: JSON: python3 first, jq second, fail closed third. A line without a commit writes no
+#: state, as in the PowerShell twin; a line that is not JSON says so on stderr.
+emit_driver_state() {
+    # $1=out $2=driver JSON line $3=descriptor sha256 (empty for none)
     if command -v python3 >/dev/null 2>&1; then
         python3 -c 'import json,sys
-out,sha,parent,tree,dsha,scopefile=sys.argv[1:7]
-scope=[l.rstrip("\n") for l in open(scopefile,encoding="utf-8") if l.strip()]
-state={"schema_version":1,"actual_sha":sha,"parent":parent,"tree":tree,
-       "signature_verified":True,"content_descriptor_sha256":dsha,"scope":scope}
-open(out,"w",encoding="utf-8").write(json.dumps(state,indent=2)+"\n")' \
-            "$1" "$2" "$3" "$4" "$5" "$6"
+out,line,dsha=sys.argv[1:4]
+try:
+    d=json.loads(line)
+except ValueError:
+    sys.stderr.write("WARNING: the driver'"'"'s last JSON line is not JSON; no state was written to "+out+"\n")
+    sys.exit(0)
+if isinstance(d,dict) and d.get("commit"):
+    state={"schema_version":1,"actual_sha":str(d["commit"]),"parent":str(d.get("parent") or ""),
+           "tree":str(d.get("tree") or ""),"signature_verified":True,
+           "content_descriptor_sha256":dsha or None,"scope":list(d.get("paths") or [])}
+    open(out,"w",encoding="utf-8").write(json.dumps(state,indent=2)+"\n")' "$1" "$2" "$3"
     elif command -v jq >/dev/null 2>&1; then
-        jq -n --arg sha "$2" --arg parent "$3" --arg tree "$4" --arg dsha "$5" \
-              --rawfile scope "$6" \
-              '{schema_version:1, actual_sha:$sha, parent:$parent, tree:$tree,
-                signature_verified:true, content_descriptor_sha256:$dsha,
-                scope:($scope|split("\n")|map(select(length>0)))}' > "$1"
+        local state
+        state="$(jq -n --argjson d "$2" --arg dsha "$3" \
+            'if ($d | type) == "object" and (($d.commit // "") | tostring) != "" then
+               {schema_version: 1, actual_sha: ($d.commit | tostring),
+                parent: (($d.parent // "") | tostring), tree: (($d.tree // "") | tostring),
+                signature_verified: true,
+                content_descriptor_sha256: (if $dsha == "" then null else $dsha end),
+                scope: ($d.paths // [])}
+             else empty end')" || die "the driver's last JSON line could not be read; no state was written to $1"
+        [ -z "$state" ] || printf '%s\n' "$state" > "$1"
     else
         die_toolless "exact-scope mode needs python3 or jq to write $1"
     fi
 }
 
-abspath() {
-    # Resolve without requiring GNU readlink -f (absent on stock macOS).
-    if [ -d "$1" ]; then
-        (cd "$1" && pwd -P)
-    elif [ -e "$1" ]; then
-        local dir base
-        dir="$(dirname "$1")"; base="$(basename "$1")"
-        printf '%s/%s' "$(cd "$dir" && pwd -P)" "$base"
-    else
-        die "path does not exist: $1"
+# --------------------------------------------------------------------------
+# The tree's gate lease
+# --------------------------------------------------------------------------
+#: The executor lease's protocol (tools/executor_worktree.py): <git dir>/
+#: {{PROJECT_NAME}}-gate.lock, an exclusive flock while held, a JSON body carrying a
+#: 32-hex token, and that token in the children's {{PROJECT_NAME_UPPER}}_GATE_LEASE_TOKEN.
+#: The file is never deleted: a contender could lock the unlinked file while a third
+#: process created and locked a new one, giving two holders.
+LEASE_PATH=""
+LEASE_OWNED=0
+LEASE_TOKEN=""
+
+release_lease() {
+    # Truncate the body, unlock, close. Only a lease this run took is released.
+    [ "$LEASE_OWNED" -eq 1 ] || return 0
+    LEASE_OWNED=0
+    : > "$LEASE_PATH" || true
+    flock -u 9 || true
+    exec 9>&-
+}
+
+acquire_lease() {
+    # $1 = the phase a refusal names. Sets LEASE_TOKEN when this run takes the lease,
+    # or when it runs nested under its holder's own token; refuses lease_held otherwise.
+    command -v flock >/dev/null 2>&1 || die_toolless "flock not on PATH; the gate lease cannot be taken"
+    local git_dir inherited held_token
+    git_dir="$(git -C "$REPOSITORY_PATH" rev-parse --absolute-git-dir)" \
+        || die "not a git repository: $REPOSITORY_PATH"
+    LEASE_PATH="$git_dir/{{PROJECT_NAME}}-gate.lock"
+    inherited="$(project_env GATE_LEASE_TOKEN)"
+
+    exec 9>>"$LEASE_PATH"
+    if flock -n 9; then
+        LEASE_OWNED=1
+        trap release_lease EXIT
+        LEASE_TOKEN="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+        if [ "${#LEASE_TOKEN}" -ne 32 ] || case "$LEASE_TOKEN" in *[!0-9a-f]*) true ;; *) false ;; esac; then
+            die_toolless "could not read 16 random bytes for the gate lease token"
+        fi
+        # The body is written after the lock and never decides who holds the lease.
+        printf '{"schema": 1, "pid": %d, "argv": ["agent-commit.sh"], "started_utc": "%s", "token": "%s"}\n' \
+            "$$" "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" "$LEASE_TOKEN" > "$LEASE_PATH"
+        return 0
     fi
+    exec 9>&-
+
+    # Held by another handle. Its own children carry its token and run nested.
+    held_token="$(tr -d '\r\n' < "$LEASE_PATH" \
+        | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{32\}\)".*/\1/p')"
+    if [ -n "$inherited" ] && [ "$inherited" = "$held_token" ]; then
+        LEASE_TOKEN="$inherited"
+        return 0
+    fi
+    printf '%sERROR: the gate lease %s is held by another run.%s\n' "$C_RED" "$LEASE_PATH" "$C_RESET" >&2
+    exact_result refused lease_held "$1"
+    exit 1
 }
 
 # --------------------------------------------------------------------------
-# Exact-scope signed commit mode
+# Exact-scope commit mode
 # --------------------------------------------------------------------------
+#: tools/commit_batch.py is the authority: this script passes it the granted op and the
+#: exact parameters, one phase at a time, under the tree's gate lease, and prints its
+#: JSON (R§4.5, EA-8 (j), EA-10). The PowerShell twin's Invoke-ExactScopeCommit is the
+#: same contract; tests/agent-commit.test.sh pins this one.
 exact_scope_commit() {
-    local missing=""
-    [ -n "$REPOSITORY_PATH" ]    || missing="$missing --repository-path"
-    [ -n "$SCOPE_MANIFEST" ]     || missing="$missing --scope-manifest"
-    [ -n "$EXPECTED_BASE" ]      || missing="$missing --expected-base"
-    [ -n "$EXPECTED_TREE" ]      || missing="$missing --expected-tree"
-    [ -n "$CONTENT_DESCRIPTOR" ] || missing="$missing --content-descriptor"
-    [ -n "$MESSAGE_FILE" ]       || missing="$missing --message-file"
-    [ -n "$OUTPUT_STATE" ]       || missing="$missing --output-state"
-    if [ -n "$missing" ]; then
-        usage_error "exact-scope mode requires all seven bindings; missing:$missing"
-    fi
+    local -a phases python exact
+    [ -n "$REPOSITORY_PATH" ] || usage_error "exact-scope mode requires --repository-path"
+    case "$PHASE" in
+        "") phases=(candidate publish index) ;;
+        candidate|publish|index) phases=("$PHASE") ;;
+        *) exact_result usage phase "$PHASE"; exit 2 ;;
+    esac
     if [ "$NO_PUSH" -ne 1 ]; then
-        die "exact-scope mode requires --no-push; pushing is a separate approved checkpoint"
+        printf '%sERROR: exact-scope mode requires --no-push; pushing is a separate approved checkpoint.%s\n' \
+            "$C_RED" "$C_RESET" >&2
+        exact_result refused push "${phases[0]}"
+        exit 1
+    fi
+    if [ -z "$(project_env COMMIT_GRANT | tr -d '[:space:]')" ]; then
+        exact_result refused grant "${phases[0]}"
+        exit 1
     fi
 
-    local repo manifest descriptor message_path
-    repo="$(abspath "$REPOSITORY_PATH")"
-    manifest="$(abspath "$SCOPE_MANIFEST")"
-    descriptor="$(abspath "$CONTENT_DESCRIPTOR")"
-    message_path="$(abspath "$MESSAGE_FILE")"
+    local override
+    override="$(project_env PYTHON)"
+    if [ -n "$override" ]; then python=("$override"); else python=(uv run python); fi
+    exact=()
+    [ -z "$EXPECTED_BASE" ]      || exact+=(--expect-base "$EXPECTED_BASE")
+    [ -z "$EXPECTED_TREE" ]      || exact+=(--expect-tree "$EXPECTED_TREE")
+    [ -z "$SCOPE_MANIFEST" ]     || exact+=(--scope-manifest "$SCOPE_MANIFEST")
+    [ -z "$MESSAGE_FILE" ]       || exact+=(--message-file "$MESSAGE_FILE")
+    [ -z "$CONTENT_DESCRIPTOR" ] || exact+=(--descriptor "$CONTENT_DESCRIPTOR")
 
-    local current_base
-    current_base="$(git_x "$repo" rev-parse HEAD)"
-    if [ "$current_base" != "$EXPECTED_BASE" ]; then
-        die "exact-scope base drift: expected $EXPECTED_BASE, got $current_base"
-    fi
+    acquire_lease "${phases[0]}"
 
-    # ---- Manifest: every path relative, POSIX, inside the repo, present, unique.
-    local scope_file seen path folded count
-    scope_file="$(mktemp "${TMPDIR:-/tmp}/agent-commit-scope.XXXXXX")"
-    seen=""
-    count=0
-    while IFS= read -r raw || [ -n "$raw" ]; do
-        # Trim surrounding whitespace and any CR from a Windows-authored manifest.
-        path="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-        [ -z "$path" ] && continue
-        case "$path" in
-            \#*) continue ;;
-            /*)            die "unsafe exact-scope manifest path (absolute): $path" ;;
-            *\\*)          die "unsafe exact-scope manifest path (backslash): $path" ;;
-            ..|../*|*/../*|*/..) die "unsafe exact-scope manifest path (traversal): $path" ;;
-        esac
-        # Case-fold the duplicate check: on APFS and NTFS alike, `Docs/a.md` and
-        # `docs/a.md` are one file, so accepting both would stage it twice and
-        # make the manifest disagree with the tree it claims to describe.
-        folded="$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
-        if printf '%s\n' "$seen" | grep -Fxq "$folded"; then
-            rm -f "$scope_file"
-            die "duplicate exact-scope manifest path: $path"
+    local step out code line trimmed last=""
+    for step in "${phases[@]}"; do
+        # The children get the token, not the lock's descriptor: fd 9 is closed for them.
+        set +e
+        out="$(env "${PROJECT_ENV_PREFIX}_GATE_LEASE_TOKEN=$LEASE_TOKEN" "${python[@]}" \
+            -m tools.commit_batch --repo "$REPOSITORY_PATH" --step "$step" \
+            ${exact[@]+"${exact[@]}"} 9>&-)"
+        code=$?
+        set -e
+        last=""
+        if [ -n "$out" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+                printf '%s\n' "$line"
+                trimmed="${line#"${line%%[![:space:]]*}"}"
+                case "$trimmed" in "{"*) last="$trimmed" ;; esac
+            done <<< "$out"
         fi
-        seen="$seen
-$folded"
-        if [ ! -f "$repo/$path" ]; then
-            rm -f "$scope_file"
-            die "exact-scope file is missing: $path"
-        fi
-        printf '%s\n' "$path" >> "$scope_file"
-        count=$((count + 1))
-    done < "$manifest"
-    if [ "$count" -eq 0 ]; then
-        rm -f "$scope_file"
-        die "exact-scope manifest is empty"
-    fi
-
-    # Build the argv array once. bash 3.2 has no readarray, so read the file.
-    local -a SCOPE
-    SCOPE=()
-    while IFS= read -r path; do
-        SCOPE+=("$path")
-    done < "$scope_file"
-
-    # ---- Descriptor: every field present, and parent/tree/message all agree.
-    local field descriptor_parent descriptor_tree descriptor_msg_sha
-    local author_name author_email descriptor_fpr descriptor_timestamp
-    for field in parent tree message_sha256 author_name author_email signing_fingerprint; do
-        if [ -z "$(json_field "$descriptor" "$field")" ]; then
-            rm -f "$scope_file"
-            die "content descriptor is missing $field"
+        if [ "$code" -ne 0 ]; then
+            exit "$code"
         fi
     done
-    descriptor_parent="$(json_field "$descriptor" parent)"
-    descriptor_tree="$(json_field "$descriptor" tree)"
-    descriptor_msg_sha="$(json_field "$descriptor" message_sha256)"
-    author_name="$(json_field "$descriptor" author_name)"
-    author_email="$(json_field "$descriptor" author_email)"
-    descriptor_fpr="$(json_field "$descriptor" signing_fingerprint)"
-    descriptor_timestamp="$(json_field "$descriptor" timestamp)"
 
-    if [ "$descriptor_parent" != "$EXPECTED_BASE" ] || [ "$descriptor_tree" != "$EXPECTED_TREE" ]; then
-        rm -f "$scope_file"
-        die "content descriptor parent/tree does not match approved values"
+    if [ -n "$OUTPUT_STATE" ] && [ -n "$last" ]; then
+        local dsha=""
+        [ -z "$CONTENT_DESCRIPTOR" ] || dsha="$(sha256_file "$CONTENT_DESCRIPTOR")"
+        emit_driver_state "$OUTPUT_STATE" "$last" "$dsha"
     fi
-    local message_hash
-    message_hash="$(sha256_file "$message_path")"
-    if [ "$descriptor_msg_sha" != "$message_hash" ]; then
-        rm -f "$scope_file"
-        die "message file hash does not match content descriptor"
-    fi
-
-    # ---- Signing: enabled, ssh format, key on disk, fingerprint as approved.
-    local signing_enabled signing_format signing_key
-    signing_enabled="$(git_config_opt "$repo" commit.gpgsign)"
-    signing_format="$(git_config_opt "$repo" gpg.format)"
-    signing_key="$(git_config_opt "$repo" user.signingkey)"
-    case "$signing_key" in "~"/*) signing_key="$HOME/${signing_key#~/}" ;; esac
-    if [ "$signing_enabled" != "true" ] || [ "$signing_format" != "ssh" ] || [ ! -e "$signing_key" ]; then
-        rm -f "$scope_file"
-        die "exact-scope mode requires a usable local SSH commit-signing configuration
-  commit.gpgsign=$signing_enabled gpg.format=$signing_format user.signingkey=$signing_key"
-    fi
-    local public_key
-    if [ -e "$signing_key.pub" ]; then public_key="$signing_key.pub"; else public_key="$signing_key"; fi
-
-    command -v ssh-keygen >/dev/null 2>&1 || { rm -f "$scope_file"; die_toolless "ssh-keygen not on PATH"; }
-    local fingerprint
-    fingerprint="$(ssh-keygen -lf "$public_key" -E sha256 2>/dev/null | tr ' ' '\n' | grep '^SHA256:' | head -n 1)" || true
-    if [ -z "$fingerprint" ]; then
-        rm -f "$scope_file"
-        die "unable to derive SSH signing fingerprint from $public_key"
-    fi
-    if [ "$fingerprint" != "$descriptor_fpr" ]; then
-        rm -f "$scope_file"
-        die "SSH signing fingerprint does not match content descriptor
-  key: $fingerprint
-  approved: $descriptor_fpr"
-    fi
-
-    # verify-commit needs an allowed-signers file, so point it at this one key.
-    local git_dir allowed_signers public_key_text
-    git_dir="$(git_x "$repo" rev-parse --git-dir)"
-    case "$git_dir" in /*) ;; *) git_dir="$repo/$git_dir" ;; esac
-    allowed_signers="$git_dir/{{PROJECT_NAME}}-allowed-signers"
-    public_key_text="$(head -n 1 "$public_key" | tr -d '\r' | sed -e 's/[[:space:]]*$//')"
-    printf '%s %s\n' "$author_email" "$public_key_text" > "$allowed_signers"
-    git_x "$repo" config gpg.ssh.allowedSignersFile "$allowed_signers" >/dev/null
-
-    # ---- Stage into a throwaway index so the caller's index is untouched.
-    local temp_index actual_sha actual_parent actual_tree tree
-    temp_index="$(mktemp "${TMPDIR:-/tmp}/{{PROJECT_NAME}}-exact-index.XXXXXX")"
-    # mktemp created an empty file; git read-tree wants to create it itself.
-    rm -f "$temp_index"
-    cleanup_exact() { rm -f "$temp_index" "$scope_file"; }
-    trap cleanup_exact EXIT
-
-    # These are exported and unset explicitly rather than written as a
-    # `VAR=x git_x ...` prefix: a variable-assignment prefix on a *function* call
-    # is temporary in default bash but persists in POSIX mode, and a stray
-    # GIT_INDEX_FILE surviving into the caller's index operations is exactly the
-    # kind of leak this mode exists to prevent.
-    export GIT_INDEX_FILE="$temp_index"
-    git_x "$repo" read-tree "$EXPECTED_BASE" >/dev/null
-    git_x "$repo" add -- "${SCOPE[@]}" >/dev/null
-    tree="$(git_x "$repo" write-tree)"
-    if [ "$tree" != "$EXPECTED_TREE" ]; then
-        die "exact-scope tree drift: expected $EXPECTED_TREE, got $tree"
-    fi
-
-    # Identity comes from the descriptor, not from whatever this shell inherited.
-    export GIT_AUTHOR_NAME="$author_name" GIT_AUTHOR_EMAIL="$author_email"
-    export GIT_COMMITTER_NAME="$author_name" GIT_COMMITTER_EMAIL="$author_email"
-    if [ -n "$descriptor_timestamp" ]; then
-        export GIT_AUTHOR_DATE="$descriptor_timestamp"
-        export GIT_COMMITTER_DATE="$descriptor_timestamp"
-    fi
-    git_x "$repo" commit -S -F "$message_path" >/dev/null
-    unset GIT_INDEX_FILE GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL \
-          GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
-    unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE 2>/dev/null || true
-
-    actual_sha="$(git_x "$repo" rev-parse HEAD)"
-    actual_parent="$(git_x "$repo" rev-parse 'HEAD^')"
-    actual_tree="$(git_x "$repo" show -s --format=%T HEAD)"
-    if [ "$actual_parent" != "$EXPECTED_BASE" ] || [ "$actual_tree" != "$EXPECTED_TREE" ]; then
-        die "signed commit parent/tree does not match approved content"
-    fi
-    git_x "$repo" verify-commit "$actual_sha" >/dev/null
-
-    # Bring only the committed scope entries in the caller's index to the new
-    # HEAD. Any unrelated staged entries remain byte-for-byte staged.
-    git_x "$repo" reset --quiet HEAD -- "${SCOPE[@]}" >/dev/null
-
-    emit_state "$OUTPUT_STATE" "$actual_sha" "$actual_parent" "$actual_tree" \
-               "$(sha256_file "$descriptor")" "$scope_file"
-
+    release_lease
     trap - EXIT
-    cleanup_exact
-    printf 'Exact-scope signed commit verified: %s\n' "$actual_sha"
 }
 
 # --------------------------------------------------------------------------
@@ -538,7 +451,7 @@ if [ "$SELFTEST" -eq 1 ]; then
     exit $?
 fi
 
-if [ -n "$REPOSITORY_PATH$SCOPE_MANIFEST$EXPECTED_BASE$EXPECTED_TREE$CONTENT_DESCRIPTOR$MESSAGE_FILE$OUTPUT_STATE" ]; then
+if [ -n "$REPOSITORY_PATH$PHASE$SCOPE_MANIFEST$EXPECTED_BASE$EXPECTED_TREE$CONTENT_DESCRIPTOR$MESSAGE_FILE$OUTPUT_STATE" ]; then
     exact_scope_commit
     exit 0
 fi

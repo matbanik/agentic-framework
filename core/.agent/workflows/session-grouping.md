@@ -8,7 +8,7 @@ Use this workflow when you have a body of work — **review findings, a new/unde
 
 This replaces hand-writing a bespoke prompt each time. Invoke it as `/session-grouping <source>` where `<source>` is a build-plan phase id (e.g. `Phase 15b`), a path to a findings/review doc, or a short description of the recommendations to decompose.
 
-This is a **PLANNING-phase-only** workflow. It produces draft artifacts (MEU registrations + a grouping proposal) and **hands off to `/create-plan`** — it is reversible, auto-proceeds like any draft, introduces **NO new HARD gate and NO turn-ender**, and sits strictly upstream of `/create-plan` §5 / GUARDRAILS SIGN 1. It never commits, reviews, or approves.
+This is a **PLANNING-phase-only** workflow. It produces draft artifacts (MEU registrations + a grouping proposal) and **hands off to `/create-plan`** — it is reversible, auto-proceeds like any draft, introduces **NO new HARD gate and NO turn-ender** except the one Step 0 offer pause before any file is written, and sits strictly upstream of `/create-plan` §5 / GUARDRAILS SIGN 1. It never commits, reviews, or approves.
 
 // turbo-all
 
@@ -41,6 +41,18 @@ Read in order:
 5. The target `docs/build-plan/NN-*.md` phase spec, and/or the findings/review doc named in `<source>`
 6. `docs/build-plan/build-priority-matrix.md`
 7. One or two recent peers in `.agent/context/grouping/` for calibration (e.g. `p15b-*`, `p15c-*`)
+
+---
+
+## Step 0 — Resolve run parameters
+
+Before any grouping file is written, resolve the run-parameters block exactly as
+`create-plan.md` Step 0 does, with the grouping as its scope: `scope.grouping: <slug>`,
+`standing: true`, and `members` = the session plan slugs that this step fixes, in byte order.
+The four intake paths are the same. Path 4 (the offer) is the one pause this workflow makes,
+and it happens before any file exists. The accepted block becomes every session's
+`Run parameters:` line (§Handoff to `/create-plan`); the manual path writes `authorization=manual` on each
+line.
 
 ---
 
@@ -87,7 +99,7 @@ Confirm the drift check passes.
 | 5 | Prerequisite gate (blocked-on / can-begin-now) | optional |
 | 6 | Session summary roll-up table | optional |
 | 7 | Token calibration sources | optional |
-| 8 | Open decisions for the human (feeds `/create-plan` Step 2B) — each D-row is a Decision Brief per `.agent/docs/human-decision-protocol.md` §5: precedent sweep + research done, recommendation first, alternatives compared; decisions that pass the protocol's obviousness test are recorded as `autonomous`, not asked. When present, the section is `## 8. Open Decisions` and its body is exactly `None.` or the canonical table `\| ID \| Question \| Resolution \| Chosen \| Source tag \| Reasoning (why this; why the alternatives lost) \| Human ref \|` (the reflection's Decisions Log row without Stage; Resolution ∈ `autonomous` / `human` / `open`; the brief itself goes in the Reasoning cell). **Carry-forward rule:** every D-row — decided or still `open` — must appear in the consuming session's reflection `### Decisions Log` with stage `grouping` (an `open` row lands there as `human` once ruled); the closeout validator reads this table and refuses an ad-hoc shape, so a table it cannot read is a table that cannot be carried forward | optional |
+| 8 | Open decisions for the human (feeds `/create-plan` Step 2B) — each D-row is a Decision Brief per `.agent/docs/human-decision-protocol.md` §5: precedent sweep + research done, recommendation first, alternatives compared; decisions that pass the protocol's obviousness test are recorded as `autonomous`, not asked. When present, the section is `## 8. Open Decisions` and its body is exactly `None.` or the canonical table `\| ID \| Question \| Resolution \| Chosen \| Source tag \| Reasoning (why this; why the alternatives lost) \| Human ref \|` (the reflection's Decisions Log row without Stage; Resolution ∈ `autonomous` / `human` / `open`; the brief itself goes in the Reasoning cell). **Carry-forward rule:** every D-row — decided or still `open` — must appear in the consuming session's reflection `### Decisions Log` with stage `grouping` (an `open` row lands there as `human` once ruled); the closeout validator reads this table and refuses an ad-hoc shape, so a table it cannot read is a table that cannot be carried forward. The session's `Run parameters:` line is carried the same way, into the `run_parameters` block of both plan files | optional |
 
 > The required core is the union all prior proposals (p13–p15c, issue-triage) actually share. Do not invent sections an agent later can't fill.
 
@@ -99,8 +111,9 @@ The proposal is an **optional input** to `/create-plan` Step 3 "Reason About Pro
 - **Default (single-plan-per-phase):** the next `/create-plan <phase>` run reads the proposal and takes scope (MEU bundle + slug + build-plan sections) from it.
 - **Multi-session fan-out (exception):** the proposal lists the session slugs in order; run `/create-plan` once per session block, in order. The proposal names which MEUs belong to each.
 - If no proposal exists for a phase, `/create-plan` Step 3 falls back to its inline grouping (unchanged behavior).
+- **One `Run parameters:` line under each session block:** `Run parameters: decisions=hdp · commit_plan=true · exec_after_plan=true · commit_exec=true · push=never · authorization=<session8>/<message uuid>`, written from the Step 0 block. It is immutable once a session of the grouping has started; a change is a new line with a new verified reference and `supersedes=<message uuid>`. `/create-plan` Step 0 reads it, and a plan may only tighten it.
 
-This handoff never triggers a review, approval, or turn-ender.
+This handoff never triggers a review, approval, or turn-ender; the one pause of this workflow is the Step 0 offer, before any file is written.
 
 ## Naming (canonical)
 

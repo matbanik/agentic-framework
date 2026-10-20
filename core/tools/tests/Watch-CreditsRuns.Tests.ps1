@@ -872,3 +872,233 @@ Describe 'AC-E.6: P-8b again through the monitor' {
         }
     }
 }
+
+# B-6 (docs/execution/plans/2026-10-17-run-parameters, WP-7, EA-19, EA-20). The monitor and the phase
+# machine of R§4.4 (AC-F.3). A STOPPED Status of the machine needs its gate: budget → released:handback;
+# human_stop, no_record and ambiguous → released:human-gate (V6-022, V6-027). A phases run that died
+# with no Status gets `run_parameters.py stop --reason no_record` (the tool re-checks the four
+# conditions under the lock); a refusal leaves a no_record_pending log record (V6-049). A verified
+# DONE of a phases run gets `final --plan <plan> --seal` (V6-050). A legacy run calls no tool. The
+# tool is a mock that logs its argv; the monitor runs it with the manifest's python_exe, given
+# -RunParametersTool.
+Describe 'AC-F.3: the phase machine at the monitor (vec_v6_022_, vec_v6_027_, vec_v6_049_, vec_v6_050_)' {
+    BeforeAll {
+        $script:RpTool = "$script:Root/mock_run_parameters.py"
+        Set-Content -LiteralPath $script:RpTool -Encoding utf8NoBOM -Value @'
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+log = os.environ.get("MOCK_RP_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps(args) + "\n")
+verb = args[0] if args else ""
+refuse = os.environ.get("MOCK_RP_REFUSE", "")
+if refuse.partition(":")[0] == verb:
+    print(json.dumps({"result": "refused", "reason": refuse.partition(":")[2], "authorized": False, "failure": True}))
+    sys.exit(1)
+done = {"inspect": "inspected", "bind": "bound", "stop": "stopped", "final": "finalized"}
+print(json.dumps({"result": done.get(verb, "ok")}))
+sys.exit(0)
+'@
+
+        # The gates table of the monitor script, read from its text: class → gate.
+        function Get-StoppedGates {
+            $text = [System.IO.File]::ReadAllText($script:Watch)
+            $m = [regex]::Match($text, '(?s)\$script:StoppedGates = @\{(.*?)\r?\n\}')
+            $gates = @{}
+            foreach ($line in $m.Groups[1].Value -split "`r?`n") {
+                if ($line -match "^\s*([a-z_]+)\s*=\s*'([^']+)'") { $gates[$Matches[1]] = $Matches[2] }
+            }
+            $gates
+        }
+
+        # A registered run whose manifest names both phases, requested, accepted, admitted and
+        # launched with dead identities (as New-FixtureRunning).
+        function New-PhasedRunning([string]$RunId, [string]$Project = $script:Project) {
+            New-Item -ItemType Directory -Force -Path $Project | Out-Null
+            $doc = [ordered]@{
+                schema = 'credits-run.v1'; run_id = $RunId; kind = 'exec'
+                project_root = $Project; plan_folder = $script:PlanFolder
+                brief = $script:Brief; phases = @('plan', 'exec')
+                launch = [ordered]@{
+                    working_directory = $Project; claude_exe = $script:Mock; python_exe = $script:Py
+                    permission_mode = 'bypassPermissions'; effort = 'low'; segment_cap_usd = 20.0; timeout_sec = 3600
+                }
+                budget = [ordered]@{ run_cap_usd = 50.0 }
+                messaging = [ordered]@{ orchestrator_sessions = @('00000000-0000-4000-8000-0000000000aa'); ruling_enabled = $false; gate_wait_max_min = 0 }
+                depends_on = @(); lane = "tree:$Project/$RunId"
+            }
+            $manifest = "$script:Root/manifest-$RunId.json"
+            Set-Content -LiteralPath $manifest -Value ($doc | ConvertTo-Json -Depth 6) -Encoding utf8NoBOM
+            Assert-Store 'register' @('--run-id', $RunId, '--manifest', $manifest, '--cli-version', '2.1.296', '--kit-revision', 'kitrev-fixture') | Out-Null
+            Assert-Store 'registered' @('--run-id', $RunId, '--task-hash', "taskhash-$RunId") | Out-Null
+            Assert-Store 'request' @('--run-id', $RunId, '--started-by', 'human-command', '--request-id', "req-$RunId") | Out-Null
+            $launcher = New-DeadIdentity
+            Assert-Store 'accept' @('--run-id', $RunId, '--launcher-pid', $launcher.Pid, '--launcher-created', $launcher.Created,
+                '--boot-id', $script:BootId, '--win-session', $script:WinSession, '--attempt-id', "att-$RunId", '--dispatch-id', "disp-$RunId") | Out-Null
+            Assert-Store 'admit' @('--attempt-id', "att-$RunId", '--segment-id', "seg-$RunId") | Out-Null
+            $cli = New-DeadIdentity
+            Assert-Store 'launched' @('--segment-id', "seg-$RunId", '--pid', $cli.Pid, '--created', $cli.Created, '--boot-id', $script:BootId) | Out-Null
+            "tree:$Project/$RunId"
+        }
+
+        # A plan tree whose task.md holds the given stop_gate and one open row.
+        function New-StoppedTree([string]$Tree, [string]$Gate) {
+            $plan = Join-Path $Tree $script:PlanFolder
+            New-Item -ItemType Directory -Force -Path $plan | Out-Null
+            Set-Content -LiteralPath (Join-Path $plan 'task.md') -Encoding utf8NoBOM -Value (@(
+                    '---', "project: `"$script:Plan`"", 'status: "in_progress"', "stop_gate: `"$Gate`"", 'meus: []', '---', '',
+                    '# Task', '', '| # | Task | Owner | Deliverable | Status |', '|---|------|-------|-------------|--------|',
+                    '| 1 | Write the tests | coder | tests | [x] |', '| 2 | Make them pass | coder | code | [ ] |') -join "`n")
+        }
+
+        # One monitor pass with -RunParametersTool and the mock's environment.
+        function Invoke-PhaseWatch([string]$Log, [string]$Refuse = '') {
+            if (-not (Test-Path -LiteralPath $script:Watch)) { throw "the monitor is missing: $script:Watch" }
+            $env:MOCK_RP_LOG = $Log
+            if ($Refuse) { $env:MOCK_RP_REFUSE = $Refuse }
+            try {
+                $splat = @{ StateDb = $script:Db; OutputDir = $script:Out; Observations = @{}; Notifier = (New-Notifier); HostEvents = @(); RunParametersTool = $script:RpTool }
+                $global:LASTEXITCODE = 0
+                $lines = @(); $thrown = $null
+                try { $lines = @(& $script:Watch @splat 2>$null) } catch { $thrown = $_.Exception.Message }
+                $code = $global:LASTEXITCODE
+                [pscustomobject]@{ Code = $code; Payload = (Get-Payload (($lines | ForEach-Object { "$_" }) -join "`n")); Thrown = $thrown }
+            } finally {
+                Remove-Item Env:MOCK_RP_LOG -ErrorAction SilentlyContinue
+                Remove-Item Env:MOCK_RP_REFUSE -ErrorAction SilentlyContinue
+            }
+        }
+
+        # Each logged tool call as one string: its argv joined by single spaces.
+        function Get-RpCalls([string]$Log) {
+            if (-not (Test-Path -LiteralPath $Log)) { return @() }
+            @([System.IO.File]::ReadAllLines($Log) | Where-Object { $_.Trim() } | ForEach-Object { @($_ | ConvertFrom-Json) -join ' ' })
+        }
+    }
+
+    It 'vec_v6_022_ vec_v6_027_ AC-F.3: the gates table maps budget to released:handback and human_stop, no_record, ambiguous to released:human-gate; the legacy entries are unchanged' {
+        $gates = Get-StoppedGates
+        $gates['budget'] | Should -Be 'released:handback'
+        $gates['human_stop'] | Should -Be 'released:human-gate'
+        $gates['no_record'] | Should -Be 'released:human-gate'
+        $gates['ambiguous'] | Should -Be 'released:human-gate'
+        $gates['decision'] | Should -Be 'released:human-gate'
+        $gates['handback'] | Should -Be 'released:handback'
+        $gates['base_moved'] | Should -Be 'released:handback'
+        $gates['round_cap'] | Should -Be 'released:round-cap'
+        $gates['reviewer_unavailable'] | Should -Be 'released:reviewer-unavailable'
+    }
+
+    It 'vec_v6_022_ AC-F.3: a phases run with Status STOPPED:human_stop and released:human-gate → stop class human_stop' {
+        New-Store | Out-Null
+        $run = New-Id 'f3-human'
+        $tree = "$script:Root/tree-$run"
+        New-StoppedTree $tree 'released:human-gate'
+        New-PhasedRunning $run $tree | Out-Null
+        Write-Dispatch $run @{
+            'status.json' = '{"exit_code": 0, "timed_out": false, "total_cost_usd": 0.5}'
+            'output.json' = '{"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.5}'
+            'final.md'    = "Row 1 closed; the human asked to stop.`n`nStatus: STOPPED:human_stop`n"
+        }
+        $log = "$script:Root/$run.rp.jsonl"
+        Assert-Pass (Invoke-PhaseWatch $log)
+        Assert-Pass (Invoke-PhaseWatch $log)
+        $state = Get-Run $run
+        $state.state | Should -Be 'stopped'
+        $state.stop_class | Should -Be 'human_stop'
+    }
+
+    It 'vec_v6_027_ AC-F.3: a phases run with Status STOPPED:<class> and released:human-gate → stop class <class>' -ForEach @(
+        @{ Class = 'no_record' }, @{ Class = 'ambiguous' }
+    ) {
+        New-Store | Out-Null
+        $run = New-Id "f3-$Class"
+        $tree = "$script:Root/tree-$run"
+        New-StoppedTree $tree 'released:human-gate'
+        New-PhasedRunning $run $tree | Out-Null
+        Write-Dispatch $run @{
+            'status.json' = '{"exit_code": 0, "timed_out": false, "total_cost_usd": 0.5}'
+            'output.json' = '{"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.5}'
+            'final.md'    = "Resolution needed.`n`nStatus: STOPPED:$Class`n"
+        }
+        $log = "$script:Root/$run.rp.jsonl"
+        Assert-Pass (Invoke-PhaseWatch $log)
+        Assert-Pass (Invoke-PhaseWatch $log)
+        (Get-Run $run).stop_class | Should -Be $Class
+    }
+
+    It 'vec_v6_049_ AC-F.3: a phases run that died with no Status → one stop --reason no_record with the plan, the run and the synced seq' {
+        New-Store | Out-Null
+        $run = New-Id 'f3-norec'
+        $tree = "$script:Root/tree-$run"
+        New-StoppedTree $tree 'armed'
+        New-PhasedRunning $run $tree | Out-Null
+        Assert-Store 'phase_sync' @('--run-id', $run, '--state', 'exec:active', '--seq', '5') | Out-Null
+        $log = "$script:Root/$run.rp.jsonl"
+        Assert-Pass (Invoke-PhaseWatch $log)
+        Assert-Pass (Invoke-PhaseWatch $log)
+        $stops = @(Get-RpCalls $log | Where-Object { $_ -match '^stop ' })
+        $stops.Count | Should -Be 1
+        $stops[0] | Should -Match ' --reason no_record( |$)'
+        $stops[0] | Should -Match " --plan $([regex]::Escape($script:Plan))( |$)"
+        $stops[0] | Should -Match " --run $([regex]::Escape($run))( |$)"
+        $stops[0] | Should -Match ' --expect-seq 5( |$)'
+    }
+
+    It 'vec_v6_049_ AC-F.3 negative: the tool refuses (stale_lock) → a no_record_pending WARN record and no other tool call' {
+        New-Store | Out-Null
+        $run = New-Id 'f3-pending'
+        $tree = "$script:Root/tree-$run"
+        New-StoppedTree $tree 'armed'
+        New-PhasedRunning $run $tree | Out-Null
+        Assert-Store 'phase_sync' @('--run-id', $run, '--state', 'exec:active', '--seq', '5') | Out-Null
+        $log = "$script:Root/$run.rp.jsonl"
+        Assert-Pass (Invoke-PhaseWatch $log 'stop:stale_lock')
+        @(Get-RpCalls $log | Where-Object { $_ -notmatch '^stop ' }).Count | Should -Be 0
+        $pending = @(Get-MonitorLog | Where-Object { $_.event -eq 'no_record_pending' -and $_.level -eq 'WARN' })
+        $pending.Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'vec_v6_050_ AC-F.3: a verified DONE of a phases run → done and one final --plan <plan> --seal' {
+        New-Store | Out-Null
+        $run = New-Id 'f3-done'
+        $tree = "$script:Root/tree-$run"
+        New-DoneTree $tree
+        New-PhasedRunning $run $tree | Out-Null
+        Set-Landings $run
+        Write-Dispatch $run @{
+            'status.json' = '{"exit_code": 0, "timed_out": false, "total_cost_usd": 1.0}'
+            'output.json' = '{"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 1.0}'
+            'final.md'    = "Closeout complete.`n`nStatus: DONE`n"
+        }
+        $log = "$script:Root/$run.rp.jsonl"
+        Assert-Pass (Invoke-PhaseWatch $log)
+        Assert-Pass (Invoke-PhaseWatch $log)
+        (Get-Run $run).state | Should -Be 'done'
+        $finals = @(Get-RpCalls $log | Where-Object { $_ -match '^final ' })
+        $finals.Count | Should -Be 1
+        $finals[0] | Should -Be "final --plan $script:Plan --seal"
+    }
+
+    It 'AC-F.3 negative: a legacy run with Status STOPPED:decision and released:human-gate → decision, and no tool call' {
+        New-Store | Out-Null
+        $run = New-Id 'f3-legacy'
+        $tree = "$script:Root/tree-$run"
+        New-StoppedTree $tree 'released:human-gate'
+        New-FixtureRunning $run $tree | Out-Null
+        Write-Dispatch $run @{
+            'status.json' = '{"exit_code": 0, "timed_out": false, "total_cost_usd": 0.5}'
+            'output.json' = '{"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.5}'
+            'final.md'    = "A decision is open.`n`nStatus: STOPPED:decision`n"
+        }
+        $log = "$script:Root/$run.rp.jsonl"
+        Assert-Pass (Invoke-PhaseWatch $log)
+        Assert-Pass (Invoke-PhaseWatch $log)
+        (Get-Run $run).stop_class | Should -Be 'decision'
+        Test-Path -LiteralPath $log | Should -BeFalse
+    }
+}

@@ -10,7 +10,11 @@
       2. checks the M-1 receipt with run_gate.py when a pending request is younger than
          REQUEST_ACCEPT_TIMEOUT_S (the store has no receipt input, so the check comes first);
       3. accepts the request (store verb accept) and admits the attempt (admit), which claims the
-         lane and the reservation and opens a segment;
+         lane and the reservation and opens a segment. The first start of a manifest with phases
+         is also an admission (report section 4.4): before accept, run_parameters.py inspect
+         checks the run_parameters block of the brief's ## Authorization section; after admit,
+         bind --pending binds the attempt's session as headless. A refusal starts nothing
+         (admission_refused);
       4. creates the segment's kill-on-close job and starts Invoke-ClaudeCredits.ps1 -Scheduled
          suspended inside it, with the CLI environment of section 4.3 step 7;
       5. records the wrapper identity (launched) before the wrapper resumes, waits for its
@@ -21,7 +25,8 @@
     termination_pending and the monitor finalizes it from the job proof (MX-20).
 
     The script prints one JSON line with an outcome and exits:
-      0  completed, cancelled, start_refused (a store refusal), not_started or rejected;
+      0  completed, cancelled, start_refused (a store refusal), not_started, rejected or
+         admission_refused;
       1  launch_failed, termination_pending, receipt_rejected or project_mismatch;
       3  refused (a nested Claude Code session or a bad argument);
       9  an unexpected error.
@@ -57,6 +62,8 @@ $script:ParameterTable = [ordered]@{
     NowUtc          = @{ Kind = 'string' }
     # Default: Invoke-ClaudeCredits.ps1 next to this script.
     WrapperScript   = @{ Kind = 'string' }
+    # The run-parameters tool of a manifest with phases. Default: tools/run_parameters.py of the project.
+    RunParametersTool = @{ Kind = 'string' }
 }
 
 # Sets one script variable per table entry from $Tokens (-Name value or -Name:value).
@@ -229,6 +236,57 @@ function Test-RunReceipt($Manifest) {
     }
 }
 
+# The run_parameters block of the brief's ## Authorization section (report section 4.4) as the
+# text of a block file ("run_parameters:" and its lines), or $null when the brief has none.
+function Read-AuthorizationBlock([string]$BriefPath) {
+    if (-not $BriefPath -or -not (Test-Path -LiteralPath $BriefPath -PathType Leaf)) { return $null }
+    $text = [System.IO.File]::ReadAllText($BriefPath, [System.Text.Encoding]::UTF8)
+    $section = [regex]::Match($text, '(?ms)^## Authorization[ \t]*\r?\n(.*?)(?=^## |\z)')
+    if (-not $section.Success) { return $null }
+    $fence = [regex]::Match($section.Groups[1].Value, '(?ms)^```yaml[ \t]*\r?\n(run_parameters:[ \t]*\r?\n.*?)^```[ \t]*\r?$')
+    if (-not $fence.Success) { return $null }
+    return $fence.Groups[1].Value -replace '\r\n', "`n"
+}
+
+# Runs one run_parameters.py verb with the manifest's python_exe in the project (the tool's
+# --repo default). Returns Code, Result (the last JSON line of stdout, or $null) and Output.
+function Invoke-RunParametersTool($Launch, [string]$ProjectRoot, [string[]]$Arguments) {
+    $python = [string](Get-Field $Launch 'python_exe')
+    if (-not $python) { $python = Get-CreditsPython }
+    $psi = [System.Diagnostics.ProcessStartInfo]::new($python)
+    foreach ($a in @('-X', 'utf8', $RunParametersTool) + $Arguments) { $psi.ArgumentList.Add([string]$a) }
+    $psi.WorkingDirectory = $ProjectRoot
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        if (-not $proc.WaitForExit(300000)) {
+            try { $proc.Kill($true) } catch { [Console]::Error.WriteLine("run_parameters.py kill failed: $($_.Exception.Message)") }
+            throw "run_parameters.py $($Arguments[0]) did not end in 300 s"
+        }
+        $proc.WaitForExit()
+        $parsed = $null
+        $last = @($outTask.Result -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 1
+        if ($last) {
+            try { $parsed = $last | ConvertFrom-Json -ErrorAction Stop } catch { $parsed = $null }
+        }
+        return [pscustomobject]@{ Code = $proc.ExitCode; Result = $parsed; Output = ($outTask.Result + $errTask.Result).Trim() }
+    } finally {
+        $proc.Dispose()
+    }
+}
+
+# The reason a run_parameters.py call refused: the tool's reason, else its exit code.
+function Get-RunParametersReason($Call) {
+    $reason = if ($null -ne $Call.Result) { [string](Get-Field $Call.Result 'reason') } else { '' }
+    if ($reason) { return $reason }
+    return "exit_$($Call.Code)"
+}
+
 # The environment block of the wrapper (report section 4.3 step 7). It starts from this process's
 # environment; the dispatch wrapper later removes CREDITS_* from the CLI and the -Scheduled hook
 # puts back the names below. CREDITS_BASE_COMMIT is set only when admission recorded a base
@@ -390,6 +448,36 @@ function Invoke-Launcher {
         }
     }
 
+    # --- step 2b: the first-start admission of a manifest with phases (report section 4.4, D-17).
+    # A resume is checked by its own brief (credits_msg.py tree), not here. A refused request
+    # stays pending and ages out to not_started, as a request that no launcher took.
+    $pending = @(@(Get-Field $status 'requests') | Where-Object { $null -ne $_ -and $_.state -eq 'pending' })
+    $admission = @(@(Get-Field $manifest 'phases') | Where-Object { $_ }).Count -gt 0 -and
+        $pending.Count -eq 1 -and -not [bool](Get-Field $pending[0] 'resume')
+    $planSlug = $null
+    if ($admission) {
+        if (-not $script:RunParametersTool) { $script:RunParametersTool = Join-Path $projectRoot 'tools/run_parameters.py' }
+        $planSlug = Split-Path -Leaf ([string](Get-Field $manifest 'plan_folder')).TrimEnd('/', '\')
+        $briefPath = [string](Get-Field $manifest 'brief')
+        if ($briefPath -and -not [System.IO.Path]::IsPathRooted($briefPath)) { $briefPath = Join-Path $projectRoot $briefPath }
+        $block = Read-AuthorizationBlock $briefPath
+        if ($null -eq $block) {
+            $message = "the brief '$briefPath' has no ## Authorization section with a run_parameters block"
+            Write-LauncherLog 'INFO' 'credits_admission_refused' @{ step = 'brief'; reason = 'no_authorization'; message = $message }
+            return New-Result 'admission_refused' 0 @{ reason = 'no_authorization'; step = 'brief'; message = $message }
+        }
+        $blockFile = Join-Path (Split-Path -Parent $StateDb) "admission/$RunId.block.yaml"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $blockFile) | Out-Null
+        [System.IO.File]::WriteAllText($blockFile, $block, $script:Utf8)
+        $call = Invoke-RunParametersTool $launch $projectRoot @('inspect', '--block', $blockFile)
+        if ($call.Code -ne 0 -or [string](Get-Field $call.Result 'result') -ne 'inspected') {
+            $reason = Get-RunParametersReason $call
+            Write-LauncherLog 'INFO' 'credits_admission_refused' @{ step = 'inspect'; reason = $reason; exit_code = $call.Code; output = $call.Output }
+            return New-Result 'admission_refused' 0 @{ reason = $reason; step = 'inspect' }
+        }
+        Write-LauncherLog 'INFO' 'credits_admission_inspected' @{ plan = $planSlug; block = $blockFile }
+    }
+
     # --- step 3: accept the request
     $launcher = [System.Diagnostics.Process]::GetCurrentProcess()
     $bootId = Get-CreditsBootId
@@ -438,6 +526,24 @@ function Invoke-Launcher {
     if (-not $promptFile) { $promptFile = [string](Get-Field $manifest 'brief') }
     $isFresh = [string](Get-Field $admitted 'resume') -eq 'fresh'
     Write-LauncherLog 'INFO' 'credits_segment_admitted' @{ attempt_id = $attemptId; segment_id = $segmentId; reservation_usd = $reservation; base_commit = $baseCommit }
+
+    # The admission binds the attempt's session to the plan as headless (AC-F.4) before the CLI
+    # starts. A refusal closes the open segment as launch_failed and starts nothing.
+    if ($admission) {
+        $bindFailure = $null
+        try {
+            $call = Invoke-RunParametersTool $launch $projectRoot @('bind', '--pending', $planSlug, '--session', $sessionId, '--context', 'headless')
+            if ($call.Code -ne 0 -or [string](Get-Field $call.Result 'result') -ne 'bound') { $bindFailure = Get-RunParametersReason $call }
+        } catch {
+            $bindFailure = $_.Exception.Message
+        }
+        if ($null -ne $bindFailure) {
+            Write-LauncherLog 'INFO' 'credits_admission_refused' @{ step = 'bind'; reason = $bindFailure; segment_id = $segmentId }
+            $null = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class launch_failed
+            return New-Result 'admission_refused' 0 @{ reason = $bindFailure; step = 'bind'; segment_id = $segmentId }
+        }
+        Write-LauncherLog 'INFO' 'credits_admission_bound' @{ plan = $planSlug; session_id = $sessionId }
+    }
 
     # From here the segment is open; every path finalizes it or leaves it to the monitor.
     try {

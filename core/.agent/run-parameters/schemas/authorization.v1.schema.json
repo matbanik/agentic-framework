@@ -1,0 +1,440 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://{{PROJECT_NAME}}.local/run-parameters/authorization.v1.schema.json",
+  "title": "Run-parameters authorization reference (R\u00a74.1, V-0 to V-12)",
+  "x-example-root": [
+    "authorization"
+  ],
+  "x-schema-id": "authorization/1",
+  "type": "object",
+  "properties": {
+    "authorization": {
+      "$ref": "#/$defs/authorization"
+    }
+  },
+  "required": [
+    "authorization"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}-[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "P-3 plan slug"
+    },
+    "grouping": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        }
+      ],
+      "description": "P-3g grouping slug or the sentinel none"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "P-2 RFC 3339 UTC, seconds, literal Z"
+    },
+    "expires": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      ],
+      "description": "P-2 none or YYYY-MM-DD (23:59:59 UTC of that day)"
+    },
+    "project": {
+      "type": "string",
+      "pattern": "^([A-Z]:(/[^/\\\\]+)+|(/[^/\\\\]+)+)$",
+      "description": "P-1 canonical display path"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^(?!none$)(?!/)(?!.*//)(?!.*\\.\\.)[A-Za-z0-9._/-]+(?<!/)(?<!\\.lock)$",
+      "description": "P-4 refs/heads/<branch> name"
+    },
+    "grants": {
+      "enum": [
+        [
+          "exec_commit"
+        ],
+        [
+          "exec_start"
+        ],
+        [
+          "finalize"
+        ],
+        [
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start"
+        ],
+        [
+          "exec_commit",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ]
+      ],
+      "description": "P-5 non-empty subset of the four acts, byte-sorted; never push; ruling is not a grant"
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      ]
+    },
+    "decisions": {
+      "enum": [
+        "hdp",
+        "human-all"
+      ]
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "anyOf": [
+            {
+              "const": "none"
+            },
+            {
+              "$ref": "#/$defs/slug"
+            }
+          ]
+        },
+        "grouping": {
+          "$ref": "#/$defs/grouping"
+        },
+        "branch": {
+          "$ref": "#/$defs/branch"
+        }
+      },
+      "required": [
+        "plan",
+        "grouping",
+        "branch"
+      ],
+      "additionalProperties": false
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/slug"
+      },
+      "uniqueItems": true,
+      "description": "byte-sorted; checked by the verifier (sort order is not expressible here)"
+    },
+    "authorization_v1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "authorization/1"
+        },
+        "source": {
+          "const": "USER_EXPLICIT"
+        },
+        "form": {
+          "enum": [
+            "reply",
+            "self-contained"
+          ]
+        },
+        "project": {
+          "$ref": "#/$defs/project"
+        },
+        "session": {
+          "$ref": "#/$defs/uuid"
+        },
+        "message_uuid": {
+          "$ref": "#/$defs/uuid"
+        },
+        "presentation_uuid": {
+          "$ref": "#/$defs/uuid"
+        },
+        "offer_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        },
+        "response": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the human's complete message, verbatim (V-5)"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "members": {
+          "$ref": "#/$defs/members"
+        },
+        "expires": {
+          "$ref": "#/$defs/expires"
+        },
+        "grants": {
+          "$ref": "#/$defs/grants"
+        },
+        "standing": {
+          "type": "boolean"
+        },
+        "supersedes": {
+          "$ref": "#/$defs/supersedes"
+        }
+      },
+      "required": [
+        "schema",
+        "source",
+        "form",
+        "project",
+        "session",
+        "message_uuid",
+        "presentation_uuid",
+        "offer_digest",
+        "date",
+        "response",
+        "scope",
+        "members",
+        "expires",
+        "grants",
+        "standing",
+        "supersedes"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "standing": {
+                "const": false
+              }
+            },
+            "required": [
+              "standing"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "properties": {
+                  "plan": {
+                    "$ref": "#/$defs/slug"
+                  }
+                }
+              },
+              "members": {
+                "maxItems": 0
+              },
+              "expires": {
+                "const": "none"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "scope": {
+                "properties": {
+                  "plan": {
+                    "const": "none"
+                  },
+                  "grouping": {
+                    "type": "string",
+                    "pattern": "^(?!none$)[a-z0-9]+(-[a-z0-9]+)*$"
+                  }
+                }
+              },
+              "members": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "form": {
+                "const": "self-contained"
+              }
+            },
+            "required": [
+              "form"
+            ]
+          },
+          "then": {
+            "description": "V-3S: presentation_uuid equals message_uuid (checked by the verifier)"
+          }
+        }
+      ]
+    },
+    "authorization_manual": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "manual"
+        }
+      },
+      "required": [
+        "schema"
+      ],
+      "additionalProperties": false,
+      "description": "4.1 intake: a manual block holds only this key (V-0)"
+    },
+    "authorization_legacy": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "authorization/1-legacy"
+        },
+        "source": {
+          "const": "USER_EXPLICIT"
+        },
+        "project": {
+          "$ref": "#/$defs/project"
+        },
+        "session": {
+          "$ref": "#/$defs/uuid"
+        },
+        "message_uuid": {
+          "$ref": "#/$defs/uuid"
+        },
+        "presentation_uuid": {
+          "$ref": "#/$defs/uuid"
+        },
+        "offer_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        },
+        "response": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "plan": {
+              "const": "none"
+            },
+            "grouping": {
+              "const": "none"
+            },
+            "branch": {
+              "const": "none"
+            }
+          },
+          "required": [
+            "plan",
+            "grouping",
+            "branch"
+          ],
+          "additionalProperties": false
+        },
+        "grants": {
+          "const": [
+            "ruling"
+          ]
+        },
+        "standing": {
+          "const": false
+        },
+        "supersedes": {
+          "$ref": "#/$defs/supersedes"
+        }
+      },
+      "required": [
+        "schema",
+        "source",
+        "project",
+        "session",
+        "message_uuid",
+        "presentation_uuid",
+        "offer_digest",
+        "date",
+        "response",
+        "scope",
+        "grants",
+        "standing",
+        "supersedes"
+      ],
+      "additionalProperties": false,
+      "description": "V-12: documents a ruling only; verify and reserve return legacy at V-0"
+    },
+    "authorization": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/authorization_v1"
+        },
+        {
+          "$ref": "#/$defs/authorization_manual"
+        },
+        {
+          "$ref": "#/$defs/authorization_legacy"
+        }
+      ]
+    }
+  }
+}

@@ -19,7 +19,7 @@ Artifact naming conventions:
 
 // turbo-all
 // NOTE: turbo-all sets SafeToAutoRun=true for non-destructive commands (rg, Get-Content, etc.).
-// It does NOT override AGENTS.md §Authority and Approval: "Never auto-commit." Git commit/push still requires explicit user direction.
+// It does NOT override AGENTS.md §Authority and Approval: a commit runs only on explicit user direction or as the `PC`, `COMMIT` or H2-6 row under a verified `run_parameters` grant; a push always needs explicit user direction.
 
 ## Prerequisites
 
@@ -62,7 +62,7 @@ The orchestrating agent will:
 5. Generate `implementation-plan.md` and `task.md` in the project folder
 6. Auto-dispatch `/plan-critical-review` via the independent-reviewer chain (`independent_reviewer` → `fallback_reviewer` (`tools/Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer`, only on a rate-limit receipt, flagged same-vendor) → **human**; `.agent/docs/model-routing.md`)
 7. Loop corrections until APPROVED (or HARD STOP at the 3-round cap, presented as a Decision Brief — recommendation first — per `create-plan.md` §5 round-cap block and `.agent/docs/human-decision-protocol.md` §5)
-8. On `approved`: continue to Step 4 per your harness's `plan_to_exec_gate` flag (`.agent/docs/harness-profiles.md`) — `reviewer-auto` continues immediately; `plan_to_exec_gate: human` (the primary-driver default) ends the turn and waits for the user's explicit next chat message before Step 4 (`create-plan.md` §5c, `GUARDRAILS.md` SIGN 1)
+8. On `approved`: continue to Step 4 per your harness's `plan_to_exec_gate` flag (`.agent/docs/harness-profiles.md`) — `reviewer-auto` continues immediately; `plan_to_exec_gate: human` (the primary-driver default) ends the turn and waits for the user's explicit next chat message before Step 4 (`create-plan.md` §5c, `GUARDRAILS.md` SIGN 1); a verified `run_parameters` `exec_start` grant in `task.md` gives that message in advance: `create-plan.md` §5d runs `PC`, then Step 4 starts in the same turn
 
 > **Note:** The `/create-plan` workflow now auto-dispatches plan critical review.
 > The human no longer needs to manually invoke `/plan-critical-review`.
@@ -117,7 +117,7 @@ Key rules during execution:
   loads that complete set instead of only the latest handoff.
 - **Keep review continuity explicit**: for a given project plan folder, maintain one rolling `-plan-critical-review.md` file for plan review passes and one rolling `-implementation-critical-review.md` file for project-level implementation critique/recheck passes
 - If a new spec gap appears mid-execution, stop coding, return to planning/research, update the plan with the source-backed resolution, and get approval on the revised plan before continuing
-- **Do not auto-commit** — propose conventional commit messages to the human instead; proposed messages must not include AI attribution trailers or generated-by statements such as `Co-Authored-By: Claude`
+- **Commit only through the `COMMIT` and H2-6 rows** (`TASK-TEMPLATE.md` v2.4): under `commit_exec: true` with a verified `exec_commit` grant, `COMMIT` runs `tools/commit_batch.py` from the H2-5 manifest; otherwise propose conventional commit messages to the human. Never auto-commit outside those rows. Commit messages, run or proposed, must not include AI attribution trailers or generated-by statements such as `Co-Authored-By: Claude`
 - **Recite remaining work (anti-drift, Manus pattern):** after each MEU handoff AND at the start of the closeout (Step 5), re-read `task.md` and restate the still-unchecked (`[ ]`/`[/]`) rows in one line before starting the next item. This pushes the live task state into recent attention so the closeout list does not drift out of context as tool output accumulates.
 
 ### 4b. Pre-Handoff Self-Review Protocol
@@ -215,11 +215,10 @@ When every machine rung is rate-limited or unavailable, this loop does not fall 
 > The ONLY sanctioned turn-enders are the four outcomes in `AGENTS.md` §Execution Contract: DONE, review cap, reviewer unavailable, human decision; compaction continues, and a necessary hand-back without compaction belongs to human decision.
 
 > [!CAUTION]
-> **Do NOT auto-commit after execution review approval.** Present proposed commit
-> messages to the human and wait for explicit commit direction. Do not include
-> AI attribution trailers or generated-by statements in proposed commit text.
+> **After execution review approval, commit only through the `COMMIT` and H2-6 rows** (the
+> commit rule of Step 4 above, which keeps the trailer rule). Never push.
 
-**Edge cases** (same as `create-plan.md` §5e):
+**Edge cases** (same as `create-plan.md` §5f):
 - Reviewer asks questions → `human-decision-protocol.md` §2–§4 (precedent sweep, research, obviousness test): auto-answer and log, or HARD STOP with a Decision Brief (recommendation first) for the human
 - Rate limit mid-loop → fallback reviewer or HARD STOP with timer
 - Session crash → review file on disk is the resumption checkpoint
@@ -427,12 +426,19 @@ An exec run records what it landed, so the monitor can verify DONE. Keep this or
    only after the product part is in the store. A crash between `land` and the capture leaves the
    worktree; the resumed run captures, then removes. A main-tree run captures at the same row,
    with no `land` and no `remove`.
-3. After H2-5: write `stop_gate: "released:done"`, then run
-   `credits_msg.py landing --part closeout`, then write the final message. The seal is the
-   run's last write to the tree.
+3. After H2-6, which has already written `stop_gate: "released:done"` and `status: complete`:
+   run the final audit (`run_parameters.py final --produce`), then `credits_msg.py landing
+   --part closeout`, then write the final message; the monitor writes the seal
+   (`final --seal`). Nothing after H2-6 edits `task.md`. A task made from `TASK-TEMPLATE.md`
+   v2.3 or older keeps its H2-5a seal row: after H2-5, write `stop_gate: "released:done"`,
+   then run `credits_msg.py landing --part closeout`, then write the final message.
 
 An interactive run (no `CREDITS_RUN_ID`) keeps `land` → `remove` and runs no `credits_msg.py`
 call.
+
+**Worktree rule.** Remove an executor worktree only with `tools/executor_worktree.py remove
+<path>`, with the shell's working directory on the main tree; never `rm -rf` or `rmdir` it
+(`terminal-preflight/SKILL.md`).
 
 ### What the monitor does
 
@@ -445,7 +451,8 @@ not lost, and no one resumes it without a human.
   marks the run's successors free to start.
 - `done_unverified`: DONE with evidence missing. No successor starts; the human decides.
 - `parked`: `PARKED:approved` with the approved plan review on disk. The exec run waits for the
-  human's "proceed".
+  human's "proceed"; under `parked_by: exec_after_plan` that word is the E17 `start_exec` event,
+  the one exit from the park.
 - `decision`: `STOPPED:decision`. The notice holds the decision text.
 - `handback`: `STOPPED:handback`, for example after a `stop-after-row`.
 - `round_cap`, `reviewer_unavailable`: the matching `stop_gate` release.
@@ -489,7 +496,7 @@ not lost, and no one resumes it without a human.
 - [ ] Reflection file created at `docs/execution/reflections/`
 - [ ] Metrics table updated
 - [ ] Session digest created at `.agent/context/sessions/{conversation-id}/digest.md`
-- [ ] Proposed commit messages presented to human (do NOT auto-commit; no AI attribution trailers)
+- [ ] `COMMIT` and H2-6 done per `commit_exec` (committed under a verified grant, or proposed messages presented to the human); no AI attribution trailers
 
 ## Final validation and evidence binding
 

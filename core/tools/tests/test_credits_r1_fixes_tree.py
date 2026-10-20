@@ -299,7 +299,7 @@ class Chain:
         return code, self.capsys.readouterr().out.splitlines()
 
     def wt_path(self, slug: str) -> Path:
-        return self.repo.parent / f"{self.repo.name}-wt-{slug}"
+        return Path(self.tool.WORKTREE_PARENT) / f"wt-{slug}"
 
     def create(self, slug: str, *extra: str) -> Path:
         code, lines = self.helper("create", f"wt-{slug}", *extra)
@@ -344,6 +344,8 @@ def ch(
         return 0
 
     monkeypatch.setattr(tool, "_build_venv", fake_venv)
+    parent = tmp_path / "wt"
+    monkeypatch.setattr(tool, "WORKTREE_PARENT", parent, raising=False)
     monkeypatch.delenv("CREDITS_BASE_COMMIT", raising=False)
     st = Store(tmp_path / "store")
     st.root.mkdir()
@@ -363,8 +365,8 @@ def ch(
         tool=tool,
         capsys=capsys,
     )
-    for entry in tmp_path.iterdir():
-        if entry.name.startswith(f"{repo.name}-"):
+    if parent.is_dir():
+        for entry in parent.iterdir():
             shutil.rmtree(entry, ignore_errors=True)
 
 

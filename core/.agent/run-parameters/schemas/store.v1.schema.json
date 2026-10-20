@@ -1,0 +1,377 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://{{PROJECT_NAME}}.local/run-parameters/store.v1.schema.json",
+  "title": "Authority store files: store.json, store.lock, txn.jsonl (R\u00a74.1)",
+  "x-example-root": [
+    "run-parameters-store"
+  ],
+  "x-schema-id": "run-parameters-store/1",
+  "type": "object",
+  "properties": {
+    "run-parameters-store": {
+      "type": "object",
+      "properties": {
+        "store_json": {
+          "$ref": "#/$defs/store_json"
+        },
+        "lock": {
+          "$ref": "#/$defs/lock_body"
+        },
+        "txn_line": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/txn_intent"
+            },
+            {
+              "$ref": "#/$defs/txn_done"
+            }
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "minProperties": 1
+    }
+  },
+  "required": [
+    "run-parameters-store"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}-[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "P-3 plan slug"
+    },
+    "grouping": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        }
+      ],
+      "description": "P-3g grouping slug or the sentinel none"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "P-2 RFC 3339 UTC, seconds, literal Z"
+    },
+    "expires": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      ],
+      "description": "P-2 none or YYYY-MM-DD (23:59:59 UTC of that day)"
+    },
+    "project": {
+      "type": "string",
+      "pattern": "^([A-Z]:(/[^/\\\\]+)+|(/[^/\\\\]+)+)$",
+      "description": "P-1 canonical display path"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^(?!none$)(?!/)(?!.*//)(?!.*\\.\\.)[A-Za-z0-9._/-]+(?<!/)(?<!\\.lock)$",
+      "description": "P-4 refs/heads/<branch> name"
+    },
+    "grants": {
+      "enum": [
+        [
+          "exec_commit"
+        ],
+        [
+          "exec_start"
+        ],
+        [
+          "finalize"
+        ],
+        [
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start"
+        ],
+        [
+          "exec_commit",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ]
+      ],
+      "description": "P-5 non-empty subset of the four acts, byte-sorted; never push; ruling is not a grant"
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      ]
+    },
+    "decisions": {
+      "enum": [
+        "hdp",
+        "human-all"
+      ]
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "anyOf": [
+            {
+              "const": "none"
+            },
+            {
+              "$ref": "#/$defs/slug"
+            }
+          ]
+        },
+        "grouping": {
+          "$ref": "#/$defs/grouping"
+        },
+        "branch": {
+          "$ref": "#/$defs/branch"
+        }
+      },
+      "required": [
+        "plan",
+        "grouping",
+        "branch"
+      ],
+      "additionalProperties": false
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/slug"
+      },
+      "uniqueItems": true,
+      "description": "byte-sorted; checked by the verifier (sort order is not expressible here)"
+    },
+    "store_json": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "run-parameters-store/1"
+        },
+        "repo_id": {
+          "type": "object",
+          "properties": {
+            "roots": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "common_dir": {
+              "$ref": "#/$defs/project"
+            },
+            "store_uuid": {
+              "$ref": "#/$defs/uuid"
+            }
+          },
+          "required": [
+            "roots",
+            "common_dir",
+            "store_uuid"
+          ],
+          "additionalProperties": false
+        },
+        "inventory": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+$"
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "required files and folders; under D-27 also the witness config keys run-parameters.witnessSeq and run-parameters.witnessDigest"
+        },
+        "created": {
+          "$ref": "#/$defs/date"
+        }
+      },
+      "required": [
+        "schema",
+        "repo_id",
+        "inventory",
+        "created"
+      ],
+      "additionalProperties": false
+    },
+    "lock_body": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pid_start": {
+          "type": "string",
+          "minLength": 1
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "ts": {
+          "$ref": "#/$defs/date"
+        }
+      },
+      "required": [
+        "pid",
+        "pid_start",
+        "host",
+        "session",
+        "token",
+        "ts"
+      ],
+      "additionalProperties": false,
+      "description": "store.lock body; D-28 unlock renames to store.lock.unlock-<token> then verifies"
+    },
+    "txn_intent": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "txn": {
+          "$ref": "#/$defs/uuid"
+        },
+        "intent": {
+          "const": true
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+$"
+              },
+              "digest": {
+                "$ref": "#/$defs/digest"
+              }
+            },
+            "required": [
+              "path",
+              "digest"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "ts": {
+          "$ref": "#/$defs/date"
+        }
+      },
+      "required": [
+        "seq",
+        "txn",
+        "intent",
+        "files",
+        "ts"
+      ],
+      "additionalProperties": false
+    },
+    "txn_done": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "txn": {
+          "$ref": "#/$defs/uuid"
+        },
+        "done": {
+          "const": true
+        },
+        "ts": {
+          "$ref": "#/$defs/date"
+        }
+      },
+      "required": [
+        "seq",
+        "txn",
+        "done",
+        "ts"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

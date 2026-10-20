@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://{{PROJECT_NAME}}.local/run-parameters/policy.v1.schema.json",
+  "title": ".agent/run-parameters.policy.json (R\u00a74.8 activation)",
+  "x-example-root": [
+    "run-parameters-policy"
+  ],
+  "x-schema-id": "none",
+  "type": "object",
+  "properties": {
+    "run-parameters-policy": {
+      "type": "object",
+      "properties": {
+        "policy_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "components": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        },
+        "rulings": {
+          "type": "object",
+          "properties": {
+            "d19": {
+              "enum": [
+                "A",
+                "B"
+              ]
+            },
+            "d20": {
+              "enum": [
+                "A",
+                "B"
+              ]
+            }
+          },
+          "required": [
+            "d19",
+            "d20"
+          ],
+          "additionalProperties": false
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "plan_commit": {
+              "enum": [
+                "headless",
+                "interactive",
+                "off"
+              ]
+            },
+            "exec_start": {
+              "enum": [
+                "headless",
+                "interactive",
+                "off"
+              ]
+            },
+            "exec_commit": {
+              "enum": [
+                "headless",
+                "interactive",
+                "off"
+              ]
+            },
+            "finalize": {
+              "enum": [
+                "headless",
+                "interactive",
+                "off"
+              ]
+            }
+          },
+          "required": [
+            "plan_commit",
+            "exec_start",
+            "exec_commit",
+            "finalize"
+          ],
+          "additionalProperties": false
+        },
+        "ask_rules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "policy_version",
+        "components",
+        "rulings",
+        "capabilities",
+        "ask_rules"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "run-parameters-policy"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}-[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "P-3 plan slug"
+    },
+    "grouping": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        }
+      ],
+      "description": "P-3g grouping slug or the sentinel none"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "P-2 RFC 3339 UTC, seconds, literal Z"
+    },
+    "expires": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      ],
+      "description": "P-2 none or YYYY-MM-DD (23:59:59 UTC of that day)"
+    },
+    "project": {
+      "type": "string",
+      "pattern": "^([A-Z]:(/[^/\\\\]+)+|(/[^/\\\\]+)+)$",
+      "description": "P-1 canonical display path"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^(?!none$)(?!/)(?!.*//)(?!.*\\.\\.)[A-Za-z0-9._/-]+(?<!/)(?<!\\.lock)$",
+      "description": "P-4 refs/heads/<branch> name"
+    },
+    "grants": {
+      "enum": [
+        [
+          "exec_commit"
+        ],
+        [
+          "exec_start"
+        ],
+        [
+          "finalize"
+        ],
+        [
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start"
+        ],
+        [
+          "exec_commit",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ]
+      ],
+      "description": "P-5 non-empty subset of the four acts, byte-sorted; never push; ruling is not a grant"
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      ]
+    },
+    "decisions": {
+      "enum": [
+        "hdp",
+        "human-all"
+      ]
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "anyOf": [
+            {
+              "const": "none"
+            },
+            {
+              "$ref": "#/$defs/slug"
+            }
+          ]
+        },
+        "grouping": {
+          "$ref": "#/$defs/grouping"
+        },
+        "branch": {
+          "$ref": "#/$defs/branch"
+        }
+      },
+      "required": [
+        "plan",
+        "grouping",
+        "branch"
+      ],
+      "additionalProperties": false
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/slug"
+      },
+      "uniqueItems": true,
+      "description": "byte-sorted; checked by the verifier (sort order is not expressible here)"
+    }
+  }
+}

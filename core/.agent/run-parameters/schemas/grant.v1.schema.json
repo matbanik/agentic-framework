@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://{{PROJECT_NAME}}.local/run-parameters/grant.v1.schema.json",
+  "title": "grants/<message_uuid>.json (V-8, V-8w)",
+  "x-example-root": [
+    "run-parameters-grant"
+  ],
+  "x-schema-id": "run-parameters-grant/1",
+  "type": "object",
+  "properties": {
+    "run-parameters-grant": {
+      "type": "object",
+      "properties": {
+        "message_uuid": {
+          "$ref": "#/$defs/uuid"
+        },
+        "offer": {
+          "type": "object",
+          "description": "the verified offer snapshot (run-parameters-offer/1 payload)"
+        },
+        "offer_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "chain": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/uuid"
+          },
+          "minItems": 1
+        },
+        "consumed": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}-[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "enum": [
+                "exec_commit",
+                "exec_start",
+                "finalize",
+                "plan_commit"
+              ]
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/reservation"
+            }
+          }
+        },
+        "superseded_by": {
+          "anyOf": [
+            {
+              "const": "none"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message_uuid",
+        "offer",
+        "offer_digest",
+        "chain",
+        "consumed",
+        "superseded_by"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "run-parameters-grant"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}-[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "P-3 plan slug"
+    },
+    "grouping": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        }
+      ],
+      "description": "P-3g grouping slug or the sentinel none"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "P-2 RFC 3339 UTC, seconds, literal Z"
+    },
+    "expires": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      ],
+      "description": "P-2 none or YYYY-MM-DD (23:59:59 UTC of that day)"
+    },
+    "project": {
+      "type": "string",
+      "pattern": "^([A-Z]:(/[^/\\\\]+)+|(/[^/\\\\]+)+)$",
+      "description": "P-1 canonical display path"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^(?!none$)(?!/)(?!.*//)(?!.*\\.\\.)[A-Za-z0-9._/-]+(?<!/)(?<!\\.lock)$",
+      "description": "P-4 refs/heads/<branch> name"
+    },
+    "grants": {
+      "enum": [
+        [
+          "exec_commit"
+        ],
+        [
+          "exec_start"
+        ],
+        [
+          "finalize"
+        ],
+        [
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start"
+        ],
+        [
+          "exec_commit",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ],
+        [
+          "exec_commit",
+          "exec_start",
+          "finalize",
+          "plan_commit"
+        ]
+      ],
+      "description": "P-5 non-empty subset of the four acts, byte-sorted; never push; ruling is not a grant"
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      ]
+    },
+    "decisions": {
+      "enum": [
+        "hdp",
+        "human-all"
+      ]
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "anyOf": [
+            {
+              "const": "none"
+            },
+            {
+              "$ref": "#/$defs/slug"
+            }
+          ]
+        },
+        "grouping": {
+          "$ref": "#/$defs/grouping"
+        },
+        "branch": {
+          "$ref": "#/$defs/branch"
+        }
+      },
+      "required": [
+        "plan",
+        "grouping",
+        "branch"
+      ],
+      "additionalProperties": false
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/slug"
+      },
+      "uniqueItems": true,
+      "description": "byte-sorted; checked by the verifier (sort order is not expressible here)"
+    },
+    "reservation": {
+      "type": "object",
+      "properties": {
+        "op_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "const": "reserved"
+        },
+        "ts": {
+          "$ref": "#/$defs/date"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "op_id",
+        "state",
+        "ts",
+        "seq"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

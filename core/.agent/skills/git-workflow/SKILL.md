@@ -7,7 +7,9 @@ description: Agent-safe git operations with SSH commit signing. Handles commit, 
 
 ## Commit Policy
 
-> **Do NOT `git commit` or `git push` unless (a) the user explicitly directs it, or (b) it is a defined step in the approved plan/task.** Never auto-commit at the end of a correction cycle or verification pass.
+> **Do NOT `git commit` or `git push` unless (a) the user explicitly directs it (the agent-run form is `tools/commit_batch.py --human-directed --message-uuid <uuid>`), (b) it is a defined step in the approved plan/task, or (c) — for a commit only, never a push — a verified `run_parameters` grant in the plan's `task.md`, applied by the `PC`, `COMMIT` or H2-6 row through `commit_batch.py` in exact-scope mode.** Never auto-commit at the end of a correction cycle or verification pass.
+>
+> Conventional commits; never interactive git: the message is given on the command line (`git commit -m "message"`) or from a file (`git commit -F <file>`, the child command that the exact-scope route runs behind its PowerShell wrapper's `-MessageFile` argument, `agent-commit.ps1:45,90`).
 
 > [!CAUTION]
 > **NEVER use `--no-verify` without explicit human approval.**
@@ -167,7 +169,8 @@ paths, rejects base/tree/message/signing-fingerprint drift, creates an
 SSH-signed commit, verifies its signature and parent/tree, and records the
 actual SHA. It then resets only the committed scope entries in the caller's
 index; unrelated staged entries remain staged. It never pushes and must not be
-invoked before the packet's direct human approval has been validated.
+invoked before the packet's direct human approval, or its verified `run_parameters`
+grant, has been validated.
 
 ### What the Script Does (Do NOT Do These Manually)
 

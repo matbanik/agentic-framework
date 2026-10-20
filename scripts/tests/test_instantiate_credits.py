@@ -358,7 +358,10 @@ def test_fragment_holds_the_credits_entries() -> None:
     assert "Stop" in {e for e, _m, c in entries if INBOX_HOOK in c}
     stop_gate = [c for e, _m, c in entries if e == "Stop" and STOP_GATE in c]
     assert stop_gate == [f'{prefix}{STOP_GATE}" "${{CLAUDE_PROJECT_DIR}}"'], stop_gate
-    assert len(entries) == 3, entries
+    # Run parameters (FS §3, D-45 A): the fourth entry is the ``commit_gate.py`` Bash hook.
+    commit_gate = [(e, m) for e, m, c in entries if c == f'{prefix}.claude/hooks/commit_gate.py"']
+    assert commit_gate == [("PreToolUse", "Bash")], entries
+    assert len(entries) == 4, entries
 
 
 def test_run_creates_settings_with_every_fragment_entry(adopter: Path, on_windows: None) -> None:
@@ -670,14 +673,18 @@ def test_template_h2_3c_splits_land_capture_remove() -> None:
 
 
 def test_template_seal_row_follows_h2_5_after_released_done() -> None:
-    """AC-J.5: the seal row is right after H2-5 and writes ``released:done`` first."""
+    """AC-J.5 (run parameters, M7_EDITS T-1): no H2-5a seal row; H2-6 writes
+    ``released:done`` and the seal is a terminal step after it."""
     rows = _template_rows()
-    names = list(rows)
-    seal = [n for n in names if SEAL_CALL in rows[n]]
-    assert len(seal) == 1, seal
-    assert names.index(seal[0]) == names.index("H2-5") + 1, names
-    _assert_order(rows[seal[0]], (RELEASED_DONE, SEAL_CALL), seal[0])
-    assert "CREDITS_RUN_ID" in rows[seal[0]]
+    assert "H2-5a" not in rows, list(rows)
+    assert not [n for n in rows if SEAL_CALL in rows[n]], list(rows)
+    assert RELEASED_DONE in rows["H2-6"]
+    text = _text(TASK_TEMPLATE)
+    terminal = text.find("**Terminal steps (not rows).**")
+    assert terminal > text.find(rows["H2-6"]), "the terminal steps come before H2-6"
+    paragraph = " ".join(text[terminal:].split("\n\n", 1)[0].split())
+    _assert_order(paragraph, ("final --produce", SEAL_CALL), "terminal steps")
+    assert "credits run" in paragraph, paragraph
 
 
 def test_template_four_calls_in_order() -> None:

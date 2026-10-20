@@ -55,6 +55,17 @@
     (run_id, chain_id, holds, halted, ready). A throw is a failed start, logged; the run stays a
     candidate. Default: Start-CreditsRunTask.ps1 -RunId <run> -StartedBy monitor-chain
     -ChainId <chain id>.
+.PARAMETER RunParametersTool
+    tools/run_parameters.py, run with the manifest's launch.python_exe in the project root, for a
+    run whose manifest names phases (report section 4.4): `stop --reason no_record` for a run
+    that died with no Status, and `final --plan <plan> --seal` for a verified DONE. Default: the
+    repository's tools/run_parameters.py. A legacy run (no phases) never calls it.
+.PARAMETER PhaseTool
+    tools/credits_msg.py, run like RunParametersTool, for a run whose manifest names phases
+    (EA-21, EA-23): `phase E13 --by monitor` after a sealed DONE and `phase E6 --by monitor` after
+    a budget_cap class. Each call has CREDITS_RUN_ID, CREDITS_SEGMENT (the last segment) and
+    CREDITS_STATE_DB. A failed call writes one phase_call_failed WARN record and leaves the class.
+    Default: the repository's tools/credits_msg.py. A legacy run never calls it.
 
 .EXAMPLE
     pwsh -NoProfile -File .agent/skills/claude-credits/Watch-CreditsRuns.ps1
@@ -67,7 +78,9 @@ param(
     [hashtable]$Observations = @{},
     [scriptblock]$Notifier,
     [object[]]$HostEvents = @(),
-    [scriptblock]$ChainStarter
+    [scriptblock]$ChainStarter,
+    [string]$RunParametersTool,
+    [string]$PhaseTool
 )
 
 Set-StrictMode -Version Latest
@@ -86,14 +99,21 @@ $script:TaskStarter = Join-Path $PSScriptRoot 'Start-CreditsRunTask.ps1'
 # Start-CreditsRunTask.ps1 waits up to REQUEST_ACCEPT_TIMEOUT_S (120 s) for accepted; the default
 # chain starter gives it that wait and a margin.
 $script:ChainChildTimeoutMs = 150000
+$script:RpTool = if ($RunParametersTool) { $RunParametersTool } else { Join-Path $script:RepoRoot 'tools/run_parameters.py' }
+$script:PhaseTool = if ($PhaseTool) { $PhaseTool } else { Join-Path $script:RepoRoot 'tools/credits_msg.py' }
 
-# R§5.2: the gate that each STOPPED:<class> Status needs in task.md.
+# R§5.2: the gate that each STOPPED:<class> Status needs in task.md. budget is the save-state
+# hand-back; human_stop, no_record and ambiguous are phase-machine stops for the human (R§4.4).
 $script:StoppedGates = @{
     decision             = 'released:human-gate'
     handback             = 'released:handback'
     base_moved           = 'released:handback'
     round_cap            = 'released:round-cap'
     reviewer_unavailable = 'released:reviewer-unavailable'
+    budget               = 'released:handback'
+    human_stop           = 'released:human-gate'
+    no_record            = 'released:human-gate'
+    ambiguous            = 'released:human-gate'
 }
 $script:BillingPattern = '(?i)credit balance is too low|billing_error'
 $script:TransientPattern = '(?i)rate_limit_error|overloaded_error|\bapi_error\b|server_error|API Error: (429|5\d\d)\b|stream (error|ended|closed)|ECONNRESET|ETIMEDOUT|socket hang up'
@@ -364,6 +384,183 @@ function Test-PlanReviewApproved($Root, $PlanFolder) {
     return $text -match '(?im)^\s*verdict:\s*"?approved"?\s*$'
 }
 
+# One run-side tool call for a phased run, in its project root with the manifest's python_exe,
+# with $Environment added to the child's environment only. Returns Code, Result (its last JSON
+# line, or $null) and Stderr. Throws on a start failure or a timeout.
+function Invoke-RunTool($Run, [string]$Tool, [string[]]$Arguments, [hashtable]$Environment = @{}) {
+    $python = [string](Get-Prop $Run 'python_exe')
+    if (-not $python) { $python = Get-CreditsPython }
+    $psi = [System.Diagnostics.ProcessStartInfo]::new($python)
+    foreach ($a in @('-X', 'utf8', $Tool) + $Arguments) { $psi.ArgumentList.Add([string]$a) }
+    $root = [string](Get-Prop (Get-Prop $Run 'manifest') 'project_root')
+    if ($root -and (Test-Path -LiteralPath $root -PathType Container)) { $psi.WorkingDirectory = $root }
+    foreach ($name in $Environment.Keys) { $psi.Environment[[string]$name] = [string]$Environment[$name] }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $leaf = Split-Path -Leaf $Tool
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        if (-not $proc.WaitForExit($script:ChildTimeoutMs)) {
+            try { $proc.Kill($true) } catch { Write-MonitorLog 'WARN' 'run_tool_kill_failed' @{ tool = $leaf; error = $_.Exception.Message } }
+            throw "$leaf did not end in $($script:ChildTimeoutMs / 1000) s"
+        }
+        $proc.WaitForExit()
+        $last = @($outTask.Result -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith('{') }) | Select-Object -Last 1
+        $result = $null
+        if ($last) { try { $result = $last | ConvertFrom-Json -ErrorAction Stop } catch { $result = $null } }
+        return [pscustomobject]@{ Code = $proc.ExitCode; Result = $result; Stderr = ([string]$errTask.Result).Trim() }
+    } finally {
+        $proc.Dispose()
+    }
+}
+
+# One tools/run_parameters.py call for a phased run (Invoke-RunTool).
+function Invoke-RunParameters($Run, [string[]]$Arguments) {
+    return Invoke-RunTool $Run $script:RpTool $Arguments
+}
+
+# EA-21, EA-23: one `credits_msg.py phase <event> --by monitor` call for a phased run, with the
+# run's CREDITS_RUN_ID, its last segment and this store. True when the tool recorded it; a start
+# failure, a timeout or a nonzero exit writes one phase_call_failed WARN record and returns false.
+# The caller's class does not depend on the answer.
+function Invoke-PhaseCall($Run, [string]$PhaseEvent, [System.Collections.IDictionary]$Payload) {
+    $runId = [string](Get-Prop $Run 'run_id')
+    $segmentId = [string](Get-Prop (Get-Prop $Run 'segment') 'segment_id')
+    $fields = @{ run_id = $runId; phase_event = $PhaseEvent }
+    if (-not $segmentId) {
+        Write-MonitorLog 'WARN' 'phase_call_failed' ($fields + @{ reason = 'segment_missing' })
+        return $false
+    }
+    $environment = @{ CREDITS_RUN_ID = $runId; CREDITS_SEGMENT = $segmentId; CREDITS_STATE_DB = $script:Db }
+    $arguments = @('phase', $PhaseEvent, '--by', 'monitor', '--payload', ($Payload | ConvertTo-Json -Compress -Depth 4))
+    try {
+        $res = Invoke-RunTool $Run $script:PhaseTool $arguments $environment
+    } catch {
+        Write-MonitorLog 'WARN' 'phase_call_failed' ($fields + @{ reason = 'tool_failed'; error = $_.Exception.Message })
+        return $false
+    }
+    if ($res.Code -ne 0 -or [string](Get-Prop $res.Result 'result') -ne 'recorded') {
+        Write-MonitorLog 'WARN' 'phase_call_failed' ($fields + @{
+                exit_code = $res.Code; reason = [string](Get-Prop $res.Result 'error'); stderr = $res.Stderr })
+        return $false
+    }
+    Write-MonitorLog 'INFO' 'phase_recorded' ($fields + @{ state = [string](Get-Prop $res.Result 'state'); seq = Get-Prop $res.Result 'seq' })
+    return $true
+}
+
+# The E6 tokens of a budget cap: input + output + cache creation + cache read of the output.json
+# usage; a missing or non-numeric count is 0.
+function Get-UsageTokens($Output) {
+    $usage = Get-Prop $Output 'usage'
+    $total = [long]0
+    foreach ($name in 'input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens') {
+        $value = Get-Prop $usage $name
+        if ($value -is [int] -or $value -is [long] -or $value -is [double] -or $value -is [decimal]) { $total += [long]$value }
+    }
+    return $total
+}
+
+# The plan slug of a run: the leaf of its plan folder.
+function Get-PlanSlug($Run) {
+    $folder = [string](Get-Prop (Get-Prop $Run 'manifest') 'plan_folder')
+    if (-not $folder) { return $null }
+    return Split-Path -Leaf $folder.TrimEnd('/', '\')
+}
+
+# The CLI transcript of a segment's session (credits_state.py transcript_path, R§4.6.3 step 2).
+function Get-SegmentTranscript($Run, $Segment) {
+    $root = [string](Get-Prop (Get-Prop $Run 'manifest') 'project_root')
+    $session = [string](Get-Prop $Segment 'expected_session_id')
+    if (-not $root -or -not $session) { return $null }
+    $base = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else {
+        $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
+        Join-Path $homeDir '.claude'
+    }
+    return Join-Path (Join-Path (Join-Path $base 'projects') ($root -replace '[^A-Za-z0-9]', '-')) "$session.jsonl"
+}
+
+# R§4.4 V6-049: the authoritative E9 record of a phased run that died with no Status. The tool
+# re-checks the four conditions under the lock (dead process, idle transcript, the seq, a
+# nonterminal state) and writes the record; the monitor then syncs the derived view. Returns the
+# stop class when the record says the run stopped, else $null: a refusal (a stale lock, a pending
+# transaction, a condition not met) writes nothing and leaves a no_record_pending WARN record, and
+# a later pass tries again.
+function Invoke-NoRecordStop($Run, $Segment) {
+    $runId = [string](Get-Prop $Run 'run_id')
+    $viewState = [string](Get-Prop $Run 'phase_state')
+    if ($viewState -cmatch '^STOPPED:([a-z_]+)$') { return $Matches[1] }
+    $plan = Get-PlanSlug $Run
+    $processId = Get-Prop $Segment 'pid'
+    $created = ConvertTo-UtcTime (Get-Prop $Segment 'created')
+    $transcript = Get-SegmentTranscript $Run $Segment
+    if (-not $plan -or $null -eq $processId -or $null -eq $created -or -not $transcript) {
+        Write-MonitorLog 'WARN' 'no_record_pending' @{ run_id = $runId; reason = 'identity_missing' }
+        return $null
+    }
+    $seq = Get-Prop $Run 'phase_seq'
+    if ($null -eq $seq) { $seq = 0 }
+    $pidStart = ([DateTimeOffset]::new($created).ToUnixTimeMilliseconds() / 1000.0).ToString('F3', [System.Globalization.CultureInfo]::InvariantCulture)
+    $arguments = @('stop', '--plan', $plan, '--run', $runId, '--reason', 'no_record', '--expect-seq', [string]$seq,
+        '--pid', [string]$processId, '--pid-start', $pidStart, '--transcript', $transcript)
+    try {
+        $res = Invoke-RunParameters $Run $arguments
+    } catch {
+        Write-MonitorLog 'WARN' 'no_record_pending' @{ run_id = $runId; reason = 'tool_failed'; error = $_.Exception.Message }
+        return $null
+    }
+    if ($res.Code -ne 0 -or [string](Get-Prop $res.Result 'result') -ne 'stopped') {
+        Write-MonitorLog 'WARN' 'no_record_pending' @{ run_id = $runId; exit_code = $res.Code; reason = [string](Get-Prop $res.Result 'reason'); stderr = $res.Stderr }
+        return $null
+    }
+    $recorded = Get-Prop $res.Result 'seq'
+    if ($null -ne $recorded) {
+        $sync = Invoke-CreditsState -StateDb $script:Db -Verb phase_sync -Arguments @('--run-id', $runId, '--state', 'STOPPED:no_record', '--seq', [string]$recorded) -NowUtc $script:Clock
+        if ($sync.Code -ne 0) { Write-MonitorLog 'WARN' 'phase_view_sync_failed' @{ run_id = $runId; error = (Format-CreditsStateError $sync) } }
+    }
+    Write-MonitorLog 'INFO' 'no_record_stopped' @{ run_id = $runId; plan = $plan; expect_seq = $seq }
+    return 'no_record'
+}
+
+# R§4.4 V6-050 (D-17): seal the exec phase of a verified DONE. Returns Plan and Generation (the
+# sealed generation, or $null when the tool named none) when the tool sealed it, else $null.
+function Invoke-FinalSeal($Run) {
+    $runId = [string](Get-Prop $Run 'run_id')
+    $plan = Get-PlanSlug $Run
+    if (-not $plan) { return $null }
+    try {
+        $res = Invoke-RunParameters $Run @('final', '--plan', $plan, '--seal')
+    } catch {
+        Write-MonitorLog 'WARN' 'final_seal_failed' @{ run_id = $runId; error = $_.Exception.Message }
+        return $null
+    }
+    if ($res.Code -ne 0) {
+        Write-MonitorLog 'WARN' 'final_seal_failed' @{ run_id = $runId; exit_code = $res.Code; reason = [string](Get-Prop $res.Result 'reason'); stderr = $res.Stderr }
+        return $null
+    }
+    $generation = Get-Prop $res.Result 'generation'
+    Write-MonitorLog 'INFO' 'final_sealed' @{ run_id = $runId; plan = $plan; generation = $generation }
+    return [pscustomobject]@{ Plan = $plan; Generation = $generation }
+}
+
+# EA-21, EA-23: the phase event that the monitor records for one class of a phased run, as
+# Event and Payload, or $null. E13 needs the sealed generation; E6 counts the usage tokens.
+function Get-ClassPhaseEvent([string]$Class, $Seal, $Output) {
+    if ($Class -eq 'done' -and $Seal) {
+        $generation = $Seal.Generation
+        if ($generation -isnot [int] -and $generation -isnot [long]) { return [pscustomobject]@{ Event = 'E13'; Payload = $null } }
+        $stem = "final/$($Seal.Plan)/$generation"
+        return [pscustomobject]@{ Event = 'E13'; Payload = [ordered]@{ receipt = "$stem.json"; seal = "$stem.seal" } }
+    }
+    if ($Class -eq 'budget_cap') {
+        return [pscustomobject]@{ Event = 'E6'; Payload = [ordered]@{ tokens = Get-UsageTokens $Output } }
+    }
+    return $null
+}
+
 # The R§5.2 class of one finalizing run. Returns Class, Missing (done evidence) and Signals.
 function Get-RunClass($Run) {
     $segment = Get-Prop $Run 'segment'
@@ -372,7 +569,15 @@ function Get-RunClass($Run) {
     $planFolder = Get-Prop $manifest 'plan_folder'
     $signals = [ordered]@{}
     $missing = [System.Collections.Generic.List[string]]::new()
-    $verdict = { param([string]$Class) [pscustomobject]@{ Class = $Class; Missing = @($missing); Signals = $signals } }
+    $phased = @(Get-Prop $Run 'phases' | Where-Object { $_ }).Count -gt 0
+    $seal = $null
+    $output = $null
+    $verdict = {
+        param([string]$Class)
+        $phaseEvent = if ($phased) { Get-ClassPhaseEvent $Class $seal $output } else { $null }
+        [pscustomobject]@{ Class = $Class; Missing = @($missing); Signals = $signals; Phase = $phaseEvent }
+    }
+    if ($phased) { $signals.phase_state = Get-Prop $Run 'phase_state' }
 
     # 1. the launcher record.
     $segmentClass = [string](Get-Prop $segment 'stop_class')
@@ -440,6 +645,11 @@ function Get-RunClass($Run) {
             if (-not @($landings | Where-Object { [string](Get-Prop $_ 'part') -eq 'product' }).Count) { $missing.Add('capture') }
             if (-not @($landings | Where-Object { [string](Get-Prop $_ 'part') -eq 'closeout' -and (Get-Prop $_ 'sealed_utc') }).Count) { $missing.Add('seal') }
         }
+        # A phased run's exec phase is sealed only on the verified evidence (V6-050, D-17).
+        if ($missing.Count -eq 0 -and $phased) {
+            $seal = Invoke-FinalSeal $Run
+            if (-not $seal) { $missing.Add('final_seal') }
+        }
         if ($missing.Count -eq 0) { return & $verdict 'done' }
         return & $verdict 'done_unverified'
     }
@@ -453,6 +663,14 @@ function Get-RunClass($Run) {
         if ($script:StoppedGates.ContainsKey($stopped) -and $task.StopGate -eq $script:StoppedGates[$stopped]) { return & $verdict $stopped }
         $missing.Add("stop_gate:$($script:StoppedGates[$stopped])")
         return & $verdict 'unknown'
+    }
+
+    # A phased run with no Status has no terminal record: the tool writes E9 (V6-049). A refusal
+    # leaves the run finalizing for a later pass (class $null).
+    if ($phased -and $null -eq $statusLine) {
+        $stoppedAs = Invoke-NoRecordStop $Run $segment
+        $signals.no_record = if ($stoppedAs) { 'stopped' } else { 'pending' }
+        return & $verdict $stoppedAs
     }
 
     # The background-wait shape (S1 2026-10-14): a clean exit, no terminal Status, an armed task.md.
@@ -480,6 +698,7 @@ function Set-RunClass($Run) {
     $runId = [string](Get-Prop $Run 'run_id')
     $segment = Get-Prop $Run 'segment'
     $verdict = Get-RunClass $Run
+    if (-not $verdict.Class) { return $false }
     $target = switch ($verdict.Class) {
         'done' { 'done' }
         'done_unverified' { 'done_unverified' }
@@ -496,6 +715,16 @@ function Set-RunClass($Run) {
     $null = Invoke-Store 'classify' @('--run-id', $runId, '--to', $target, '--class', $verdict.Class,
         '--notice-ref', $ref, '--notice-json', ($body | ConvertTo-Json -Compress -Depth 6))
     Write-MonitorLog 'INFO' 'run_classified' @{ run_id = $runId; state = $target; class = $verdict.Class; missing = @($verdict.Missing) }
+    # EA-21, EA-23: the phase event of the class, after the class is stored; a failed call leaves it.
+    $phaseEvent = $verdict.Phase
+    if ($phaseEvent) {
+        if ($null -eq $phaseEvent.Payload) {
+            Write-MonitorLog 'WARN' 'phase_call_failed' @{ run_id = $runId; phase_event = $phaseEvent.Event; reason = 'generation_missing' }
+        } else {
+            $null = Invoke-PhaseCall $Run $phaseEvent.Event $phaseEvent.Payload
+        }
+    }
+    return $true
 }
 
 # --- step 6: the notices ----------------------------------------------------------------------
@@ -687,8 +916,7 @@ function Invoke-MonitorPass {
     foreach ($run in @(Get-Prop $view 'runs')) {
         if ($null -eq $run) { continue }
         try {
-            Set-RunClass $run
-            $classified += 1
+            if (Set-RunClass $run) { $classified += 1 }
         } catch {
             Write-MonitorLog 'ERROR' 'classify_failed' @{ run_id = [string](Get-Prop $run 'run_id'); error = $_.Exception.Message }
         }

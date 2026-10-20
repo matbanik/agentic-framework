@@ -201,8 +201,13 @@ class Rig:
             code = exc.code if isinstance(exc.code, int) else 2
         return code, self.capsys.readouterr().out.splitlines()
 
+    @property
+    def parent(self) -> Path:
+        """The configured worktree parent (B-8, AC-G.1)."""
+        return Path(self.tool.WORKTREE_PARENT)
+
     def path(self, slug: str) -> Path:
-        return self.src.parent / f"{self.src.name}-{slug}"
+        return self.parent / slug
 
     def create(self, marker: str, slug: str, *extra: str) -> Path:
         code, lines = self.call("create", slug, *extra)
@@ -217,6 +222,13 @@ class Rig:
         assert not os.path.lexists(wt), f"{marker}: {wt} exists"
         assert not _listed(self.src, wt), f"{marker}: {wt} is a worktree"
         assert _ref(self.src, slug) is None, f"{marker}: the {slug} ref exists"
+
+
+@pytest.fixture(autouse=True)
+def _worktree_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """B-8 (AC-G.1): every worktree this file makes goes under a temp ``WORKTREE_PARENT``."""
+    tool = importlib.import_module("tools.executor_worktree")
+    monkeypatch.setattr(tool, "WORKTREE_PARENT", tmp_path / "wt", raising=False)
 
 
 def _rig(

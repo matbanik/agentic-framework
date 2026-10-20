@@ -12,6 +12,8 @@ transaction and prints one JSON object on stdout::
     python tools/credits_msg.py [--now-utc T] landing --part product
         --changed-files <file> --closeout <path> [--closeout <path> ...]
     python tools/credits_msg.py [--now-utc T] landing --part closeout
+    python tools/credits_msg.py [--now-utc T] phase <event> [--payload <json>] [--op <id>]
+        [--by run|monitor]
     python tools/credits_msg.py authority [--quote <words>]
     python tools/credits_msg.py locate --session <id> --quote <text>
 
@@ -20,6 +22,11 @@ are required (a missing value is a usage error, exit 2, and no store is
 opened). ``CREDITS_CONFIG`` names the config file (default
 ``.agent/credits/config.json`` of this repository). ``tree`` also reads the
 optional ``CREDITS_BASE_COMMIT``. ``locate`` needs none of them.
+
+``phase`` (EA-21 to EA-25) records one event of a run whose manifest names
+``phases``, computes the caller facts from real state and chains the τ events
+that the new state needs. The run calls it with ``--by run``; the monitor calls
+E13 (a sealed DONE) and E6 (a budget cap) with ``--by monitor``.
 
 ``authority`` is a read-only verb (EA-90): it opens the store with
 ``mode=ro``, reads no config, and shows the start request that launched this
@@ -61,9 +68,11 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import ModuleType
 from typing import Any, NoReturn
 
 import credits_state as cs
@@ -116,6 +125,17 @@ ABSENT = cs.ABSENT_BLOB
 WORKTREE_MANIFEST = "executor-worktree.json"
 WORKTREE_REF_PREFIX = "refs/executor-worktrees/"
 
+# R5-8 ``phase``: the event names (they mirror ``run_parameters.PHASE_EVENTS``) and the
+# recorders of a record (EA-21).
+PHASE_EVENTS: tuple[str, ...] = (
+    *(f"E{n}" for n in range(1, 19)),
+    "τ1",
+    "τ2",
+    "τ3",
+    "τ4",
+)
+PHASE_BY = ("run", "monitor")
+
 
 # --- arguments ----------------------------------------------------------------------------
 
@@ -152,6 +172,16 @@ def _arg_rel(text: str) -> str:
     return rel
 
 
+def _arg_payload(text: str) -> dict[str, Any]:
+    try:
+        loaded: Any = json.loads(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"payload is not JSON: {text!r}") from exc
+    if not isinstance(loaded, dict):
+        raise argparse.ArgumentTypeError(f"payload is not a JSON object: {text!r}")
+    return {str(k): v for k, v in loaded.items()}  # pyright: ignore[reportUnknownVariableType]
+
+
 def build_parser() -> _Parser:
     """Return the parser of every verb."""
     parser = _Parser(prog="credits_msg.py", description=__doc__)
@@ -179,6 +209,12 @@ def build_parser() -> _Parser:
 
     p = verbs.add_parser("tree", help="check the base and pin the start tree")
     p.add_argument("path")
+
+    p = verbs.add_parser("phase", help="record one phase event of a phased run")
+    p.add_argument("event", choices=PHASE_EVENTS)
+    p.add_argument("--payload", type=_arg_payload, default=None)
+    p.add_argument("--op", type=cs._arg_key)  # pyright: ignore[reportPrivateUsage]
+    p.add_argument("--by", choices=PHASE_BY, default="run")
 
     p = verbs.add_parser(
         "landing", help="capture the product part or seal the closeout"
@@ -942,7 +978,9 @@ def verb_tree(ctx: cs.Context, env: dict[str, str], path: str) -> cs.Outcome:
     pin or write; the refs are pinned in the main tree, which the run records.
 
     These are the checks of the first start. A run that has fixed B and pinned S
-    continues through ``tree_continue`` (R1-F4).
+    continues through ``tree_continue`` (R1-F4). A phased run that resumes after
+    the plan commit (``plan:pc_done``, EA-24, EA-25) names that commit as
+    ``CREDITS_BASE_COMMIT``; the plan commit moved HEAD past the fixed B.
     """
     run_id = env["CREDITS_RUN_ID"]
     segment_id = env["CREDITS_SEGMENT"]
@@ -994,6 +1032,10 @@ def verb_tree(ctx: cs.Context, env: dict[str, str], path: str) -> cs.Outcome:
                         baseline=baseline or None,
                     )
         else:
+            if not base and cs.manifest_phases(found["manifest_json"]):
+                # EA-24: a phased run that admission did not bind fixes B = HEAD, so its
+                # resume (``phase_tree_continue``) and E15 have a fixed B and a manifest.
+                base = git_text(repo, ["rev-parse", "HEAD"])
             manifest = check_base(repo, base) if base else None
             start = snapshot(repo)
     except GitError as exc:
@@ -1067,6 +1109,8 @@ def tree_continue(
     recorded one (``active_tree_mismatch``) and the pinned start ref is S
     (``start_ref_mismatch``; a missing ref is pinned again).
     """
+    if cs.manifest_phases(found["manifest_json"]):
+        return phase_tree_continue(ctx, env, found, doc, repo, base)
     run_id = env["CREDITS_RUN_ID"]
     segment_id = env["CREDITS_SEGMENT"]
     fixed = str(found["base_commit"])
@@ -1134,8 +1178,28 @@ def tree_continue(
     except GitError as exc:
         raise cs.Refusal("git_failed", str(exc)) from exc
 
+    return carry_continue(ctx, run_id, segment_id, repo, start)
+
+
+def carry_continue(
+    ctx: cs.Context,
+    run_id: str,
+    segment_id: str,
+    repo: Path,
+    start: str,
+    *,
+    sets: Mapping[str, str] | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> cs.Outcome:
+    """Carry the run's first recorded carry manifest to this segment (R1-F4).
+
+    ``sets`` rebinds run columns (the phased resume replaces the tree binding of group
+    (ii)); ``extra`` adds keys to the payload.
+    """
+    rebind = dict(sets or {})
+
     def body(tx: cs.Tx) -> cs.Outcome:
-        get_run(tx, run_id)
+        run = get_run(tx, run_id)
         segment_ordinal(tx, run_id, segment_id)
         first = tx.row(
             "SELECT carry_manifest_json FROM segments WHERE run_id = ?"
@@ -1147,6 +1211,13 @@ def tree_continue(
                 "carry_manifest_missing",
                 f"run {run_id} has a fixed base but no recorded carry manifest",
             )
+        moved = {name: value for name, value in rebind.items() if run[name] != value}
+        if moved:
+            assignments = ", ".join(f"{name} = ?" for name in moved)
+            tx.con.execute(
+                f"UPDATE runs SET {assignments}, updated_utc = ? WHERE run_id = ?",
+                (*moved.values(), tx.ctx.now_utc, run_id),
+            )
         text = str(first["carry_manifest_json"])
         cursor = tx.con.execute(
             "UPDATE segments SET carry_manifest_json = ?, updated_utc = ?"
@@ -1155,11 +1226,287 @@ def tree_continue(
         )
         manifest: Any = json.loads(text)
         return cs.Outcome(
-            "changed" if cursor.rowcount == 1 else "no_change",
-            {"active_tree": str(repo), "start_tree": start, "carry_manifest": manifest},
+            "changed" if cursor.rowcount == 1 or moved else "no_change",
+            {
+                "active_tree": str(repo),
+                "start_tree": start,
+                "carry_manifest": manifest,
+                **dict(extra or {}),
+            },
         )
 
     return cs.transact(ctx, body)
+
+
+# -- R§4.4 the phase-aware resume (AC-F.2) ----------------------------------------------------
+
+#: The four check groups of ``tree_continue`` per suspended state: (i) the executor worktree
+#: and its base, (ii) the main tree and the active tree agree, (iii) the base, the commit
+#: grant environment and ``HEAD``, (iv) the pinned start ref. Each is retained, replaced by
+#: the phase's own check, or n/a; none is dropped.
+PHASE_RESUME: dict[str, dict[str, str]] = {
+    "plan:active": {"i": "n/a", "ii": "n/a", "iii": "retained", "iv": "retained"},
+    "plan:approved": {"i": "n/a", "ii": "n/a", "iii": "replaced", "iv": "retained"},
+    "plan:pc_done": {"i": "n/a", "ii": "n/a", "iii": "retained", "iv": "retained"},
+    "transition:prepared": {
+        "i": "n/a",
+        "ii": "n/a",
+        "iii": "retained",
+        "iv": "retained",
+    },
+    "transition:admitted": {
+        "i": "replaced",
+        "ii": "retained",
+        "iii": "retained",
+        "iv": "retained",
+    },
+    "exec:active": {
+        "i": "retained",
+        "ii": "replaced",
+        "iii": "retained",
+        "iv": "retained",
+    },
+    "exec:finalizing": {
+        "i": "replaced",
+        "ii": "replaced",
+        "iii": "retained",
+        "iv": "retained",
+    },
+}
+#: The facts of ``phase_resume_check``; a missing fact is false.
+RESUME_FACTS: tuple[str, ...] = (
+    "base_ok",
+    "commit_grant_unset",
+    "start_ref_ok",
+    "reservation_present",
+    "binding_active",
+    "worktree_present",
+    "worktree_ok",
+    "removal_recorded",
+    "active_tree_ok",
+    "acts_unconsumed",
+)
+#: The states before execution, where no commit grant may sit in the environment.
+GRANT_UNSET_STATES = frozenset(
+    {"plan:active", "plan:pc_done", "transition:prepared", "transition:admitted"}
+)
+COMMIT_GRANT_ENV = "{{PROJECT_NAME_UPPER}}_COMMIT_GRANT"
+#: The states whose resume reads facts from the authority store (``rp.resume_facts``).
+STORE_FACT_STATES = frozenset({"plan:pc_done", "transition:prepared", "exec:active"})
+
+
+def phase_resume_check(state: str, facts: Mapping[str, object]) -> tuple[str, ...]:
+    """The refusal reasons of a resume of a run suspended in ``state``, in check order.
+
+    An empty tuple passes. ``facts`` holds ``RESUME_FACTS``; a missing fact is false. An
+    unknown state refuses ``phase_state``.
+    """
+    groups = PHASE_RESUME.get(state)
+    if groups is None:
+        raise cs.Refusal("phase_state", f"no resume groups for {state!r}")
+
+    def ok(name: str) -> bool:
+        return facts.get(name) is True
+
+    reasons: list[str] = []
+    if groups["i"] != "n/a":
+        if not ok("worktree_present"):
+            if not ok("removal_recorded"):
+                reasons.append("worktree_lost")
+        elif not ok("worktree_ok"):
+            reasons.append("worktree_mismatch")
+    if groups["ii"] == "retained" and not ok("active_tree_ok"):
+        reasons.append("active_tree_mismatch")
+    if not ok("base_ok"):
+        reasons.append("base_moved")
+    if state in GRANT_UNSET_STATES and not ok("commit_grant_unset"):
+        reasons.append("commit_grant_env")
+    if not ok("start_ref_ok"):
+        reasons.append("start_ref_mismatch")
+    if state in ("plan:pc_done", "transition:prepared"):
+        if not ok("reservation_present"):
+            reasons.append("reservation_missing")
+        if not ok("binding_active"):
+            reasons.append("binding_inactive")
+    if state == "exec:active" and not ok("acts_unconsumed"):
+        reasons.append("act_consumed")
+    return tuple(reasons)
+
+
+def run_parameters_module() -> ModuleType:
+    """``tools/run_parameters.py``, imported only for a phased run (it needs PyYAML)."""
+    import run_parameters  # noqa: PLC0415 - a legacy run never needs it
+
+    return run_parameters
+
+
+def commit_of(repo: Path, name: str) -> str:
+    """The commit ``name`` resolves to, or ``""``."""
+    try:
+        return git_text(
+            repo, ["rev-parse", "--verify", "--quiet", f"{name}^{{commit}}"]
+        )
+    except GitError:
+        return ""
+
+
+def is_ancestor(repo: Path, older: str, newer: str) -> bool:
+    """True when ``older`` is an ancestor of (or is) ``newer``; False on any git failure."""
+    if older == newer:
+        return True
+    try:
+        git_text(repo, ["merge-base", "--is-ancestor", older, newer])
+    except GitError:
+        return False
+    return True
+
+
+def phase_base(records: Sequence[Mapping[str, Any]], fixed: str) -> str:
+    """The base after the plan phase: the last passed E3's ``ref_new``, else the fixed B."""
+    e3 = next(
+        (
+            r
+            for r in reversed(records)
+            if r["event"] == "E3"
+            and r["to"] == "plan:pc_done"
+            and r["guard_result"] == "passed"
+        ),
+        None,
+    )
+    ref = cast_dict(e3.get("payload")).get("ref_new") if e3 else None
+    return str(ref or fixed or "")
+
+
+def phase_tree_continue(
+    ctx: cs.Context,
+    env: dict[str, str],
+    found: sqlite3.Row,
+    doc: dict[str, Any],
+    repo: Path,
+    base: str | None,
+) -> cs.Outcome:
+    """Continue a phased run (manifest ``phases``) per its suspended state (AC-F.2).
+
+    The state comes from the authoritative transition records in the recorded main tree's
+    store, never from the credits view or the shape of the tree. Under run parameters the
+    base and the tree change by design (``PC`` moves B, H2-3c removes the worktree), so the
+    four groups of ``tree_continue`` are retained or replaced per ``PHASE_RESUME``:
+
+    * B: ``plan:active`` keeps the fixed B and refuses another ``CREDITS_BASE_COMMIT``. A
+      later state takes the expected base from ``CREDITS_BASE_COMMIT`` (the resume brief
+      names it from the op records), else the fixed B; it must be B or descend from B, and
+      ``HEAD`` must equal it (``exec:active`` also allows landed rows above it, reported as
+      ``head_ahead``). The recorded B is not rewritten.
+    * Group (ii) replaced: the run's ``active_tree`` and ``main_tree`` are rebound here.
+    * The store facts (reservation, binding, consumption) come from ``rp.resume_facts``; E15
+      then re-runs V-A to V-10 under the resume's ``resume_valid``.
+    """
+    run_id = env["CREDITS_RUN_ID"]
+    segment_id = env["CREDITS_SEGMENT"]
+    fixed = str(found["base_commit"])
+    start = str(found["start_tree"])
+    ref = f"refs/credits/{run_id}/start"
+    plan = Path(str(doc.get("plan_folder") or "").rstrip("/\\")).name
+    if not plan or found["main_tree"] is None:
+        raise cs.Refusal(
+            "manifest_invalid", f"phased run {run_id} names no plan folder or main tree"
+        )
+    store_tree = Path(str(found["main_tree"]))
+    rp = run_parameters_module()
+    authority_errors = (rp.Refusal, rp.NonAuthorizing, rp.GitError, OSError)
+    try:
+        state = str(rp.resume_state(store_tree, plan=plan, run_id=run_id))
+    except authority_errors as exc:
+        raise cs.Refusal("authority_refused", f"{type(exc).__name__}: {exc}") from exc
+    groups = PHASE_RESUME.get(state)
+    if groups is None:
+        raise cs.Refusal("phase_state", f"run {run_id} is in {state}")
+    facts: dict[str, bool] = {name: False for name in RESUME_FACTS}
+    report: dict[str, Any] = {"phase_state": state}
+    try:
+        main, helper = worktree_facts(repo)
+        in_worktree = helper is not None
+        recorded = Path(str(found["active_tree"])) if found["active_tree"] else None
+        if groups["i"] == "n/a" or doc.get("executor_worktree") is not True:
+            facts["worktree_present"] = True
+            facts["worktree_ok"] = True
+        else:
+            elsewhere = (
+                recorded is not None
+                and not same_path(recorded, found["main_tree"])
+                and recorded.is_dir()
+            )
+            facts["worktree_present"] = in_worktree or elsewhere
+            facts["worktree_ok"] = (
+                in_worktree and same_path(main, found["main_tree"])
+            ) or (not in_worktree and state == "exec:finalizing")
+            if not facts["worktree_present"]:
+                facts["removal_recorded"] = bool(
+                    rp.phase_removals(store_tree, plan=plan, run_id=run_id)
+                )
+        facts["active_tree_ok"] = same_path(repo, found["active_tree"]) and same_path(
+            main, found["main_tree"]
+        )
+        want = commit_of(repo, fixed)
+        head = git_text(repo, ["rev-parse", "HEAD"])
+        if state == "plan:active":
+            given = commit_of(repo, base) if base else want
+            facts["base_ok"] = bool(want) and given == want and head == want
+        else:
+            # The launcher passes admission's fixed B on a resume (EA-31); a base the brief
+            # names is used as it is, else the τ3 prepare rule gives the expected base.
+            named = commit_of(repo, base) if base else ""
+            if not named or named == want:
+                records = rp.phase_transitions(store_tree, plan=plan, run_id=run_id)
+                named = commit_of(repo, phase_base(records, fixed))
+            target = named
+            descends = bool(want and target) and is_ancestor(repo, want, target)
+            at_head = head == target or (
+                state == "exec:active" and descends and is_ancestor(repo, target, head)
+            )
+            facts["base_ok"] = descends and at_head
+            report["expected_base"] = target or None
+            if state == "exec:active" and head != target:
+                report["head_ahead"] = head
+        facts["commit_grant_unset"] = not os.environ.get(COMMIT_GRANT_ENV)
+        try:
+            pinned = git_text(
+                main, ["rev-parse", "--verify", "--quiet", f"{ref}^{{tree}}"]
+            )
+        except GitError:
+            pinned = ""
+        facts["start_ref_ok"] = not pinned or pinned == start
+        if state in STORE_FACT_STATES:
+            facts.update(
+                rp.resume_facts(store_tree, plan=plan, run_id=run_id, state=state)
+            )
+        else:
+            facts.update(
+                reservation_present=True, binding_active=True, acts_unconsumed=True
+            )
+    except GitError as exc:
+        raise cs.Refusal("git_failed", str(exc)) from exc
+    except authority_errors as exc:
+        raise cs.Refusal("authority_refused", f"{type(exc).__name__}: {exc}") from exc
+    reasons = phase_resume_check(state, facts)
+    if reasons:
+        raise cs.Refusal(
+            reasons[0],
+            f"phased run {run_id} cannot resume in {state}: {', '.join(reasons)}",
+            phase_state=state,
+            reasons=list(reasons),
+        )
+    try:
+        if not pinned:
+            pin(main, run_id, "start", start)
+    except GitError as exc:
+        raise cs.Refusal("git_failed", str(exc)) from exc
+    sets = (
+        {}
+        if groups["ii"] == "retained"
+        else {"active_tree": str(repo), "main_tree": str(main)}
+    )
+    return carry_continue(ctx, run_id, segment_id, repo, start, sets=sets, extra=report)
 
 
 def run_start_tree(ctx: cs.Context, run_id: str) -> str | None:
@@ -1612,6 +1959,431 @@ def main_locate(args: argparse.Namespace) -> int:
     )
 
 
+# -- R§4.4 the run-side phase records (EA-21 to EA-24) ----------------------------------------
+
+
+@dataclass(frozen=True)
+class PhaseRun:
+    """One phased run as ``phase`` sees it: the engine, its store tree and the run's rows."""
+
+    rp: ModuleType
+    tree: Path
+    plan: str
+    run_id: str
+    by: str
+    doc: dict[str, Any]
+    run: sqlite3.Row
+    segment: sqlite3.Row
+    request: sqlite3.Row | None
+    closeout_sealed: bool
+
+    def record(
+        self,
+        event: str,
+        payload: Mapping[str, Any],
+        facts: Mapping[str, Any],
+        op_id: str = "none",
+    ) -> dict[str, Any]:
+        """One engine ``record_transition`` (the engine's own facts override ``facts``).
+
+        In a marked store the crash windows of EA-26 apply to the run's calls:
+        ``phase_record@<state>`` ends the segment's CLI before a record that leaves
+        ``<state>`` (the engine then exits 97 before the append), and
+        ``phase_entered@<state>`` ends it after the record that enters ``<state>``, then
+        exits 97.
+        """
+        point = self.rp.crash_point(self.tree) if self.by == "run" else None
+        if point is not None and point.startswith("phase_record@"):
+            view = self.rp.phase_state(self.tree, plan=self.plan, run_id=self.run_id)
+            if point == f"phase_record@{view['state']}":
+                end_segment_cli(self.segment)
+        record = dict(
+            self.rp.record_transition(
+                self.tree,
+                plan=self.plan,
+                run_id=self.run_id,
+                event=event,
+                payload=dict(payload),
+                by=self.by,
+                facts=dict(facts),
+                op_id=op_id,
+            )
+        )
+        if point == f"phase_entered@{record['to']}" and record["to"] != record["from"]:
+            end_segment_cli(self.segment)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(self.rp.EXIT_CRASH)
+        return record
+
+    def records(self) -> list[dict[str, Any]]:
+        """The run's transition records."""
+        return [
+            dict(r)
+            for r in self.rp.phase_transitions(
+                self.tree, plan=self.plan, run_id=self.run_id
+            )
+        ]
+
+    def head(self, repo: Path | None = None) -> str:
+        """``HEAD`` of ``repo`` (default the store tree)."""
+        return git_text(repo or self.tree, ["rev-parse", "HEAD"])
+
+
+def end_segment_cli(segment: sqlite3.Row) -> int:
+    """The death of the phase crash seam (EA-26): end the process tree of the segment's CLI.
+
+    The CLI is the process directly below the segment's wrapper (``segments.pid``) on this
+    process's ancestry. Nothing is ended unless the wrapper's start matches
+    ``segments.created`` (kept to the second), so a pid that names another process, or a verb
+    that the wrapper did not start, ends nothing. This process is never ended. Returns the
+    number of processes ended.
+    """
+    import psutil  # noqa: PLC0415 - only the test seam needs it
+
+    pid, created = segment["pid"], segment["created"]
+    if not isinstance(pid, int) or not isinstance(created, str):
+        cs.log("phase_crash_seam", ended=0, reason="identity_missing")
+        return 0
+    try:
+        wrapper = psutil.Process(pid)
+        stored = f"{cs.parse_utc(created).timestamp():.3f}"
+        if not run_parameters_module().process_start_matches(
+            f"{wrapper.create_time():.3f}", stored
+        ):
+            cs.log("phase_crash_seam", ended=0, reason="wrapper_mismatch", pid=pid)
+            return 0
+        me = psutil.Process()
+        chain = [me, *me.parents()]
+        cli = next(
+            (
+                proc
+                for proc, parent in zip(chain, chain[1:], strict=False)
+                if parent.pid == pid
+            ),
+            None,
+        )
+        if cli is None or cli.pid == me.pid:
+            cs.log("phase_crash_seam", ended=0, reason="no_cli", pid=pid)
+            return 0
+        victims = [cli, *cli.children(recursive=True)]
+    except (psutil.Error, OSError, ValueError) as exc:
+        cs.log("phase_crash_seam", ended=0, reason="process_unreadable", error=str(exc))
+        return 0
+    ended = 0
+    for proc in victims:
+        if proc.pid == me.pid:
+            continue
+        try:
+            proc.kill()
+            ended += 1
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.Error as exc:
+            cs.log("phase_crash_seam_kill_failed", pid=proc.pid, error=str(exc))
+    cs.log("phase_crash_seam", ended=ended, cli_pid=cli.pid)
+    return ended
+
+
+def worktree_module() -> ModuleType:
+    """``tools/executor_worktree.py``, imported only for the τ3 and τ4 facts."""
+    import executor_worktree  # noqa: PLC0415 - only a phased run needs it
+
+    return executor_worktree
+
+
+def phase_run(ctx: cs.Context, env: dict[str, str], by: str) -> PhaseRun:
+    """Read the run, its segment and the segment's start request; refuse before any record.
+
+    Every row is read in full (``fetchall``), so no statement keeps a read open while the
+    engine's view sync writes the store.
+    """
+    run_id = env["CREDITS_RUN_ID"]
+    segment_id = env["CREDITS_SEGMENT"]
+    runs = ctx.con.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchall()
+    if not runs:
+        raise cs.Refusal("unknown_run", f"no run {run_id}")
+    run = runs[0]
+    if not cs.manifest_phases(run["manifest_json"]):
+        raise cs.Refusal("not_phased", f"run {run_id} has no phases")
+    if run["main_tree"] is None:
+        raise cs.Refusal("tree_required", f"run {run_id} has no tree; run tree first")
+    segments = ctx.con.execute(
+        "SELECT * FROM segments WHERE segment_id = ? AND run_id = ?",
+        (segment_id, run_id),
+    ).fetchall()
+    if not segments:
+        raise cs.Refusal("unknown_segment", f"no segment {segment_id} in run {run_id}")
+    segment = segments[0]
+    requests = ctx.con.execute(
+        "SELECT * FROM requests WHERE request_id = ?", (segment["request_id"],)
+    ).fetchall()
+    sealed = ctx.con.execute(
+        "SELECT 1 FROM landings WHERE run_id = ? AND part = 'closeout' LIMIT 1",
+        (run_id,),
+    ).fetchall()
+    doc = cs.manifest_doc(run)
+    plan = Path(str(doc.get("plan_folder") or "").rstrip("/\\")).name
+    if not plan:
+        raise cs.Refusal(
+            "manifest_invalid", f"phased run {run_id} names no plan folder"
+        )
+    return PhaseRun(
+        rp=run_parameters_module(),
+        tree=Path(str(run["main_tree"])),
+        plan=plan,
+        run_id=run_id,
+        by=by,
+        doc=doc,
+        run=run,
+        segment=segment,
+        request=requests[0] if requests else None,
+        closeout_sealed=bool(sealed),
+    )
+
+
+def phase_facts(pr: PhaseRun, event: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The caller facts of one entry event (EA-21, EA-22); the engine owns the others."""
+    if event == "E3":
+        return e3_facts(pr, payload)
+    if event == "E11":
+        wait = cast_dict(pr.doc.get("messaging")).get("gate_wait_max_min")
+        if isinstance(wait, int) and not isinstance(wait, bool) and wait >= 0:
+            return {"gate_wait_s": wait * 60}
+        return {}
+    if event == "E12":
+        return {"readiness_ok": readiness_ok(pr, payload.get("receipt"))}
+    if event == "E13":
+        done = pr.rp.plan_status(pr.tree, pr.plan).get("done") is True
+        return {"final_ok": done and pr.closeout_sealed}
+    if event == "E15":
+        return {"resume_valid": resume_valid(pr, payload)}
+    if event == "E17":
+        return {
+            "start_valid": resume_valid(pr, payload) and start_message_ok(pr, payload)
+        }
+    if event == "τ4":
+        return {"worktree_proven": worktree_proven(pr)}
+    return {}
+
+
+def cast_dict(value: object) -> dict[str, Any]:
+    """``value`` when it is a JSON object, else ``{}``."""
+    return {str(k): v for k, v in value.items()} if isinstance(value, dict) else {}  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType, reportUnknownArgumentType]
+
+
+def e3_facts(pr: PhaseRun, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """E3: the op was reserved for ``plan_commit``, is reconciled, and is ``HEAD``."""
+    op_id = payload.get("op_id")
+    entry = cast_dict(pr.rp.consumed_acts(pr.tree, pr.plan).get("plan_commit"))
+    ops = [
+        op
+        for op in pr.rp.plan_ops(pr.tree, pr.plan)
+        if op.get("op") == op_id and op.get("run_id") == pr.run_id
+    ]
+    commit = str(ops[-1].get("commit")) if ops else ""
+    return {
+        "pc_reserved": isinstance(op_id, str) and entry.get("op_id") == op_id,
+        "pc_reconciled": any(op.get("phase") == "reconciled" for op in ops),
+        "ref_matches": bool(ops)
+        and commit != "none"
+        and pr.head() == payload.get("ref_new") == commit,
+    }
+
+
+def readiness_ok(pr: PhaseRun, receipt: object) -> bool:
+    """E12: the receipt holds ``stage: readiness`` and ``status: PASS`` (a missing file is no)."""
+    if not isinstance(receipt, str) or not receipt:
+        return False
+    path = Path(receipt)
+    if not path.is_absolute():
+        path = Path(str(pr.run["active_tree"] or pr.tree)) / path
+    try:
+        loaded: Any = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return False
+    doc = cast_dict(loaded)
+    return doc.get("stage") == "readiness" and doc.get("status") == "PASS"
+
+
+def resume_valid(pr: PhaseRun, payload: Mapping[str, Any]) -> bool:
+    """E15: this is a resume segment, started by ``start_record``, whose ``tree`` passed."""
+    request = pr.request
+    return (
+        request is not None
+        and pr.segment["request_id"] == payload.get("start_record")
+        and request["resume"] == 1
+        and pr.segment["carry_manifest_json"] is not None
+    )
+
+
+def start_message_ok(pr: PhaseRun, payload: Mapping[str, Any]) -> bool:
+    """E17: ``message_uuid`` is a typed human turn of an orchestrator session of the manifest.
+
+    Its text holds the start record's quote when the record has one.
+    """
+    uid = payload.get("message_uuid")
+    if not isinstance(uid, str) or pr.request is None:
+        return False
+    quote = pr.request["start_quote"]
+    sessions = cast_dict(pr.doc.get("messaging")).get("orchestrator_sessions")
+    for session in sessions if isinstance(sessions, list) else []:
+        if not isinstance(session, str):
+            continue
+        text = pr.rp.typed_human_text(pr.tree, session, uid)
+        if text is not None:
+            return not quote or str(quote) in text
+    return False
+
+
+def last_entry(
+    records: Sequence[Mapping[str, Any]], to: str
+) -> Mapping[str, Any] | None:
+    """The last passed record that entered ``to``."""
+    for record in reversed(records):
+        if record["to"] == to and record["guard_result"] == "passed":
+            return record
+    return None
+
+
+def worktree_proven(pr: PhaseRun) -> bool:
+    """τ4: the run's executor worktree is the one the prepared record names (V-A to V-10).
+
+    The worktree of slug ``<run_id>`` exists, is a worktree of the store tree, its helper
+    manifest names this ``run_id`` and the prepared record's ``op_id``, its ``HEAD`` is the
+    prepared ``base`` and it has no change; the plan's authority still verifies.
+    """
+    prepared = last_entry(pr.records(), "transition:prepared")
+    if prepared is None:
+        return False
+    base = cast_dict(prepared.get("payload")).get("base")
+    path = Path(worktree_module().worktree_path(pr.tree, pr.run_id))
+    if not path.is_dir():
+        return False
+    try:
+        main, helper = worktree_facts(path)
+        if helper is None or not same_path(main, pr.tree):
+            return False
+        if helper.get("run_id") != pr.run_id or helper.get("op_id") != prepared.get(
+            "op_id"
+        ):
+            return False
+        if pr.head(path) != base:
+            return False
+        if git_text(path, ["status", "--porcelain"]):
+            return False
+    except GitError:
+        return False
+    return pr.rp.authority_ok(pr.tree, pr.plan) is True
+
+
+def prepare_step(pr: PhaseRun) -> dict[str, Any]:
+    """τ3 from ``plan:pc_done``: reserve ``exec_start`` (``exec_after_plan``), check the base.
+
+    The base is the last passed E3's ``ref_new``, else the run's fixed base. Under E17
+    authority (``exec_after_plan: false``) nothing is reserved and the op is ``none``.
+    """
+    records = pr.records()
+    eap = pr.rp.effective_values(pr.tree, pr.plan).get("exec_after_plan") is True
+    op = f"{pr.run_id}-exec" if eap else "none"
+    reserved = False
+    if eap:
+        try:
+            pr.rp.reserve_act(pr.tree, pr.plan, "exec_start", op)
+            reserved = True
+        except (pr.rp.Refusal, pr.rp.NonAuthorizing) as exc:
+            cs.log("phase_reserve_refused", run_id=pr.run_id, op=op, error=str(exc))
+    base = phase_base(records, str(pr.run["base_commit"] or ""))
+    facts = {
+        "exec_start_reserved": reserved,
+        "base_matches": bool(base) and pr.head() == base,
+    }
+    return pr.record("τ3", {"base": base}, facts, op_id=op)
+
+
+def admit_step(pr: PhaseRun, prepared: Mapping[str, Any]) -> dict[str, Any]:
+    """τ3 from ``transition:prepared``: the gate lease, the worktree path and the binding."""
+    helper = worktree_module()
+    try:
+        lease = helper._lease_seen(helper._lease_path(pr.tree)) is None  # pyright: ignore[reportPrivateUsage]
+    except helper._GitFailure:  # pyright: ignore[reportPrivateUsage]
+        lease = False
+    facts = pr.rp.resume_facts(
+        pr.tree, plan=pr.plan, run_id=pr.run_id, state="transition:prepared"
+    )
+    return pr.record(
+        "τ3",
+        {},
+        {
+            "lease": lease,
+            "path_free": not helper.slug_taken(pr.tree, pr.run_id),
+            "binding_active": facts.get("binding_active") is True,
+        },
+        op_id=str(prepared.get("op_id") or "none"),
+    )
+
+
+def chain_next(pr: PhaseRun, record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The τ record that follows ``record`` (EA-21, EA-23), or None when the chain ends.
+
+    It follows a record that moved the state, a passed E15/E17, and the τ2 stay of
+    ``exec_after_plan``; it stops at ``transition:admitted``, a terminal state or a stay.
+    """
+    moved = record["to"] != record["from"] or (
+        record["event"] in ("E15", "E17") and record["guard_result"] == "passed"
+    )
+    tau2 = (
+        record["event"] == "τ2"
+        and record["guard_result"] == "guard_failed:exec_after_plan"
+    )
+    if not (moved or tau2):
+        return None
+    state = record["to"]
+    if state == "plan:approved":
+        return pr.record("τ1", {}, {})
+    if state == "plan:pc_done":
+        return prepare_step(pr) if tau2 else pr.record("τ2", {}, {})
+    if state == "transition:prepared":
+        return admit_step(pr, record)
+    return None
+
+
+def verb_phase(
+    ctx: cs.Context,
+    env: dict[str, str],
+    event: str,
+    payload: dict[str, Any],
+    op: str | None,
+    by: str,
+) -> cs.Outcome:
+    """Record one phase event of a phased run and chain τ1 to τ3 (EA-21 to EA-23).
+
+    The verb computes the caller facts from real state (the engine's own facts override
+    them), calls ``record_transition`` with no store transaction open (the engine writes
+    the credits view in a subprocess), then records the τ events the new state needs.
+    """
+    pr = phase_run(ctx, env, by)
+    authority_errors = (pr.rp.Refusal, pr.rp.NonAuthorizing, pr.rp.GitError, OSError)
+    out: list[dict[str, Any]] = []
+    try:
+        record: dict[str, Any] | None = pr.record(
+            event, payload, phase_facts(pr, event, payload), op_id=op or "none"
+        )
+        while record is not None and len(out) < len(PHASE_EVENTS):
+            out.append(record)
+            record = chain_next(pr, record)
+        view = dict(pr.rp.phase_state(pr.tree, plan=pr.plan, run_id=pr.run_id))
+    except GitError as exc:
+        raise cs.Refusal("git_failed", str(exc), records=out) from exc
+    except authority_errors as exc:
+        raise cs.Refusal(
+            "authority_refused", f"{type(exc).__name__}: {exc}", records=out
+        ) from exc
+    return cs.Outcome(
+        "recorded", {"records": out, "state": view["state"], "seq": view["seq"]}
+    )
+
+
 def run_verb(
     ctx: cs.Context, args: argparse.Namespace, env: dict[str, str]
 ) -> cs.Outcome:
@@ -1639,6 +2411,10 @@ def run_verb(
         return verb_seal(ctx, env)
     if verb == "authority":
         return verb_authority(ctx, env, args.quote)
+    if verb == "phase":
+        return verb_phase(
+            ctx, env, args.event, dict(args.payload or {}), args.op, args.by
+        )
     raise cs.UsageError(f"unknown verb {verb!r}")
 
 

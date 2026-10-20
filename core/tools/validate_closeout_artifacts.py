@@ -35,17 +35,29 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import io
 import json
 import os
 import re
 import sys
 import textwrap
-from durable_evidence import blocked_evidence_problems, evidence_problems
 import tempfile
+import base64
+import binascii
+import unicodedata
+from collections.abc import Collection
 from contextlib import redirect_stdout
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, NamedTuple
+from typing import Any, Iterator, NamedTuple, cast
+
+if __package__ == "tools":
+    from tools.completion_preflight import PENDING_SETS, STAGE_GATE, STAGE_STATUS, STAGES
+    from tools.durable_evidence import blocked_evidence_problems, evidence_problems
+else:
+    from completion_preflight import PENDING_SETS, STAGE_GATE, STAGE_STATUS, STAGES
+    from durable_evidence import blocked_evidence_problems, evidence_problems
 
 SCHEMA_VERSION = "closeout-review-state.v1"
 
@@ -1907,6 +1919,1258 @@ def run(args: argparse.Namespace) -> list[str]:
     return notes
 
 
+# ----------------------------------------------------------------- closeout stages
+#
+# The run-parameters closeout (R§4.6 "Check-by-stage matrix"): ``--stage`` runs fifteen
+# checks over the whole closeout set and reports each on its own, so one defect never
+# hides another. Each check raises Refuse (or FailClosed) for its defect and
+# ``validate_stage`` records it as that check's failure. A legacy plan, one whose task
+# carries no ``run_parameters`` block, never reads the run's store.
+
+#: The closeout's own core directory: the root of the citation baseline.
+_CORE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _module(name: str) -> Any:
+    """A sibling tool module, imported as ``tools.<name>`` when this one is."""
+    return importlib.import_module(f"tools.{name}" if __package__ == "tools" else name)
+
+
+def _rp() -> Any:
+    """``run_parameters``, imported only when a stage needs it: it requires PyYAML."""
+    return _module("run_parameters")
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise Refuse(message)
+
+
+def _read(path: Path | str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise Refuse(f"missing or unreadable file: {path}") from exc
+
+
+def _json_load(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(_read(path))
+    except json.JSONDecodeError as exc:
+        raise Refuse(f"invalid JSON: {path}: {exc}") from exc
+    _require(isinstance(data, dict), f"JSON root must be object: {path}")
+    return data
+
+
+def _yaml_load(text: str, *, label: str) -> dict[str, Any]:
+    try:
+        import yaml
+    except ImportError as exc:
+        raise FailClosed(f"PyYAML is required to read the {label}") from exc
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise Refuse(f"{label} is not valid YAML: {exc}") from exc
+    _require(isinstance(data, dict), f"{label} YAML root must be object")
+    return data
+
+
+def _frontmatter_data(text: str, *, label: str) -> dict[str, Any]:
+    """A markdown file's YAML frontmatter as a mapping; ``{}`` when it has none."""
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---", 4)
+    if end == -1:
+        return {}
+    return _yaml_load(text[4:end], label=f"{label} frontmatter")
+
+
+# -- task rows
+
+TASK_ROW_ID_PATTERN = r"\d+[A-Za-z]?(?:-[\dA-Za-z]+)*|[A-Z][\dA-Z]*(?:-[\dA-Za-z]+)*"
+TASK_ROW_RE = re.compile(
+    rf"^\| (?P<id>{TASK_ROW_ID_PATTERN}) \|"
+    r"(?:[^|]*\|){3,}"
+    r" *`?(?P<status>\[[ x/B/]+\])`? *\|$"
+)
+DEFAULT_CLOSEOUT_REQUIRED_ROWS = frozenset({"H1-7", "H2-1", "H2-2", "H2-3", "H2-4", "H2-5"})
+_ROW_NUMBER = re.compile(r"[0-9]+")
+
+
+def _parse_row_ids(row_spec: str, known: Collection[str] = ()) -> set[str]:
+    """Row ids named by a comma list of ids and ascending ``a-b`` ranges.
+
+    A digit pair ``a-b`` that is itself a row id of the task (``known``, e.g. the
+    MEU-numbered ``622-1``) is that one row; otherwise it is the range ``a..b``, and
+    a descending pair is refused rather than read as an empty selection. A pair that
+    names a row while the rows of its range also exist is refused as ambiguous.
+    Only ASCII digits count, so ``int`` never sees a character it cannot read.
+    """
+    wanted: set[str] = set()
+    for part in row_spec.split(","):
+        part = part.strip()
+        pieces = part.split("-", 1)
+        if len(pieces) == 2 and all(_ROW_NUMBER.fullmatch(piece) for piece in pieces):
+            start, end = int(pieces[0]), int(pieces[1])
+            span = {str(i) for i in range(start, end + 1)}
+            if part in known:
+                _require(
+                    not span & set(known),
+                    f"ambiguous row id {part}: it names a task row and the rows "
+                    f"{sorted(span & set(known), key=_row_id_sort_key)} of the range "
+                    f"{start}..{end}",
+                )
+                wanted.add(part)
+                continue
+            _require(start <= end, f"descending row range {part} (no task row is named {part})")
+            wanted.update(span)
+        elif part:
+            wanted.add(part)
+    return wanted
+
+
+def _task_row_ids(text: str) -> set[str]:
+    """Every row id ``TASK_ROW_RE`` finds in a task file."""
+    return {match.group("id") for line in text.splitlines() if (match := TASK_ROW_RE.match(line))}
+
+
+def _row_id_sort_key(value: str) -> tuple[int, int, str]:
+    """Numeric ids first, in number order, then the others by text."""
+    return (0, int(value), "") if _ROW_NUMBER.fullmatch(value) else (1, 0, value)
+
+
+def _blocked_detail(problems: dict[str, list[str]]) -> str:
+    """Render per-row ``[B]`` problems for the failure message (empty when none)."""
+    parts = [f"{row_id}: {'; '.join(found)}" for row_id, found in problems.items()]
+    return f" ({' | '.join(parts)})" if parts else ""
+
+
+def _closeout_required_rows(task: Path) -> set[str]:
+    text = _read(task)
+    override = _frontmatter_data(text.replace("\r\n", "\n"), label="task").get(
+        "closeout_required_rows"
+    )
+    if isinstance(override, str) and override.strip():
+        return _parse_row_ids(override, _task_row_ids(text))
+    return set(DEFAULT_CLOSEOUT_REQUIRED_ROWS)
+
+
+def _split_markdown_row(line: str) -> list[str]:
+    """Split a markdown table row on unescaped pipes."""
+    body = line.strip()
+    if body.startswith("|"):
+        body = body[1:]
+    if body.endswith("|"):
+        body = body[:-1]
+    return [part.strip().replace("\\|", "|") for part in re.split(r"(?<!\\)\|", body)]
+
+
+# -- Validation cells that cannot fail (VACUOUS_DELIVERABLE_READ)
+
+_TASK_ROW_ID_RE = re.compile(rf"^(?:{TASK_ROW_ID_PATTERN})$")
+_FAIL_ASSERT_RE = re.compile(
+    r"throw|Should|ValidationError|_validate_|--check|pytest|vitest|"
+    r"Invoke-Pester|FailedCount|if\s*\(\s*-not|sys\.exit|"
+    # An explicit non-zero exit (`-notmatch … { …; exit 1 }`) is a failing assertion.
+    r"\bexit\s+[1-9]\d*\b"
+)
+_REPO_READ_RE = re.compile(
+    r"(?:Get-Content|Get-ChildItem|(?<![A-Za-z_])(?:cat|type)(?![A-Za-z_]))"
+    r"(?:\s+-\w+)*\s+"
+    r"['\"]?(docs[/\\]|\.agent[/\\]|packages[/\\]|ui[/\\]|tests[/\\]|tools[/\\])",
+    re.IGNORECASE,
+)
+
+
+def _receipt_display_re() -> re.Pattern[str]:
+    """``Get-Content`` of the receipts folder: showing a receipt, not reading the repo."""
+    scratch = _module("check_temp_citations").scratch_path_re().pattern
+    return re.compile(rf"Get-Content\s+(?:-\w+\s+)*['\"]?(?:{scratch})", re.IGNORECASE)
+
+
+def _decode_validation_cell(cell: str) -> str:
+    text = cell.strip()
+    if len(text) >= 2 and text.startswith("`") and text.endswith("`"):
+        text = text[1:-1]
+    return text
+
+
+def _is_vacuous_deliverable_read(text: str) -> bool:
+    """True when a Validation cell reads a repo path and cannot fail.
+
+    Showing a receipt (``Get-Content`` of the receipts folder) is not a repo read, and
+    a FAIL_ASSERT token means the cell can fail even if it also reads a repo path.
+    """
+    if _FAIL_ASSERT_RE.search(text):
+        return False
+    if _receipt_display_re().search(text) and not _REPO_READ_RE.search(text):
+        return False
+    return _REPO_READ_RE.search(text) is not None
+
+
+def validate_task_validation_gates(task: Path) -> None:
+    """Refuse Validation cells that only read a repo path with no FAIL_ASSERT.
+
+    VACUOUS_DELIVERABLE_READ is a Get-Content / Get-ChildItem / cat / type of docs/,
+    .agent/, packages/, ui/, tests/ or tools/ with no throw / Should /
+    ValidationError / _validate_ / --check / pytest / vitest / Invoke-Pester /
+    FailedCount / if (-not / sys.exit / a non-zero ``exit N``. A cell like that
+    reports success whatever the file holds.
+    """
+    val_idx: int | None = None
+    offenders: list[str] = []
+    for line in _read(task).splitlines():
+        if not line.startswith("|"):
+            val_idx = None
+            continue
+        cells = _split_markdown_row(line)
+        if not cells:
+            continue
+        if "Validation" in cells and cells[0] in {"#", "ID"}:
+            val_idx = cells.index("Validation")
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell or "-") for cell in cells):
+            continue
+        row_id = cells[0]
+        if not _TASK_ROW_ID_RE.match(row_id):
+            continue
+        index = 4 if val_idx is None else val_idx
+        if index < len(cells) and _is_vacuous_deliverable_read(_decode_validation_cell(cells[index])):
+            offenders.append(row_id)
+    _require(
+        not offenders,
+        "VACUOUS_DELIVERABLE_READ: Validation cell reads a repo path with no "
+        f"FAIL_ASSERT (VACUOUS_H23_FIXTURE class): {offenders}",
+    )
+
+
+# -- task [B] rows: the task-file contract (### B-<row> block)
+#
+# A task row's evidence lives in a ``### B-<row id>`` block of the task file; the
+# handoff contract of ``blocked_evidence_problems`` (a linked follow-up and a Reason
+# line on the row) is the other accepted form. A row is accepted when either holds.
+
+_FOLLOWUP_RE = re.compile(r"follow[-_ ]?up", re.IGNORECASE)
+_COMMAND_FENCE_INFO = frozenset({"powershell", "pwsh", "bash", "sh"})
+_HEADING_1_3 = re.compile(r"^ {0,3}#{1,3}(?:[ \t]|$)")
+_FENCE_OPEN = re.compile(r"^ {0,3}(?P<run>`{3,}|~{3,})[ \t]*(?P<info>[^\s`]*)")
+_MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\([^)\s]+\)")
+_BACKTICKED_PATH = re.compile(r"`(?:[\w.@-]+/)+[\w.@-]*`|`[\w.@-]+\.[A-Za-z0-9]+`")
+
+
+def _fence_closes(line: str, run: str) -> bool:
+    """Whether ``line`` closes a fence opened by ``run`` (CommonMark rules)."""
+    stripped = line.strip()
+    if len(line) - len(line.lstrip(" ")) > 3 or not stripped:
+        return False
+    char = run[0]
+    length = len(stripped) - len(stripped.lstrip(char))
+    return length >= len(run) and stripped == char * length
+
+
+def _task_block_lines(task_text: str, row_id: str) -> list[str] | None:
+    """The lines of the ``### B-<row_id>`` block, or None when it is absent."""
+    heading = f"### B-{row_id}"
+    lines = task_text.splitlines()
+    open_run: str | None = None
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if open_run is not None:
+            if _fence_closes(line, open_run):
+                open_run = None
+            continue
+        opener = _FENCE_OPEN.match(line)
+        if opener:
+            open_run = opener.group("run")
+            continue
+        if not _HEADING_1_3.match(line):
+            continue
+        if start is not None:
+            return lines[start:index]
+        if line.strip() == heading:
+            start = index + 1
+    return None if start is None else lines[start:]
+
+
+def _task_blocked_problems(row_line: str, row_id: str, task_text: str) -> list[str]:
+    """Why a task ``[B]`` row's ``### B-<row>`` evidence is not accepted; [] = accepted.
+
+    The block holds either a non-empty command fence and a non-empty ``text`` fence of
+    pasted error lines (an external error or a missing dependency), or a ``Decision:``
+    line with a markdown link or a backticked path (a human decision). A receipts-folder
+    path may appear only inside the command fence: anywhere else it points a reader at
+    a file the repository does not keep.
+    """
+    problems: list[str] = []
+    if not _FOLLOWUP_RE.search(row_line):
+        problems.append("row carries no linked follow-up")
+    if not re.search(rf"(?<![\w-])B-{re.escape(row_id)}(?![\w-])", row_line):
+        problems.append(f"row does not cite its evidence block B-{row_id}")
+    lines = _task_block_lines(task_text, row_id)
+    if lines is None:
+        problems.append(f"task file has no `### B-{row_id}` evidence block")
+        return problems
+    prose: list[str] = []
+    fences: list[tuple[str, list[str]]] = []
+    run = ""
+    current: list[str] | None = None
+    for line in lines:
+        if current is not None:
+            if _fence_closes(line, run):
+                current = None
+            else:
+                current.append(line)
+            continue
+        opener = _FENCE_OPEN.match(line)
+        if opener:
+            run = opener.group("run")
+            current = []
+            fences.append((opener.group("info").lower(), current))
+            continue
+        prose.append(line)
+    filled = [(info, body) for info, body in fences if any(item.strip() for item in body)]
+    has_command = any(info in _COMMAND_FENCE_INFO for info, _ in filled)
+    has_error = any(info == "text" for info, _ in filled)
+    has_decision = any(
+        line.strip().startswith("Decision:")
+        and (_MARKDOWN_LINK.search(line) or _BACKTICKED_PATH.search(line))
+        for line in prose
+    )
+    if not (has_command and has_error) and not has_decision:
+        problems.append(
+            f"B-{row_id} holds neither a non-empty command fence plus a non-empty "
+            "`text` fence of pasted error lines nor a `Decision:` line with a link"
+        )
+    scratch = _module("check_temp_citations").scratch_path_re()
+    outside = prose + [line for info, body in fences if info not in _COMMAND_FENCE_INFO for line in body]
+    if any(scratch.search(line) for line in outside):
+        problems.append(
+            f"B-{row_id} names a receipts-folder path outside the command fence; paste "
+            "the lines and write `<scratch path>` in place of the path"
+        )
+    return problems
+
+
+def _blocked_row_problems(row_line: str, row_id: str, task_text: str, task: Path) -> list[str]:
+    """[] when either [B] contract accepts the row, else the task-file contract's problems."""
+    problems = _task_blocked_problems(row_line, row_id, task_text)
+    if not problems:
+        return []
+    try:
+        if not blocked_evidence_problems(row_line, row_id, task_text, task):
+            return []
+    except (Refuse, FailClosed, ValueError, OSError):
+        pass
+    return problems
+
+
+# -- run_parameters carriers (AC-B.13)
+
+RUN_PARAMETERS_CLASSES = frozenset(
+    {
+        "two-way",
+        "one-way-door",
+        "product-preference",
+        "source-conflict",
+        "governance-value",
+        "externally-blocked",
+    }
+)
+_MANDATORY_ITEM_RE = re.compile(r"M-(?:1[0-4]|[1-9])")
+_SESSION_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def _run_parameters_block(block: Any, *, label: str) -> dict[str, Any]:
+    """V-0 over one carrier's ``run_parameters`` block (the verifier's own check)."""
+    rp = _rp()
+    try:
+        rp.check_block(block)
+    except rp.Refusal as exc:
+        raise Refuse(f"RUN_PARAMETERS: {label} run_parameters block is invalid: {exc}") from exc
+    return cast("dict[str, Any]", block)
+
+
+def _decision_log_entries(plan_text: str, *, label: str) -> list[dict[str, Any]]:
+    """Every mapping entry of every ```yaml decision_log fence of a plan.
+
+    ``fenced_decision_logs`` runs first, so a malformed or misplaced log is refused by
+    the same rules the reflection's reconciliation applies.
+    """
+    fenced_decision_logs(plan_text, label)
+    entries: list[dict[str, Any]] = []
+    for fence in FENCE.finditer(plan_text):
+        lang = fence.group("lang").strip().lower()
+        block = fence_body(fence)
+        if lang not in ("yaml", "yml") or DECISION_LOG_KEY.search(block) is None:
+            continue
+        items = _yaml_load(block, label=f"{label} decision_log block").get("decision_log")
+        if isinstance(items, list):
+            entries.extend(item for item in items if isinstance(item, dict))
+    return entries
+
+
+def _check_mandatory_and_class(plan_text: str, *, label: str) -> None:
+    """The Decision Log's ``mandatory:`` and ``class:`` values of a run-parameters/1 plan."""
+    for entry in _decision_log_entries(plan_text, label=label):
+        decision_id = entry.get("id")
+        if "mandatory" in entry:
+            value = entry["mandatory"]
+            ok = value == "none" or (
+                isinstance(value, list)
+                and bool(value)
+                and all(isinstance(item, str) and _MANDATORY_ITEM_RE.fullmatch(item) for item in value)
+                and len(set(value)) == len(value)
+            )
+            _require(
+                ok,
+                f"RUN_PARAMETERS: {label} decision {decision_id} has mandatory "
+                f"{value!r}; write `mandatory: [M-n, ...]` with M-1 to M-14, or "
+                "`mandatory: none`",
+            )
+        if "class" in entry:
+            _require(
+                entry["class"] in RUN_PARAMETERS_CLASSES,
+                f"RUN_PARAMETERS: {label} decision {decision_id} has class "
+                f"{entry['class']!r}; a run-parameters/1 plan uses the HDP §6 classes "
+                f"{sorted(RUN_PARAMETERS_CLASSES)}",
+            )
+
+
+def validate_run_parameters(plan: Path, task: Path, *, grouping: Path | None = None) -> None:
+    """Check a plan's ``run_parameters`` carriers (AC-B.13).
+
+    A plan with no ``run_parameters`` block in either frontmatter is a legacy plan and
+    passes unchanged. Otherwise both carriers hold a valid block with the same
+    authorization; the task equals the plan unless it records a tightening and is
+    within it; ``bound_sessions`` is a list of session uuids; the Decision Log uses
+    the ``mandatory:`` and ``class:`` vocabulary. With ``grouping``, the plan's
+    ``Run parameters:`` line there, when present, bounds the plan in the same way.
+    """
+    plan_text = _read(plan).replace("\r\n", "\n")
+    plan_meta = _frontmatter_data(plan_text, label=f"plan {plan.name}")
+    task_meta = _frontmatter_data(_read(task).replace("\r\n", "\n"), label=f"task {task.name}")
+    if "run_parameters" not in plan_meta and "run_parameters" not in task_meta:
+        return
+    rp = _rp()
+    _require(
+        "run_parameters" in plan_meta and "run_parameters" in task_meta,
+        f"RUN_PARAMETERS: {plan} and {task} must both carry a run_parameters block",
+    )
+    plan_block = _run_parameters_block(plan_meta["run_parameters"], label=str(plan))
+    task_block = _run_parameters_block(task_meta["run_parameters"], label=str(task))
+    _require(
+        plan_block["authorization"] == task_block["authorization"],
+        f"RUN_PARAMETERS: {task} authorization differs from {plan}",
+    )
+    plan_sigma = rp.sigma_of(plan_block)
+    task_sigma = rp.sigma_of(task_block)
+    if task_sigma != plan_sigma:
+        _require(
+            task_block["tightened_from"] in ("plan", "grouping") and rp.within(task_sigma, plan_sigma),
+            f"RUN_PARAMETERS: {task} run parameters differ from {plan} without a "
+            "recorded tightening (tightened_from) within the plan",
+        )
+    bound = task_meta.get("bound_sessions")
+    _require(
+        isinstance(bound, list)
+        and all(isinstance(item, str) and _SESSION_UUID_RE.fullmatch(item) for item in bound),
+        f"RUN_PARAMETERS: {task} bound_sessions must be a list of session uuids",
+    )
+    if grouping is not None:
+        auth = plan_block["authorization"]
+        try:
+            line = rp.grouping_line_sigma(_read(grouping), str(auth["scope"]["plan"]), auth)
+        except rp.Refusal as exc:
+            raise Refuse(f"RUN_PARAMETERS: {grouping} Run parameters line is invalid: {exc}") from exc
+        if line is not None and line != plan_sigma:
+            _require(
+                plan_block["tightened_from"] == "grouping" and rp.within(plan_sigma, line),
+                f"RUN_PARAMETERS: {plan} run parameters are looser than, or differ "
+                f"without a recorded tightening from, the {grouping} line",
+            )
+    _check_mandatory_and_class(plan_text, label=f"plan {plan.name}")
+
+
+# -- metrics, context files and AC sets
+
+METRICS_HEADERS = [
+    "Date",
+    "MEU(s)",
+    "Tool Calls",
+    "Time to First Green",
+    "Tests Added",
+    "Codex Findings",
+    "Handoff Score",
+    "Rule Adherence",
+    "Prompt→Commit (min)",
+    "Notes",
+]
+
+
+def _row_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _parse_markdown_table(text: str, headers: list[str], *, label: str) -> list[list[str]]:
+    lines = text.splitlines()
+    header_index = next(
+        (i for i, line in enumerate(lines) if line.startswith("|") and _row_cells(line) == headers),
+        None,
+    )
+    if header_index is None:
+        raise Refuse(f"{label} table missing headers {headers}")
+    _require(header_index + 1 < len(lines), f"{label} table missing separator")
+    separator = _row_cells(lines[header_index + 1])
+    _require(
+        len(separator) == len(headers) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in separator),
+        f"{label} table has malformed separator",
+    )
+    rows: list[list[str]] = []
+    for line in lines[header_index + 2 :]:
+        if not line.startswith("|"):
+            break
+        cells = _row_cells(line)
+        _require(len(cells) == len(headers), f"{label} table row has wrong column count")
+        _require(all(cell and "{" not in cell for cell in cells), f"{label} table has blank/placeholder cell")
+        rows.append(cells)
+    _require(bool(rows), f"{label} table has no rows")
+    return rows
+
+
+def _is_identifier_attachment(char: str) -> bool:
+    return bool(char) and (
+        char in {"_", "-"} or char.isalnum() or unicodedata.category(char).startswith("M")
+    )
+
+
+def _extract_standalone_matches(pattern: str, text: str) -> set[str]:
+    values: set[str] = set()
+    for match in re.finditer(pattern, text):
+        previous = text[match.start() - 1] if match.start() else ""
+        following = text[match.end()] if match.end() < len(text) else ""
+        if not _is_identifier_attachment(previous) and not _is_identifier_attachment(following):
+            values.add(match.group(0))
+    return values
+
+
+def _extract_meu_ids(text: str) -> set[str]:
+    return _extract_standalone_matches(r"MEU-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", text)
+
+
+def _validate_metrics_row(metrics: Path, *, date_value: str, meu: str) -> None:
+    rows = _parse_markdown_table(_read(metrics), METRICS_HEADERS, label="metrics")
+    matches = [row for row in rows if row[0] == date_value and meu in _extract_meu_ids(row[1])]
+    _require(len(matches) == 1, "metrics must contain one exact date/MEU row")
+    _require(
+        all(cell.strip() and cell.strip().lower() != "pending" for cell in matches[0]),
+        "metrics row must be fully populated",
+    )
+
+
+def _section(text: str, heading: str) -> str:
+    match = re.search(rf"^{re.escape(heading)}\n(?P<body>.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    if match is None:
+        raise Refuse(f"missing section {heading}")
+    return match.group("body")
+
+
+def _validate_context_state(
+    known_issues: Path,
+    known_issues_yaml: Path,
+    current_focus: Path,
+    *,
+    issue: str | None,
+    meu: str,
+    date_value: str,
+) -> None:
+    """The closed issue's resolution in the known-issues SSOT, and the focus file's state.
+
+    The YAML file is the source of truth for resolution; the markdown file is its
+    rendered view, which must no longer list the issue as active. A closeout that
+    resolves no issue checks only the focus file's outcome and MEU.
+    """
+    known_text = _read(known_issues)
+    focus = _read(current_focus)
+    focus_status = _section(focus, "## Status")
+    if issue:
+        active_text = known_text.split("## Mitigated / Workaround", 1)[0]
+        _require(issue not in active_text, "resolved issue remains in active issues")
+        issues = _yaml_load(_read(known_issues_yaml), label="known-issues").get("issues")
+        _require(isinstance(issues, list), "known-issues.yaml missing issues list")
+        entry = next(
+            (item for item in cast("list[Any]", issues) if isinstance(item, dict) and item.get("id") == issue),
+            None,
+        )
+        if entry is None:
+            raise Refuse(f"issue {issue} missing from known-issues.yaml")
+        _require(
+            entry.get("status") == "resolved",
+            f"issue {issue} not resolved in known-issues.yaml (status: {entry.get('status')!r})",
+        )
+        # PyYAML reads an unquoted ISO date as datetime.date; str() normalizes it.
+        resolved = "" if entry.get("resolved") is None else str(entry.get("resolved"))
+        _require(
+            resolved == date_value,
+            f"issue {issue} resolved date mismatch in known-issues.yaml "
+            f"(expected {date_value}, found {resolved or 'none'})",
+        )
+        resolution = entry.get("resolution")
+        _require(
+            isinstance(resolution, str) and bool(resolution.strip()),
+            f"issue {issue} resolution missing or empty in known-issues.yaml",
+        )
+        meu_links = entry.get("meu_links")
+        _require(
+            isinstance(meu_links, list) and meu in meu_links,
+            f"MEU {meu} not in meu_links for issue {issue} in known-issues.yaml",
+        )
+        _require(
+            re.search(rf"^\*\*Resolved Issue:\*\*\s*`?{re.escape(issue)}`?\s*$", focus_status, re.MULTILINE)
+            is not None,
+            "current_focus missing exact Resolved Issue field",
+        )
+    _require(
+        re.search(r"^\*\*Outcome:\*\*\s*approved\s*$", focus_status, re.MULTILINE | re.IGNORECASE) is not None,
+        "current_focus missing affirmative approved Outcome field",
+    )
+    _require(
+        re.search(rf"^\*\*MEU:\*\*\s*`?{re.escape(meu)}`?\s*$", focus_status, re.MULTILINE) is not None,
+        "current_focus missing exact MEU field",
+    )
+    _require(len(known_text.splitlines()) < 100, "known_issues too long")
+    _require(len(focus.splitlines()) < 30, "current_focus too long")
+
+
+# Boundary-safe AC-ID grammar covering plain (AC-1), dotted (AC-370.1),
+# alphanumeric-dotted (AC-3G.1a), prefixed (AC-SM15-1b) and suffixed (AC-303-E1)
+# forms. ``AC_ID`` reads only the number, so it cannot tell AC-303-E1 from AC-303-E2;
+# the final segment here must hold a digit, so "AC-303-E" alone does not match.
+AC_RE = re.compile(r"AC-(?:[A-Za-z0-9]+[.-])*[A-Za-z0-9]*[0-9][A-Za-z0-9]*")
+_AC_ATTACHMENT = re.compile(r"[A-Za-z0-9_-]")
+
+
+def _first_cell_acs(cell: str) -> set[str]:
+    """Standalone AC ids in one first table cell, after ``**`` and backticks are stripped."""
+    cell = cell.strip("*`").strip()
+    values: set[str] = set()
+    for match in AC_RE.finditer(cell):
+        before = cell[match.start() - 1] if match.start() else ""
+        after = cell[match.end()] if match.end() < len(cell) else ""
+        if not _AC_ATTACHMENT.fullmatch(before) and not _AC_ATTACHMENT.fullmatch(after):
+            values.add(match.group(0))
+    return values
+
+
+def extract_acs(text: str) -> set[str]:
+    """AC ids from Acceptance Criteria table cells (boundary-safe).
+
+    Inside ``##``–``######`` Acceptance Criteria sections every cell of every table
+    counts. With no such heading (criteria in a plan's FIC table) only the first cell
+    of each table row counts: an id a later cell cites is a citation, not an own
+    criterion. Prose is ignored.
+    """
+    sections = re.findall(r"(?ms)^#{2,6}\s+Acceptance Criteria\s*\n(.*?)(?=^#{2,6}\s|\Z)", text)
+    values: set[str] = set()
+    if not sections:
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("|"):
+                # Drop only the outer delimiter: in `|| AC-1.1 |` the first cell is empty.
+                values.update(_first_cell_acs(stripped[1:].split("|", 1)[0]))
+        return values
+    for line in "\n".join(sections).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            for cell in split_cells(stripped.strip("|")):
+                values.update(_extract_standalone_matches(AC_RE.pattern, cell))
+    return values
+
+
+def validate_ac_sets(plan: Path, handoffs: list[Path]) -> None:
+    """Refuse an AC missing from the handoffs or an extra AC not in the plan."""
+    plan_acs = extract_acs(_read(plan))
+    handoff_acs: set[str] = set()
+    for path in handoffs:
+        handoff_acs.update(extract_acs(_read(path)))
+    missing = sorted(plan_acs - handoff_acs)
+    _require(not missing, f"handoff missing plan ACs: {missing}")
+    extra = sorted(handoff_acs - plan_acs)
+    _require(not extra, f"handoff has extra ACs not in plan: {extra}")
+
+
+# -- the stage matrix
+
+#: The fifteen matrix rows of R§4.6, in order.
+STAGE_CHECKS: tuple[str, ...] = (
+    "required_inputs",
+    "task_closeout",
+    "plan_task_status",
+    "handoff_ac",
+    "approved_review",
+    "reflection_decisions",
+    "metrics_context",
+    "provenance_citations",
+    "pending_rows",
+    "commit_manifest",
+    "stop_gate",
+    "run_parameters",
+    "commit_ops",
+    "publication_audit",
+    "receipt_generation",
+)
+#: ``{check: (structural, readiness, final)}``: True where the stage runs the check.
+STAGE_MATRIX: dict[str, tuple[bool, bool, bool]] = {
+    **{check: (True, True, True) for check in STAGE_CHECKS},
+    "commit_manifest": (False, True, True),
+    "commit_ops": (False, True, True),
+    "publication_audit": (False, False, True),
+    "receipt_generation": (False, False, True),
+}
+#: The input paths every stage reads.
+CLOSEOUT_INPUTS: tuple[str, ...] = (
+    "plan",
+    "task",
+    "handoff_template",
+    "review",
+    "review_state_receipt",
+    "reflection",
+    "reflection_template",
+    "reflection_schema",
+    "metrics",
+    "known_issues",
+    "known_issues_yaml",
+    "current_focus",
+)
+COMMIT_PACKET_SCHEMA = "commit-packet/1"
+DEFAULT_EXECUTION_REVIEW_ROUNDS = 6
+_OPEN_MARKS = frozenset({"[ ]", "[/]"})
+
+
+def plan_inspect(repo: Path, plan: str) -> dict[str, Any]:
+    """The run's authority for ``plan``: ``{"grant", "consumed", "ops"}``.
+
+    The seam the stages read the store through; ``run_parameters.plan_report`` builds
+    it from the grant records and the commit ops of ``store/ops/<plan>/``.
+    """
+    return _rp().plan_report(repo, plan)
+
+
+def plan_audit(repo: Path, plan: str) -> dict[str, Any]:
+    """The run's publication audit and its receipt state for ``plan``.
+
+    Returns ``{"publication_audit": {"result", "foreign_movement"}, "receipt":
+    "current" | "stale" | "missing"}`` from ``run_parameters.plan_audit``.
+    """
+    return _rp().plan_audit(repo, plan)
+
+
+@dataclass
+class _StageRun:
+    """What one ``validate_stage`` call shares between its checks."""
+
+    args: argparse.Namespace
+    stage: str
+    for_produce: bool
+    handoffs: list[Path]
+    legacy: bool
+    commit_exec: bool
+    inspected: dict[str, Any] | None = None
+    audited: dict[str, Any] | None = None
+
+    def repo(self) -> Path:
+        repo = getattr(self.args, "repo", None)
+        if repo is None:
+            raise Refuse("a run-parameters plan needs --repo for its run checks")
+        return Path(repo)
+
+    def plan_slug(self) -> str:
+        slug = getattr(self.args, "plan_slug", None)
+        return str(slug) if slug else Path(self.args.plan).parent.name
+
+    def inspect(self) -> dict[str, Any]:
+        if self.inspected is None:
+            self.inspected = plan_inspect(self.repo(), self.plan_slug())
+        return self.inspected
+
+    def audit(self) -> dict[str, Any]:
+        if self.audited is None:
+            self.audited = plan_audit(self.repo(), self.plan_slug())
+        return self.audited
+
+    def ops(self) -> list[dict[str, Any]]:
+        ops = self.inspect().get("ops")
+        if not isinstance(ops, list):
+            raise Refuse("the run's inspect report has no ops list")
+        return [op for op in cast("list[Any]", ops) if isinstance(op, dict)]
+
+
+def _as_bool(value: Any) -> bool:
+    """``value`` when it is a bool; anything else counts as true (fail closed)."""
+    return value if isinstance(value, bool) else True
+
+
+def _stage_classify(task: Path) -> tuple[bool, bool]:
+    """``(legacy, commit_exec)`` of the task's ``run_parameters`` block.
+
+    No block, or a ``manual``/``legacy`` block, is a legacy plan with no commit. A block
+    that cannot be read or fails V-0 counts as a run with ``commit_exec`` true, so every
+    run check still applies and the ``run_parameters`` check reports the defect.
+    """
+    try:
+        meta = _frontmatter_data(_read(task).replace("\r\n", "\n"), label=f"task {task.name}")
+    except (Refuse, FailClosed):
+        return False, True
+    if "run_parameters" not in meta:
+        return True, False
+    block = meta["run_parameters"]
+    rp = _rp()
+    try:
+        kind = rp.check_block(block)
+    except rp.Refusal:
+        return False, True
+    if kind != "v1":
+        return True, False
+    return False, _as_bool(block.get("commit_exec"))
+
+
+def _resolve_handoffs(args: argparse.Namespace) -> list[Path]:
+    handoff = getattr(args, "handoff", None)
+    if handoff is None:
+        return []
+    return [Path(item) for item in (handoff if isinstance(handoff, list) else [handoff])]
+
+
+def _stage_required_inputs(run: _StageRun) -> str | None:
+    args = run.args
+    _require(bool(run.handoffs), "a closeout stage requires at least one --handoff")
+    _require(
+        getattr(args, "known_issues_archive", None) is None,
+        "--known-issues-archive is decommissioned: the archive file is frozen legacy; "
+        "pass --known-issues-yaml",
+    )
+    for attr in CLOSEOUT_INPUTS:
+        value = getattr(args, attr, None)
+        if value is None:
+            raise Refuse(f"closeout stage missing required path: {attr}")
+        _read(value)
+    for handoff in run.handoffs:
+        _read(handoff)
+    return None
+
+
+def _stage_task_closeout(run: _StageRun) -> str | None:
+    """The closeout rows exist and every Validation cell can fail; open rows are
+    ``pending_rows``'s concern."""
+    task = Path(run.args.task)
+    missing = sorted(_closeout_required_rows(task) - _task_row_ids(_read(task)))
+    _require(not missing, f"task missing closeout rows: {missing}")
+    validate_task_validation_gates(task)
+    return None
+
+
+def _status_of(path: Path, label: str) -> Any:
+    return _frontmatter_data(_read(path).replace("\r\n", "\n"), label=f"{label} {Path(path).name}").get("status")
+
+
+def _stage_plan_task_status(run: _StageRun) -> str | None:
+    want = STAGE_STATUS[run.stage]
+    task_status = _status_of(run.args.task, "task")
+    plan_status = _status_of(run.args.plan, "plan")
+    _require(
+        task_status == want and plan_status == want,
+        f"PLAN_TASK_STATUS: the {run.stage} stage wants the task and the plan status "
+        f"{want!r}; the task is {task_status!r} and the plan is {plan_status!r}",
+    )
+    return None
+
+
+def _template_headings(template: Path) -> list[str]:
+    """The ``## `` headings of the handoff template, cut before any ``{slot}``."""
+    headings = []
+    for line in _read(template).splitlines():
+        if line.startswith("## "):
+            heading = line.split("{", 1)[0].rstrip(" (")
+            if heading != "##":
+                headings.append(heading)
+    return headings
+
+
+def _stage_handoff_ac(run: _StageRun) -> str | None:
+    headings = _template_headings(Path(run.args.handoff_template))
+    for handoff in run.handoffs:
+        text = _read(handoff)
+        check_handoff_structure(text, str(handoff))
+        source = frontmatter_value(text, "plan_source")
+        _require(
+            bool(source) and not PLACEHOLDER.search(source or ""),
+            f"handoff {handoff} has no plan_source naming the plan it closes",
+        )
+        absent = [h for h in headings if not re.search(rf"^{re.escape(h)}\b", text, re.MULTILINE)]
+        _require(not absent, f"handoff {handoff} is missing template section(s): {absent}")
+        check_blocked_rows(text, str(handoff))
+    validate_ac_sets(Path(run.args.plan), run.handoffs)
+    return None
+
+
+def _max_rounds(args: argparse.Namespace) -> int:
+    return getattr(args, "max_review_rounds", None) or DEFAULT_EXECUTION_REVIEW_ROUNDS
+
+
+def _stage_approved_review(run: _StageRun) -> str | None:
+    args = run.args
+    review = str(args.review)
+    state = read_state(str(args.review_state_receipt))
+    check_approved_state(
+        read_text(review, "review"),
+        review,
+        state,
+        args.expected_review_mode,
+        args.expected_target_plan,
+        _max_rounds(args),
+    )
+    return None
+
+
+def _stage_reflection_decisions(run: _StageRun) -> str | None:
+    args = run.args
+    grouping = getattr(args, "grouping", None)
+    sources = [str(args.plan), *(str(h) for h in run.handoffs)]
+    if args.issue:
+        sources.append(str(args.known_issues_yaml))
+    if grouping is not None:
+        _read(grouping)
+        sources.append(str(grouping))
+    reflection = str(args.reflection)
+    check_reflection(
+        read_text(reflection, "reflection"),
+        reflection,
+        str(args.reflection_template),
+        str(args.reflection_schema),
+        sources,
+        args.issue or None,
+    )
+    return None
+
+
+def _stage_metrics_context(run: _StageRun) -> str | None:
+    args = run.args
+    _validate_metrics_row(Path(args.metrics), date_value=str(args.date), meu=args.meu)
+    _validate_context_state(
+        Path(args.known_issues),
+        Path(args.known_issues_yaml),
+        Path(args.current_focus),
+        issue=args.issue or None,
+        meu=args.meu,
+        date_value=str(args.date),
+    )
+    return None
+
+
+def _stage_provenance_citations(run: _StageRun) -> str | None:
+    """Each handoff cites the approved review it closes on, and no closeout file
+    cites the receipts folder over its baseline."""
+    args = run.args
+    state = read_state(str(args.review_state_receipt))
+    review = Path(args.review)
+    for handoff in run.handoffs:
+        text = _read(handoff)
+        _require(
+            str(review) in text or review.as_posix() in text,
+            f"handoff {handoff} does not cite the review file {review}",
+        )
+        for key in ("review_digest", "verdict", "rounds"):
+            _require(
+                str(state[key]) in text,
+                f"handoff {handoff} does not cite the review's {key} {state[key]!r}",
+            )
+    paths = [
+        Path(os.path.abspath(path))
+        for path in (args.plan, args.task, *run.handoffs, args.review, args.reflection)
+    ]
+    try:
+        problems = _module("check_temp_citations").check(_CORE_ROOT, paths=paths)
+    except (OSError, ValueError) as exc:
+        raise Refuse(f"temp citations: the scanner could not run: {exc}") from exc
+    _require(not problems, "temp citations: " + "; ".join(problems))
+    return None
+
+
+def _depends_column(lines: list[str]) -> int | None:
+    """The index of the task table's ``Depends on`` column, or None when it has none."""
+    for line in lines:
+        if not line.startswith("|"):
+            continue
+        cells = [cell.lower() for cell in _split_markdown_row(line)]
+        for name in ("depends on", "depends_on"):
+            if name in cells and "status" in cells:
+                return cells.index(name)
+    return None
+
+
+def _stage_pending_rows(run: _StageRun) -> str | None:
+    """Every row is ``[x]``, open inside the stage's pending set, or an accepted ``[B]``
+    whose dependencies are closed; at ``final`` H2-6 is provisional until the finalize op
+    is reconciled."""
+    task = Path(run.args.task)
+    text = _read(task)
+    lines = text.splitlines()
+    pending = PENDING_SETS[run.stage]
+    rows = [(match, line) for line in lines if (match := TASK_ROW_RE.match(line))]
+    known = {match.group("id") for match, _ in rows}
+    open_rows = {match.group("id") for match, _ in rows if match.group("status") in _OPEN_MARKS}
+    depends_at = _depends_column(lines)
+    bad: dict[str, str] = {}
+    blocked: dict[str, list[str]] = {}
+    for match, line in rows:
+        row_id, status = match.group("id"), match.group("status")
+        if status == "[x]" or (status in _OPEN_MARKS and row_id in pending):
+            continue
+        if status == "[B]":
+            problems = _blocked_row_problems(line, row_id, text, task)
+            cells = _split_markdown_row(line)
+            if depends_at is not None and depends_at < len(cells):
+                named = _parse_row_ids(cells[depends_at].replace("`", ""), known)
+                waiting = sorted(named & open_rows, key=_row_id_sort_key)
+                if waiting:
+                    problems.append(f"it depends on the open rows {waiting}")
+            if not problems:
+                continue
+            blocked[row_id] = problems
+        bad[row_id] = status
+    _require(
+        not bad,
+        f"task rows open outside the {run.stage} pending set {sorted(pending)}, or "
+        f"blocked without accepted evidence: {bad}" + _blocked_detail(blocked),
+    )
+    if run.stage == "final" and not run.legacy and run.commit_exec:
+        finalize = [op for op in run.ops() if op.get("act") == "finalize"]
+        unreconciled = [f"{op.get('op')} at {op.get('phase')}" for op in finalize if op.get("phase") != "reconciled"]
+        _require(
+            bool(finalize) and not unreconciled,
+            "provisional_mark: H2-6 is marked but the finalize op is not reconciled "
+            f"({unreconciled or 'no finalize op'})",
+        )
+    return None
+
+
+def _stage_commit_manifest(run: _StageRun) -> str | None:
+    """The manifest's blobs equal the working tree's files (its parent is not checked:
+    HEAD moves once the run commits)."""
+    if not run.commit_exec:
+        return "n/a"
+    path = getattr(run.args, "commit_manifest", None)
+    if path is None:
+        raise Refuse("commit manifest: a commit_exec run needs --commit-manifest")
+    packet = _json_load(Path(path))
+    _require(
+        packet.get("schema") == COMMIT_PACKET_SCHEMA,
+        f"commit manifest: schema {packet.get('schema')!r} is not {COMMIT_PACKET_SCHEMA}",
+    )
+    _require(
+        packet.get("plan") == run.plan_slug(),
+        f"commit manifest: plan {packet.get('plan')!r} is not {run.plan_slug()!r}",
+    )
+    entries = packet.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise Refuse("commit manifest: entries must be a non-empty list")
+    repo = run.repo()
+    for entry in cast("list[Any]", entries):
+        _require(
+            isinstance(entry, dict) and isinstance(entry.get("path"), str),
+            f"commit manifest: malformed entry {entry!r}",
+        )
+        rel = entry["path"]
+        target = repo / rel
+        if "delete" in entry:
+            _require(not target.exists(), f"commit manifest: {rel} is deleted but the tree still holds it")
+            continue
+        try:
+            data = base64.b64decode(entry.get("data", ""), validate=True)
+        except (binascii.Error, ValueError, TypeError) as exc:
+            raise Refuse(f"commit manifest: the data of {rel} is not base64: {exc}") from exc
+        try:
+            tree = target.read_bytes()
+        except OSError as exc:
+            raise Refuse(f"commit manifest: the tree file {rel} is unreadable: {exc}") from exc
+        _require(data == tree, f"commit manifest: the blob of {rel} differs from the tree file")
+    return None
+
+
+def _stage_stop_gate(run: _StageRun) -> str | None:
+    want = STAGE_GATE[run.stage]
+    task = Path(run.args.task)
+    gate = _frontmatter_data(_read(task).replace("\r\n", "\n"), label=f"task {task.name}").get("stop_gate")
+    _require(gate == want, f"stop_gate is {gate!r}; the {run.stage} stage wants {want!r}")
+    return None
+
+
+def _stage_run_parameters(run: _StageRun) -> str | None:
+    grouping = getattr(run.args, "grouping", None)
+    validate_run_parameters(
+        Path(run.args.plan), Path(run.args.task), grouping=None if grouping is None else Path(grouping)
+    )
+    if not run.legacy:
+        grant = run.inspect().get("grant")
+        _require(
+            grant in ("verified", "superseded"),
+            f"RUN_PARAMETERS: the store's grant for {run.plan_slug()} is {grant!r}",
+        )
+    return None
+
+
+def _stage_commit_ops(run: _StageRun) -> str | None:
+    if not run.commit_exec:
+        return "n/a"
+    open_ops = [
+        f"{op.get('op')} ({op.get('act')}) at {op.get('phase')}"
+        for op in run.ops()
+        if op.get("phase") != "reconciled"
+    ]
+    _require(not open_ops, f"commit ops not reconciled: {open_ops}")
+    return None
+
+
+def _stage_publication_audit(run: _StageRun) -> str | None:
+    if run.legacy:
+        return "n/a"
+    if run.for_produce:
+        return "deferred"
+    if not run.commit_exec:
+        return "n/a"
+    audit = run.audit().get("publication_audit")
+    if not isinstance(audit, dict):
+        raise Refuse("the run's audit report has no publication_audit")
+    result = cast("dict[str, Any]", audit).get("result")
+    if result == "passed":
+        return None
+    if result == "failed":
+        raise Refuse("audit_failed: a run publication is not on the branch's history")
+    raise Refuse(f"publication audit {result}: the run's publications are unproven")
+
+
+def _stage_receipt_generation(run: _StageRun) -> str | None:
+    if run.legacy:
+        return "n/a"
+    if run.for_produce:
+        return "deferred"
+    receipt = run.audit().get("receipt")
+    if receipt == "current":
+        return None
+    if receipt == "stale":
+        raise Refuse("stale_generation: a run-owned file changed after the latest final receipt")
+    if receipt == "missing":
+        raise Refuse(
+            f"receipt missing: {run.plan_slug()} has no final receipt, so H2-6 stays a "
+            "provisional_mark until `final --produce` writes one"
+        )
+    raise Refuse(f"receipt state {receipt!r} is unknown")
+
+
+_STAGE_CHECK_FNS = {
+    "required_inputs": _stage_required_inputs,
+    "task_closeout": _stage_task_closeout,
+    "plan_task_status": _stage_plan_task_status,
+    "handoff_ac": _stage_handoff_ac,
+    "approved_review": _stage_approved_review,
+    "reflection_decisions": _stage_reflection_decisions,
+    "metrics_context": _stage_metrics_context,
+    "provenance_citations": _stage_provenance_citations,
+    "pending_rows": _stage_pending_rows,
+    "commit_manifest": _stage_commit_manifest,
+    "stop_gate": _stage_stop_gate,
+    "run_parameters": _stage_run_parameters,
+    "commit_ops": _stage_commit_ops,
+    "publication_audit": _stage_publication_audit,
+    "receipt_generation": _stage_receipt_generation,
+}
+
+
+def validate_stage(args: argparse.Namespace, stage: str, *, for_produce: bool = False) -> dict[str, Any]:
+    """Run the R§4.6 check matrix for one closeout stage.
+
+    Each of the fifteen checks runs on its own, so one defect never hides another, and
+    reports ``pass``, ``fail``, ``n/a`` (the stage does not run it, or the plan has nothing
+    for it to check) or ``deferred`` (``for_produce``: ``final --produce`` calls the final
+    stage before its receipt exists, so the audit and the receipt wait for the seal).
+    A legacy plan never reads the run's store.
+
+    Args:
+        args: The closeout paths, plus ``repo``, ``commit_manifest`` and ``plan_slug``
+            for a run-parameters plan.
+        stage: ``structural``, ``readiness`` or ``final``.
+        for_produce: True for the call ``final --produce`` makes.
+
+    Returns:
+        ``{"status", "mode": "stage", "stage", "checks", "failures", "foreign_movement"}``.
+
+    Raises:
+        ValueError: ``stage`` is not one of the three stages.
+    """
+    if stage not in STAGES:
+        raise ValueError(f"unknown closeout stage {stage!r}; use one of {', '.join(STAGES)}")
+    legacy, commit_exec = _stage_classify(Path(args.task))
+    run = _StageRun(
+        args=args,
+        stage=stage,
+        for_produce=for_produce,
+        handoffs=_resolve_handoffs(args),
+        legacy=legacy,
+        commit_exec=commit_exec,
+    )
+    column = STAGES.index(stage)
+    checks: dict[str, str] = {}
+    failures: dict[str, str] = {}
+    for check in STAGE_CHECKS:
+        if not STAGE_MATRIX[check][column]:
+            checks[check] = "n/a"
+            continue
+        try:
+            outcome = _STAGE_CHECK_FNS[check](run)
+        except Exception as exc:  # noqa: BLE001 - every defect is reported as that check's failure
+            checks[check] = "fail"
+            failures[check] = str(exc) or type(exc).__name__
+            continue
+        checks[check] = outcome or "pass"
+    foreign: list[Any] = []
+    if run.audited is not None:
+        audit = run.audited.get("publication_audit")
+        if isinstance(audit, dict) and isinstance(audit.get("foreign_movement"), list):
+            foreign = list(audit["foreign_movement"])
+    return {
+        "status": "FAIL" if failures else "PASS",
+        "mode": "stage",
+        "stage": stage,
+        "checks": checks,
+        "failures": failures,
+        "foreign_movement": foreign,
+    }
+
+
+#: The ``--stage`` flags that name files; the CLI hands them to the checks as paths.
+_STAGE_PATH_FLAGS = (*CLOSEOUT_INPUTS, "grouping", "commit_manifest", "repo", "known_issues_archive")
+
+
+def run_stage(args: argparse.Namespace) -> int:
+    """The ``--stage`` CLI: print the stage JSON; 0 on PASS, 1 on FAIL, 2 on misuse."""
+    if args.stage not in STAGES:
+        print(f"USAGE: unknown closeout stage {args.stage!r}; use one of {', '.join(STAGES)}.")
+        return 2
+    if args.full:
+        print("USAGE: --stage and --full are two modes; pass one.")
+        return 2
+    if args.for_produce and args.stage != "final":
+        print("USAGE: --for-produce belongs to the final stage only.")
+        return 2
+    for attr in _STAGE_PATH_FLAGS:
+        value = getattr(args, attr, None)
+        if value is not None:
+            setattr(args, attr, Path(value))
+    args.handoff = [Path(item) for item in args.handoff or []]
+    result = validate_stage(args, args.stage, for_produce=args.for_produce)
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["status"] == "PASS" else 1
+
+
 # ---------------------------------------------------------------------- selftest
 
 _GOOD_PLAN = """---
@@ -3746,7 +5010,12 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--handoff")
+    p.add_argument(
+        "--handoff",
+        action="append",
+        default=None,
+        help="the handoff; repeatable with --stage (the other modes read the last one)",
+    )
     p.add_argument("--plan")
     p.add_argument("--handoff-structure-only", action="store_true")
     p.add_argument(
@@ -3785,6 +5054,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="issue ID whose enrichment.decision_log to read from a known-issues --decision-source",
     )
     p.add_argument("--selftest", action="store_true", help="prove every refusal can fire")
+    stage = p.add_argument_group("closeout stages (R§4.6)")
+    stage.add_argument(
+        "--stage",
+        help=f"run one closeout stage's check matrix ({', '.join(STAGES)}) and print its JSON",
+    )
+    stage.add_argument(
+        "--full",
+        action="store_true",
+        help="the whole closeout in one pass; a different mode from --stage",
+    )
+    stage.add_argument(
+        "--for-produce",
+        action="store_true",
+        help="the final stage as `final --produce` calls it: the audit and the receipt wait",
+    )
+    for flag in (
+        "--task",
+        "--handoff-template",
+        "--metrics",
+        "--known-issues",
+        "--known-issues-yaml",
+        "--known-issues-archive",
+        "--current-focus",
+        "--grouping",
+        "--commit-manifest",
+        "--repo",
+        "--plan-slug",
+        "--date",
+        "--meu",
+        "--issue",
+    ):
+        stage.add_argument(flag)
     return p
 
 
@@ -3798,6 +5099,9 @@ def main(argv: list[str] | None = None, parser: argparse.ArgumentParser | None =
 
     if args.selftest:
         return selftest()
+    if args.stage is not None:
+        return run_stage(args)
+    args.handoff = args.handoff[-1] if args.handoff else None
 
     try:
         notes = run(args)

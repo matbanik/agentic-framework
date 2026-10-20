@@ -291,8 +291,13 @@ class Rig:
         code = self.tool.main(["--root", str(self.src), *[str(a) for a in argv]])
         return code, self.capsys.readouterr().out.splitlines()
 
+    @property
+    def parent(self) -> Path:
+        """The configured worktree parent (B-8, AC-G.1)."""
+        return Path(self.tool.WORKTREE_PARENT)
+
     def path(self, slug: str) -> Path:
-        return self.src.parent / f"{self.src.name}-{slug}"
+        return self.parent / slug
 
     def create(self, marker: str, slug: str, *extra: str) -> Path:
         code, lines = self.call("create", slug, *extra)
@@ -304,6 +309,13 @@ class Rig:
 
     def create_carried(self, marker: str, slug: str) -> Path:
         return self.create(marker, slug, "--carry", PLAN_DIR, "--carry", STATUS)
+
+
+@pytest.fixture(autouse=True)
+def _worktree_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """B-8 (AC-G.1): every worktree this file makes goes under a temp ``WORKTREE_PARENT``."""
+    tool = importlib.import_module("tools.executor_worktree")
+    monkeypatch.setattr(tool, "WORKTREE_PARENT", tmp_path / "wt", raising=False)
 
 
 def _rig(
@@ -340,7 +352,7 @@ def test_create_carries_planning_inputs(
 
     wt = rig.create_carried(CREATE, "gt6-a")
 
-    assert wt == src.parent / "repo-gt6-a" and wt.is_dir(), f"{CREATE}: {wt}"
+    assert wt == rig.parent / "gt6-a" and wt.is_dir(), f"{CREATE}: {wt}"
     assert _listed(src, wt), f"{CREATE}: git does not list {wt}"
     assert _git(wt, "rev-parse", "HEAD").strip() == head, f"{CREATE}: not at HEAD"
     assert _git_proc(wt, "symbolic-ref", "-q", "HEAD").returncode == 1, (
@@ -934,7 +946,7 @@ def test_create_refuses_and_leaves_nothing(
     for slug in ("GT6_A", "a", "ab_c", "ab.c", "ab/c", "a" * 42):
         got = rig.call("create", slug)
         assert got == (1, ["worktree_bad:slug"]), f"{CREATE}: slug {slug!r}: {got}"
-        assert not os.path.lexists(src.parent / f"repo-{slug}"), (
+        assert not os.path.lexists(rig.parent / slug), (
             f"{CREATE}: slug {slug!r} created a directory"
         )
 

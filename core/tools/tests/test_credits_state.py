@@ -275,9 +275,10 @@ def write_manifest(
     lane: str = LANE,
     run_cap: float = 200.0,
     segment_cap: float = 75.0,
+    phases: list[str] | None = None,
 ) -> Path:
     """Write a ``credits-run.v1`` manifest (R§4.1) with fixture values only."""
-    manifest = {
+    manifest: dict[str, Any] = {
         "schema": "credits-run.v1",
         "run_id": run_id,
         "kind": "exec",
@@ -303,6 +304,8 @@ def write_manifest(
         "depends_on": [],
         "lane": lane,
     }
+    if phases is not None:
+        manifest["phases"] = phases
     # The file name never carries the raw id: a test may pass an id that is
     # not a valid path part (for example "../escape").
     name_key = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:16]
@@ -874,6 +877,41 @@ def test_not_started_after_accept_is_a_conflict(st: Store) -> None:
         == "accepted"
     )
     assert run_state(st, "run-a") == "launching"
+    assert int(st.one("SELECT COUNT(*) FROM transitions")) == count
+
+
+def _parked(st: Store, run_id: str, phases: list[str] | None) -> None:
+    seg = first_start(st, run_id, phases=phases)
+    finish(st, seg, now=20, total=1.0)
+    st.ok("classify", "--run-id", run_id, "--to", "parked", "--class", "parked", now=21)
+
+
+def test_a_parked_phased_run_takes_a_resume(st: Store) -> None:
+    """R§4.4 E15/E16/E17: ``PARKED:approved`` leaves only in a resume segment, so a phased run resumes from ``parked``."""
+    _parked(st, "run-a", ["plan", "exec"])
+    st.ok("request", *request_args("run-a", 2, resume=True), now=30)
+    assert run_state(st, "run-a") == "requested"
+    assert transitions(st, "run", "run-a")[-1] == ("parked", "requested", "request")
+    st.ok(
+        "not_started",
+        "--request-id",
+        "req-run-a-2",
+        "--reason",
+        "caller_timeout",
+        now=160,
+    )
+    assert run_state(st, "run-a") == "parked"
+
+
+def test_a_parked_run_without_phases_refuses_a_resume(st: Store) -> None:
+    """R§5.4.3: a plan-only run ends at ``parked``; its exec run starts on its own, so a resume stays refused."""
+    _parked(st, "run-a", None)
+    count = int(st.one("SELECT COUNT(*) FROM transitions"))
+    out = st.cli("request", *request_args("run-a", 2, resume=True), now=30)
+    assert (
+        out.code == 3 and out.result == "refused" and out.error == "invalid_transition"
+    ), out.show()
+    assert run_state(st, "run-a") == "parked"
     assert int(st.one("SELECT COUNT(*) FROM transitions")) == count
 
 

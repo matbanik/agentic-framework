@@ -3,8 +3,9 @@ project: "{YYYY-MM-DD}-{project-slug}"
 date: "{YYYY-MM-DD}"
 source: "docs/build-plan/{section-reference}"
 meus: ["{MEU-ID-1}", "{MEU-ID-2}"]
+run_parameters: "{the create-plan.md Step 0 block, equal to task.md's | absent}"  # optional (v2.3)
 status: "draft"
-template_version: "2.2"
+template_version: "2.3"
 ---
 
 # Implementation Plan: {Project Title}
@@ -82,6 +83,8 @@ Legacy 9-column tables remain valid.
 > authorize ending your turn to "present the plan to the user" — the human sees *reviewed* plans,
 > never raw drafts. After writing the plan, auto-dispatch `/plan-critical-review` (create-plan §5 /
 > GUARDRAILS SIGN 1). The urge to pause here and ask "is this plan OK?" is the bug.
+>
+> **Run parameters (v2.3):** {the offer block accepted at `create-plan.md` Step 0, echoed verbatim; or `manual`; or `none` (legacy rules)}. The values equal the `run_parameters` frontmatter.
 
 ---
 

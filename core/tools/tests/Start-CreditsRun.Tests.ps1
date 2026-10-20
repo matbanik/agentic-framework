@@ -405,3 +405,145 @@ Describe 'AC-D.3: a refused resume (MX-5)' {
         (Get-Run $run).state | Should -Be 'requested'
     }
 }
+
+# B-6 (docs/execution/plans/2026-10-17-run-parameters, WP-7, EA-19, EA-20). A manifest with `phases`
+# makes the launcher's first start an admission (R§4.4 V6-047): it reads the `run_parameters` block
+# from the brief's `## Authorization` section, runs `run_parameters.py inspect --block` on it, accepts,
+# then binds the attempt's session as headless (`bind --pending <plan> --session <id> --context
+# headless`), and only then launches. A refusal starts nothing. A legacy manifest calls no tool. The
+# tool is a mock that logs its argv; the launcher runs it with the manifest's python_exe, given
+# -RunParametersTool.
+Describe 'AC-F.2: first-start admission (vec_v6_047_)' {
+    BeforeAll {
+        $script:RpTool = "$script:Root/mock_run_parameters.py"
+        Set-Content -LiteralPath $script:RpTool -Encoding utf8NoBOM -Value @'
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+log = os.environ.get("MOCK_RP_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps(args) + "\n")
+verb = args[0] if args else ""
+refuse = os.environ.get("MOCK_RP_REFUSE", "")
+if refuse.partition(":")[0] == verb:
+    print(json.dumps({"result": "refused", "reason": refuse.partition(":")[2], "authorized": False, "failure": True}))
+    sys.exit(1)
+done = {"inspect": "inspected", "bind": "bound", "stop": "stopped", "final": "finalized"}
+print(json.dumps({"result": done.get(verb, "ok")}))
+sys.exit(0)
+'@
+        $script:PhaseBrief = "$script:Root/brief-phases.md"
+        Set-Content -LiteralPath $script:PhaseBrief -Encoding utf8NoBOM -Value @'
+# Credits run brief: 2026-10-15-fixture
+
+Plan the fixture project, then execute it in the executor worktree.
+
+## Authorization
+
+```yaml
+run_parameters:
+  schema: run-parameters/1
+  decisions: hdp
+  commit_plan: true
+  exec_after_plan: true
+  commit_exec: true
+  push: never
+```
+'@
+
+        # A registered run whose manifest names both phases (V6-044), with the brief given.
+        function New-PhasedRun([string]$RunId, [string]$Brief) {
+            $doc = [ordered]@{
+                schema = 'credits-run.v1'; run_id = $RunId; kind = 'exec'
+                project_root = $script:Project; plan_folder = 'docs/execution/plans/2026-10-15-fixture/'
+                brief = $Brief; phases = @('plan', 'exec')
+                launch = [ordered]@{
+                    working_directory = $script:Project; claude_exe = $script:Mock; python_exe = $script:Py
+                    permission_mode = 'bypassPermissions'; effort = 'low'; segment_cap_usd = 20.0; timeout_sec = 3600
+                }
+                budget = [ordered]@{ run_cap_usd = 50.0 }
+                messaging = [ordered]@{ orchestrator_sessions = @('00000000-0000-4000-8000-0000000000aa'); ruling_enabled = $false; gate_wait_max_min = 0 }
+                depends_on = @(); lane = "tree:$script:Project/$RunId"
+            }
+            $manifest = "$script:Root/manifest-$RunId.json"
+            Set-Content -LiteralPath $manifest -Value ($doc | ConvertTo-Json -Depth 6) -Encoding utf8NoBOM
+            Assert-Store 'register' @('--run-id', $RunId, '--manifest', $manifest, '--cli-version', '2.1.296', '--kit-revision', 'kitrev-fixture') | Out-Null
+            Assert-Store 'registered' @('--run-id', $RunId, '--task-hash', "taskhash-$RunId") | Out-Null
+            Assert-Store 'request' @('--run-id', $RunId, '--started-by', 'human-command', '--request-id', "req-$RunId") | Out-Null
+        }
+
+        # Each logged tool call as one string: its argv joined by single spaces.
+        function Get-RpCalls([string]$Log) {
+            if (-not (Test-Path -LiteralPath $Log)) { return @() }
+            @([System.IO.File]::ReadAllLines($Log) | Where-Object { $_.Trim() } | ForEach-Object { @($_ | ConvertFrom-Json) -join ' ' })
+        }
+    }
+
+    It 'vec_v6_047_ AC-F.2: inspect, accept, then bind --pending as headless (AC-F.4), then one CLI launch' {
+        $run = New-Id 'f2-admit'
+        New-PhasedRun $run $script:PhaseBrief
+        $rpLog = "$script:Root/$run.rp.jsonl"
+        $calls = "$script:Root/$run.calls.jsonl"
+        $argv = "$script:Root/$run.argv.json"
+        $child = Start-Child $script:Launcher (Get-LauncherArgs $run @('-RunParametersTool', $script:RpTool)) -Env @{
+            MOCK_RP_LOG = $rpLog; MOCK_CALL_LOG = $calls; MOCK_ARGV_FILE = $argv
+        }
+        $child.Code | Should -Be 0 -Because "$($child.Out) $($child.Err)"
+        $rp = @(Get-RpCalls $rpLog)
+        $rp.Count | Should -Be 2
+        $rp[0] | Should -Match '^inspect '
+        $rp[0] | Should -Match ' --block \S'
+        $attempt = @(Get-Rows 'SELECT * FROM attempts WHERE run_id = ?' @($run)) | Select-Object -First 1
+        $rp[1] | Should -Be "bind --pending 2026-10-15-fixture --session $($attempt.expected_session_id) --context headless"
+        @([System.IO.File]::ReadAllLines($calls) | Where-Object { $_.Trim() }).Count | Should -Be 1
+        $sent = @((Read-Json $argv).argv)
+        $sent[[array]::IndexOf($sent, '--session-id') + 1] | Should -Be $attempt.expected_session_id
+    }
+
+    It 'vec_v6_047_ AC-F.2 negative: inspect refuses → admission_refused, no attempt, no bind, no CLI call' {
+        $run = New-Id 'f2-refused'
+        New-PhasedRun $run $script:PhaseBrief
+        $rpLog = "$script:Root/$run.rp.jsonl"
+        $calls = "$script:Root/$run.calls.jsonl"
+        $child = Start-Child $script:Launcher (Get-LauncherArgs $run @('-RunParametersTool', $script:RpTool)) -Env @{
+            MOCK_RP_LOG = $rpLog; MOCK_CALL_LOG = $calls; MOCK_RP_REFUSE = 'inspect:offer_digest'
+        }
+        (Get-Payload $child).outcome | Should -Be 'admission_refused'
+        $rp = @(Get-RpCalls $rpLog)
+        $rp.Count | Should -Be 1
+        $rp[0] | Should -Match '^inspect '
+        @(Get-Rows 'SELECT * FROM attempts WHERE run_id = ?' @($run)).Count | Should -Be 0
+        Test-Path -LiteralPath $calls | Should -BeFalse
+    }
+
+    It 'vec_v6_047_ AC-F.2 negative: a phases manifest whose brief has no ## Authorization → admission_refused, no tool call, no CLI call' {
+        $run = New-Id 'f2-noauth'
+        New-PhasedRun $run $script:Brief
+        $rpLog = "$script:Root/$run.rp.jsonl"
+        $calls = "$script:Root/$run.calls.jsonl"
+        $child = Start-Child $script:Launcher (Get-LauncherArgs $run @('-RunParametersTool', $script:RpTool)) -Env @{
+            MOCK_RP_LOG = $rpLog; MOCK_CALL_LOG = $calls
+        }
+        (Get-Payload $child).outcome | Should -Be 'admission_refused'
+        Test-Path -LiteralPath $rpLog | Should -BeFalse
+        @(Get-Rows 'SELECT * FROM attempts WHERE run_id = ?' @($run)).Count | Should -Be 0
+        Test-Path -LiteralPath $calls | Should -BeFalse
+    }
+
+    It 'AC-F.1 negative: a legacy manifest (no phases) launches as before and calls no run_parameters tool' {
+        $run = New-Id 'f2-legacy'
+        New-RegisteredRun $run
+        Assert-Store 'request' @('--run-id', $run, '--started-by', 'human-command', '--request-id', "req-$run") | Out-Null
+        $rpLog = "$script:Root/$run.rp.jsonl"
+        $calls = "$script:Root/$run.calls.jsonl"
+        $child = Start-Child $script:Launcher (Get-LauncherArgs $run @('-RunParametersTool', $script:RpTool)) -Env @{
+            MOCK_RP_LOG = $rpLog; MOCK_CALL_LOG = $calls
+        }
+        $child.Code | Should -Be 0 -Because "$($child.Out) $($child.Err)"
+        Test-Path -LiteralPath $rpLog | Should -BeFalse
+        @([System.IO.File]::ReadAllLines($calls) | Where-Object { $_.Trim() }).Count | Should -Be 1
+    }
+}

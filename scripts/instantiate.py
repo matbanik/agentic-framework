@@ -177,6 +177,7 @@ WINDOWS_ONLY_FILES = (
     "tools/tests/test_credits_stop_reminder.py",
     "tools/tests/test_credits_wait.py",
     "tools/tests/test_credits_authority.py",
+    "tools/tests/test_credits_phases.py",
     "tools/tests/test_credits_r1_fixes_inbox.py",
     "tools/tests/test_credits_r1_fixes_locate.py",
     "tools/tests/test_credits_r1_fixes_tree.py",
@@ -200,6 +201,22 @@ WINDOWS_ONLY_FILES = (
     "tools/tests/Start-CreditsRunTask.Tests.ps1",
     "tools/tests/Start-CreditsRunTask.Policy.Tests.ps1",
     "tools/tests/Watch-CreditsRuns.Tests.ps1",
+    "tools/tests/Watch-CreditsRuns.Phase.Tests.ps1",
+)
+#: Run parameters list five of the files above in ``run_parameters.py``
+#: ``REQUIRED_COMPONENTS``, so on any other OS they stay ``disabled`` (fail closed, the manual
+#: workflow). Their tests build an activated fixture from those files, so they go too.
+RUN_PARAMETERS_WINDOWS_ONLY = (
+    "tools/tests/run_parameters_fixtures",
+    "tools/tests/test_agent_commit.py",
+    "tools/tests/test_commit_batch.py",
+    "tools/tests/test_run_parameters.py",
+    "tools/tests/test_run_parameters_r1_corrections.py",
+    "tools/tests/test_run_parameters_r2_corrections.py",
+    "tools/tests/test_stop_gate_run_parameters.py",
+    "tools/tests/test_validate_agent_files_policy.py",
+    "tools/tests/test_validate_closeout_stages.py",
+    "tools/tests/test_worktree_layout.py",
 )
 #: The skill folder is removed except these children (the probes are portable Python).
 WINDOWS_ONLY_DIR = ".agent/skills/claude-credits"
@@ -453,8 +470,10 @@ def _expected_fragment(root: Path) -> dict[str, object] | None:
 
 
 def windows_only_present(root: Path) -> list[Path]:
-    """The Windows-only paths that exist in ``root``: files and skill-folder children."""
+    """The Windows-only paths that exist in ``root``: files, run-parameters tests and
+    skill-folder children."""
     out = [root / rel for rel in WINDOWS_ONLY_FILES if (root / rel).is_file()]
+    out.extend(root / rel for rel in RUN_PARAMETERS_WINDOWS_ONLY if (root / rel).exists())
     skill = root / WINDOWS_ONLY_DIR
     if skill.is_dir():
         out.extend(

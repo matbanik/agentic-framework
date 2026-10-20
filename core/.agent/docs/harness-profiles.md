@@ -55,7 +55,7 @@ across both layers — never pick one monolithic row.**
 | Flag | Values | What it drives |
 |---|---|---|
 | `role` | `primary-driver` \| `host` \| `reviewer` \| `isolated-worker` | Which slot this harness fills in the routed stack (see [model-routing.md](model-routing.md)) |
-| `plan_to_exec_gate` | `human` \| `reviewer-auto` | Who authorizes the plan→execution transition after `approved`. `human` = pause for an explicit user chat message; `reviewer-auto` = auto-continue. Drives `create-plan.md` §5c, `AGENTS.md` §Authority and Approval, `GUARDRAILS.md` SIGN 1 |
+| `plan_to_exec_gate` | `human` \| `reviewer-auto` | Who authorizes the plan→execution transition after `approved`. `human` = pause for an explicit user chat message; `reviewer-auto` = auto-continue. Drives `create-plan.md` §5c, `AGENTS.md` §Authority and Approval, `GUARDRAILS.md` SIGN 1; satisfied in advance by a verified `run_parameters.exec_after_plan: true` |
 | `injects_auto_approval` | `yes` \| `no` | Does the harness inject system/ephemeral messages that claim a plan was "approved" (e.g. an IDE review-policy auto-approval)? Drives `GUARDRAILS.md` SIGN 3 — when `yes`, be maximally strict about message provenance |
 | `can_dispatch_external_reviewer` | `yes` \| `no` | Can this harness shell out to a reviewer CLI (Codex/headless-claude)? When `no`, follow the no-dispatch fallback in `cli-dispatch/SKILL.md` |
 | `native_shell` | `powershell` \| `bash` \| `posix-sh` | Redirect-to-file form for the P0 terminal rule (`*>` for PowerShell; `> f 2>&1` for bash/posix). See `AGENTS.md` §Output and Evidence. On macOS/Linux also read [`.agent/docs/macos-setup.md`](macos-setup.md) for `pwsh`, Seatbelt, and receipts-dir `writable_roots`. |
