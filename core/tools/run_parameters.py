@@ -64,6 +64,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType
 from typing import Any, NoReturn, TypeVar, cast
 
 import yaml
@@ -1062,30 +1063,38 @@ def _load_transcript(repo: Repo, session: str) -> Transcript:
     return Transcript(path=path, raw=raw, records=records, by_uuid=by_uuid)
 
 
+def _credits_state() -> ModuleType:
+    """``tools/credits_state.py``, the owner of the typed-turn predicates (R§4.1 V-2, EA-62).
+
+    ``tools.credits_state`` from the repository root (``commit_batch.py``, the tests);
+    ``credits_state`` when ``tools/`` itself is on ``sys.path`` (``credits_msg.py``).
+    """
+    try:
+        return importlib.import_module("tools.credits_state")
+    except ModuleNotFoundError:
+        return importlib.import_module("credits_state")
+
+
 def _typed_record(
     transcript: Transcript, uid: str, session: str
 ) -> tuple[str, dict[str, Any]]:
-    """V-2: ``uid`` names exactly one typed human record of ``session``; else ``record``."""
+    """V-2: ``uid`` names exactly one typed human record of ``session``; else ``record``.
+
+    The record passes ``is_human_entry`` and ``is_typed_turn`` (R§4.1 V-2): a string or
+    text-only content, ``origin.kind: human`` and a typed turn, so a task notification or a
+    hook frame never counts. V-2's own rejections follow: a sidechain, a parent outside
+    the file, a uuid that occurs more than once.
+    """
     hits = transcript.by_uuid.get(uid, [])
     if len(hits) != 1:
         raise Refusal("record", "uuid_count")
     record = transcript.records[hits[0]]
-    message = record.get("message")
-    content = (
-        cast(dict[str, Any], message).get("content")
-        if isinstance(message, dict)
-        else None
-    )
+    cs = _credits_state()
     parent = record.get("parentUuid")
     ok = (
-        record.get("type") == "user"
-        and record.get("userType") == "external"
-        and not record.get("isMeta")
-        and not record.get("isCompactSummary")
-        and "toolUseResult" not in record
-        and isinstance(content, str)
+        cs.is_human_entry(record, session) is True
+        and cs.is_typed_turn(record) is True
         and record.get("isSidechain") is False
-        and record.get("sessionId") == session
         and (
             parent is None or (isinstance(parent, str) and parent in transcript.by_uuid)
         )
@@ -1096,8 +1105,12 @@ def _typed_record(
 
 
 def _human_text(record: Mapping[str, Any]) -> str:
-    """The text of a typed human record (V-2 guarantees a string)."""
-    return cast(str, cast(dict[str, Any], record["message"])["content"])
+    """The text of a typed human record: its string, or its text blocks joined by a newline."""
+    cs = _credits_state()
+    text: object = cs.text_blocks(cs.message_content(dict(record)))
+    if not isinstance(text, str):
+        raise Refusal("record", "not_a_typed_human_record")
+    return text
 
 
 def _assistant_text(record: Mapping[str, Any]) -> str:

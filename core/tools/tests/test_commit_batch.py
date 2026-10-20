@@ -1038,6 +1038,51 @@ def test_vec_v3_019_non_directing_messages_refuse_before_any_mutation(
     assert _snapshot(rig) == before
 
 
+def _sdk_human(rig: b3.Rig, text: str, **over: Any) -> str:
+    """The SDK shape of a typed turn (the VSCode extension): one text block, ``sdk`` source."""
+    record: dict[str, Any] = {
+        "promptSource": "sdk",
+        "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+    }
+    record.update(over)
+    return rig.fx.add_human(text, **record)
+
+
+def test_directing_message_in_text_blocks_commits(tmp_path: Path) -> None:
+    """AC-C.6, V-2: a directing SDK typed turn (text blocks) commits (EA-62)."""
+    rig = _rig(tmp_path)
+    rig.bind()
+    parent = rig.ref()
+    uid = _sdk_human(rig, "Commit the fixture-plan plan. Do not push.")
+    out = _reconciled(rig.human(uid, rig.packet(files={"sdk.txt": b"sdk\n"})))
+    assert rig.parents(out["commit"]) == [parent] and rig.ref() == out["commit"]
+    consent = _evidence(rig, f"human-{uid}", "prepared", run=rig.fx.session)["consent"]
+    assert consent["message_uuid"] == uid
+
+
+@pytest.mark.parametrize("shape", ["string", "text_blocks"])
+def test_task_notification_with_commit_words_is_not_a_typed_turn(
+    tmp_path: Path, shape: str
+) -> None:
+    """V-2: a task notification that holds directing words → ``record``, no mutation (EA-62)."""
+    rig = _rig(tmp_path)
+    rig.bind()
+    packet = rig.packet()
+    before = _snapshot(rig)
+    over: dict[str, Any] = {
+        "origin": {"kind": "task-notification"},
+        "turnOrigin": "task_notification",
+        "promptSource": "system",
+    }
+    text = "commit the fixture-plan plan"
+    if shape == "string":
+        uid = rig.fx.add_human(text, **over)
+    else:
+        uid = _sdk_human(rig, text, **over)
+    _refused(rig.human(uid, packet), "record")
+    assert _snapshot(rig) == before
+
+
 # -- packet, binding and usage refusals (AC-C.2, AC-C.3) --------------------------------------
 
 

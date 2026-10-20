@@ -729,6 +729,96 @@ def test_record_parent_outside_file_and_duplicate_uuid(
     _refused(_verify(fx, "exec_start"), "record")
 
 
+def _sdk_human(f: bf.Fixture, word: str, **over: Any) -> str:
+    """The SDK shape of a typed turn (the VSCode extension): one text block, ``sdk`` source."""
+    record: dict[str, Any] = {
+        "promptSource": "sdk",
+        "message": {"role": "user", "content": [{"type": "text", "text": word}]},
+    }
+    record.update(over)
+    return f.add_human(word, **record)
+
+
+def test_record_text_block_content_verifies(tmp_path: Path) -> None:
+    """V-2 (``is_human_entry``): a typed turn whose content is text blocks verifies (EA-62)."""
+    fx = _build(tmp_path)
+    _offer_case(fx, reply=_sdk_human)
+    _init(fx)
+    _verified(_verify(fx, "exec_start"))
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"origin": {"kind": "task-notification"}},
+        {"origin": None},
+        {"turnOrigin": "task_notification"},
+        {"promptSource": "system"},
+        {"promptId": ""},
+    ],
+    ids=["task_notification", "no_origin", "turn_origin", "prompt_source", "prompt_id"],
+)
+@pytest.mark.parametrize("shape", ["string", "text_blocks"])
+def test_record_that_is_not_a_typed_turn(
+    tmp_path: Path, over: dict[str, Any], shape: str
+) -> None:
+    """V-2: a record that fails ``is_human_entry`` or ``is_typed_turn`` → ``record`` (EA-62)."""
+    fx = _build(tmp_path)
+
+    def reply(f: bf.Fixture, word: str) -> str:
+        if shape == "string":
+            return f.add_human(word, **over)
+        return _sdk_human(f, word, **over)
+
+    _offer_case(fx, reply=reply)
+    _refused(_verify(fx, "exec_start"), "record")
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        [{"type": "image", "source": {"type": "base64", "data": ""}}],
+        [{"type": "tool_result", "tool_use_id": "toolu_fixture", "content": "x"}],
+        [],
+    ],
+    ids=["image", "tool_result", "empty"],
+)
+def test_record_with_a_block_that_is_not_text(
+    tmp_path: Path, blocks: list[dict[str, object]]
+) -> None:
+    """V-2: content with any block other than text, or no block, → ``record`` (EA-62)."""
+    fx = _build(tmp_path)
+
+    def reply(f: bf.Fixture, word: str) -> str:
+        content = [{"type": "text", "text": word}, *blocks] if blocks else []
+        return _sdk_human(f, word, message={"role": "user", "content": content})
+
+    _offer_case(fx, reply=reply)
+    _refused(_verify(fx, "exec_start"), "record")
+
+
+def test_typed_human_text_reads_text_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``typed_human_text`` joins the text blocks of an SDK typed turn (E17, EA-62)."""
+    fx = _build(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(fx.config_dir))
+    uid = fx.add_human(
+        "proceed",
+        promptSource="sdk",
+        message={
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "proceed"},
+                {"type": "text", "text": "now"},
+            ],
+        },
+    )
+    assert _rp().typed_human_text(fx.repo, fx.session, uid) == "proceed\nnow"
+    notice = fx.add_human("proceed", origin={"kind": "task-notification"})
+    assert _rp().typed_human_text(fx.repo, fx.session, notice) is None
+
+
 # -- V-3R chain ----------------------------------------------------------------------------
 
 
