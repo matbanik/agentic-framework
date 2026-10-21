@@ -10,3 +10,4 @@ Controlled vocabulary for `review_churn.finding_categories`: claim_to_state_drif
 |------|--------|------------|---------------------|-------------|----------------|---------------|----------------|---------------------|-------|
 | 2026-09-19 | MEU-1 create-plan-adopter-path-fix | ~250 | AC oracles green after WP-1 | 0 | 1 blocking then 0 | 6/7 | 90% | n/a (draft only) | Docs-only create-plan.md align; execution review 2 rounds |
 | 2026-09-19 | none (portable-adopter-bootstrap) | hundreds | wp1 locators green | adoption-contract + encoding + instantiate arms | R1 R2 then R5 accepted_risk | 7/7 | 90% | n/a (draft only) | Portable adopter bootstrap; exec review 4 rounds (r4 frontmatter) |
+| 2026-10-21 | none (2026-10-20-review-limits-parameters) | 1341 | row 1 shipped-file test | 163 pytest + 6 Pester Describes + 32 selftest arms | plan 7 rounds; exec R1 F-001 then R2 approved | 7/7 | 90% | n/a (draft only) | Review limits as setup choices; exec review 2 rounds |
