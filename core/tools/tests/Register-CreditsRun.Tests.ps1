@@ -525,6 +525,53 @@ Describe 'AC-D.1: registration repair (MX-34, the S2 part)' {
     }
 }
 
+Describe 'AC-21 (f): a manifest without caps passes the schema check; credits_state.py decides' {
+    BeforeAll {
+        # A manifest with no segment_cap_usd and no run_cap_usd, rooted at its own project.
+        function New-UncappedDoc([string]$RunId, [string]$Switch) {
+            $project = "$script:Root/project-$RunId"
+            New-Item -ItemType Directory -Force -Path "$project/.agent" | Out-Null
+            if ($Switch) {
+                $limits = [System.IO.File]::ReadAllText((Join-Path $script:Repo '.agent/review-limits.json')) | ConvertFrom-Json
+                $limits.token_budgets = $Switch
+                Set-Content -LiteralPath "$project/.agent/review-limits.json" -Value ($limits | ConvertTo-Json -Depth 4) -Encoding utf8NoBOM
+            }
+            $doc = New-ManifestDoc $RunId
+            $doc.project_root = $project
+            $doc.launch.working_directory = $project
+            $doc.lane = "tree:$project"
+            $doc.launch.Remove('segment_cap_usd')
+            $doc.budget.Remove('run_cap_usd')
+            $doc
+        }
+    }
+
+    It 'AC-21 (f): under token_budgets off → registered, and the store holds no cap' {
+        $run = New-Id 'u-off'
+        $fake = New-FakeScheduler
+        $res = Invoke-Register -Manifest (Save-Manifest (New-UncappedDoc $run 'off')) -Scheduler $fake
+        $res.Code | Should -Be 0 -Because "$($res.Lines) $($res.Thrown)"
+        $res.Payload.state | Should -Be 'registered'
+        $stored = Get-Run $script:Db $run
+        $stored.segment_cap_usd | Should -BeNullOrEmpty
+        $stored.run_cap_usd | Should -BeNullOrEmpty
+    }
+
+    It 'AC-21 (f) negative: <Name> → the store refuses manifest_invalid naming token_budgets, no store row, no task' -ForEach @(
+        @{ Name = 'token_budgets on'; Switch = 'on' }
+        @{ Name = 'no review-limits file'; Switch = '' }
+    ) {
+        $run = New-Id 'u-on'
+        $fake = New-FakeScheduler
+        $res = Invoke-Register -Manifest (Save-Manifest (New-UncappedDoc $run $Switch)) -Scheduler $fake
+        $res.Code | Should -Be 3
+        $res.Payload.reason | Should -Be 'manifest_invalid'
+        $res.Payload.message | Should -Match 'token_budgets'
+        Get-Run $script:Db $run | Should -BeNullOrEmpty
+        $fake.State.Calls.Count | Should -Be 0
+    }
+}
+
 Describe 'AC-D.1: the credits-run.v1 schema file' {
     It 'AC-D.1: the schema exists and names every manifest key of R§4.1' {
         Test-Path -LiteralPath $script:Schema | Should -BeTrue

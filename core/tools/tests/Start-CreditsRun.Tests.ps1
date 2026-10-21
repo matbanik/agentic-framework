@@ -11,6 +11,10 @@
 # M-1 receipt and the gate are temp files. The launcher clock is the store clock (-NowUtc), so a
 # request age is seeded with no sleep. Each child gets its own environment block without
 # CLAUDECODE and CLAUDE_CODE_ENTRYPOINT; this process's environment is never changed.
+#
+# AC-21 (f) of docs/execution/plans/2026-10-20-review-limits-parameters: an uncapped admission
+# (the project's .agent/review-limits.json has token_budgets "off" and the manifest no cap)
+# passes -MaxBudgetUsd 0, so the CLI argv has no --max-budget-usd.
 
 BeforeAll {
     $script:Repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -167,20 +171,33 @@ sys.exit(1)
         [System.IO.Path]::GetFullPath($A).TrimEnd('\', '/') -eq [System.IO.Path]::GetFullPath($B).TrimEnd('\', '/')
     }
 
-    # A registered run whose manifest launches the mock CLI with the real Python.
-    function New-RegisteredRun([string]$RunId, [string]$Lane = '') {
+    # A registered run whose manifest launches the mock CLI with the real Python. -Uncapped
+    # roots it at a project whose review-limits file says token_budgets "off" and drops both caps.
+    function New-RegisteredRun([string]$RunId, [string]$Lane = '', [switch]$Uncapped) {
         if (-not $Lane) { $Lane = "tree:$script:Project/$RunId" }
+        $project = $script:Project
+        if ($Uncapped) {
+            $project = "$script:Root/project-uncapped"
+            New-Item -ItemType Directory -Force -Path "$project/.agent" | Out-Null
+            $limits = Read-Json (Join-Path $script:Repo '.agent/review-limits.json')
+            $limits.token_budgets = 'off'
+            Set-Content -LiteralPath "$project/.agent/review-limits.json" -Value ($limits | ConvertTo-Json -Depth 4) -Encoding utf8NoBOM
+        }
         $doc = [ordered]@{
             schema = 'credits-run.v1'; run_id = $RunId; kind = 'exec'
-            project_root = $script:Project; plan_folder = 'docs/execution/plans/2026-10-15-fixture/'
+            project_root = $project; plan_folder = 'docs/execution/plans/2026-10-15-fixture/'
             brief = $script:Brief
             launch = [ordered]@{
-                working_directory = $script:Project; claude_exe = $script:Mock; python_exe = $script:Py
+                working_directory = $project; claude_exe = $script:Mock; python_exe = $script:Py
                 permission_mode = 'bypassPermissions'; effort = 'low'; segment_cap_usd = 20.0; timeout_sec = 3600
             }
             budget = [ordered]@{ run_cap_usd = 50.0 }
             messaging = [ordered]@{ orchestrator_sessions = @('00000000-0000-4000-8000-0000000000aa'); ruling_enabled = $false; gate_wait_max_min = 0 }
             depends_on = @(); lane = $Lane
+        }
+        if ($Uncapped) {
+            $doc.launch.Remove('segment_cap_usd')
+            $doc.budget.Remove('run_cap_usd')
         }
         $manifest = "$script:Root/manifest-$RunId.json"
         Set-Content -LiteralPath $manifest -Value ($doc | ConvertTo-Json -Depth 6) -Encoding utf8NoBOM
@@ -545,5 +562,37 @@ run_parameters:
         $child.Code | Should -Be 0 -Because "$($child.Out) $($child.Err)"
         Test-Path -LiteralPath $rpLog | Should -BeFalse
         @([System.IO.File]::ReadAllLines($calls) | Where-Object { $_.Trim() }).Count | Should -Be 1
+    }
+}
+
+Describe 'AC-21 (f): an uncapped admission runs with no --max-budget-usd' {
+    BeforeAll {
+        $script:RunU = New-Id 'u-run'
+        New-RegisteredRun $script:RunU -Uncapped
+        Assert-Store 'request' @('--run-id', $script:RunU, '--started-by', 'human-command', '--request-id', "req-$script:RunU") | Out-Null
+        $script:ArgvU = "$script:Root/$script:RunU.argv.json"
+        $script:ChildU = Start-Child $script:Launcher (Get-LauncherArgs $script:RunU) -Env @{ MOCK_ARGV_FILE = $script:ArgvU }
+        $script:DumpU = if (Test-Path -LiteralPath $script:ArgvU) { Read-Json $script:ArgvU } else { $null }
+        $script:SegU = Get-Segments $script:RunU | Select-Object -First 1
+    }
+
+    It 'AC-21 (f): the launcher exits 0 and the store holds no cap and no reservation' {
+        $script:ChildU.Code | Should -Be 0 -Because "$($script:ChildU.Out) $($script:ChildU.Err)"
+        $run = Get-Run $script:RunU
+        $run.segment_cap_usd | Should -BeNullOrEmpty
+        $run.run_cap_usd | Should -BeNullOrEmpty
+        [double]$script:SegU.reservation_usd | Should -Be 0.0
+    }
+
+    It 'AC-21 (f): the CLI argv has no --max-budget-usd' {
+        $script:DumpU | Should -Not -BeNullOrEmpty
+        @($script:DumpU.argv) | Should -Not -Contain '--max-budget-usd'
+        @($script:DumpU.argv) | Should -Contain '--session-id'
+    }
+
+    It 'AC-21 (f): the admitted log line says uncapped' {
+        $line = @(Get-LauncherLog $script:RunU | Where-Object { $_.event -eq 'credits_segment_admitted' }) | Select-Object -First 1
+        $line | Should -Not -BeNullOrEmpty
+        $line.uncapped | Should -BeTrue
     }
 }

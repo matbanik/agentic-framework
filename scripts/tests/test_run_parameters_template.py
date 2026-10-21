@@ -334,7 +334,7 @@ def _status(adopter: Adopter) -> dict[str, Any]:
 
 
 def test_task_template_frontmatter_carries_the_block() -> None:
-    """AC-I.1: ``run_parameters`` (eight keys), ``bound_sessions: []`` and version 2.4."""
+    """AC-I.1: ``run_parameters`` (eight keys), ``bound_sessions: []``; version 2.5 (review limits)."""
     meta = _frontmatter(TASK_TEMPLATE)
     block = meta.get("run_parameters")
     assert isinstance(block, dict), meta
@@ -343,7 +343,7 @@ def test_task_template_frontmatter_carries_the_block() -> None:
     assert block["schema"] == "run-parameters/1"
     assert block["push"] == "never"
     assert meta.get("bound_sessions") == []
-    assert meta.get("template_version") == "2.4"
+    assert meta.get("template_version") == "2.5"
 
 
 def test_task_template_row_order() -> None:
@@ -396,9 +396,9 @@ def test_task_template_n_a_is_valid_for_pc_and_commit() -> None:
 
 
 def test_plan_template_v2_3() -> None:
-    """AC-I.1: PLAN-TEMPLATE v2.3 carries the ``run_parameters`` key and the echo line."""
+    """AC-I.1: PLAN-TEMPLATE (v2.3, now v2.4) carries the ``run_parameters`` key and the echo line."""
     meta = _frontmatter(PLAN_TEMPLATE)
-    assert meta.get("template_version") == "2.3"
+    assert meta.get("template_version") == "2.4"
     assert "run_parameters" in meta, sorted(meta)
     assert PLAN_ECHO in _text(PLAN_TEMPLATE)
 
