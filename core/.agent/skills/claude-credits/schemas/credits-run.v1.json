@@ -16,7 +16,7 @@
     "launch": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["working_directory", "claude_exe", "python_exe", "permission_mode", "effort", "segment_cap_usd", "timeout_sec"],
+      "required": ["working_directory", "claude_exe", "python_exe", "permission_mode", "effort", "timeout_sec"],
       "properties": {
         "working_directory": { "type": "string", "minLength": 1, "description": "Always the main tree." },
         "claude_exe": { "type": "string", "minLength": 1 },
@@ -24,16 +24,15 @@
         "permission_mode": { "enum": ["plan", "acceptEdits", "dontAsk", "bypassPermissions"] },
         "model": { "type": "string", "minLength": 1 },
         "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] },
-        "segment_cap_usd": { "type": "number", "exclusiveMinimum": 0 },
+        "segment_cap_usd": { "type": "number", "exclusiveMinimum": 0, "description": "May be omitted only under token_budgets \"off\" in the project_root's .agent/review-limits.json; credits_state.py refuses the omission otherwise." },
         "timeout_sec": { "type": "integer", "minimum": 1 }
       }
     },
     "budget": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["run_cap_usd"],
       "properties": {
-        "run_cap_usd": { "type": "number", "exclusiveMinimum": 0 }
+        "run_cap_usd": { "type": "number", "exclusiveMinimum": 0, "description": "May be omitted only under token_budgets \"off\" (see launch.segment_cap_usd)." }
       }
     },
     "messaging": {
@@ -79,12 +78,12 @@
     "chain": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["chain_id", "quote", "given_at", "chain_cap_usd"],
+      "required": ["chain_id", "quote", "given_at"],
       "properties": {
         "chain_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
         "quote": { "type": "string", "minLength": 1, "description": "The user's own chat words that name the runs, their order and the cap." },
         "given_at": { "type": "string", "minLength": 1 },
-        "chain_cap_usd": { "type": "number", "exclusiveMinimum": 0 }
+        "chain_cap_usd": { "type": "number", "exclusiveMinimum": 0, "description": "May be omitted only under token_budgets \"off\" (see launch.segment_cap_usd)." }
       }
     }
   }

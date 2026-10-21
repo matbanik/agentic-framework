@@ -76,6 +76,8 @@ import hashlib
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 SCHEMA_VERSION = "review-ledger.v1"
@@ -138,6 +140,29 @@ VOCABULARY_PATH = (
     Path(__file__).resolve().parent.parent / ".agent" / "context" / "review-vocabulary.yaml"
 )
 
+#: The repo's review limits (D-13): ``.agent/review-limits.json``, which ``instantiate.py``
+#: writes from the setup answers (``--round-caps``, ``--token-budgets``). When it is absent,
+#: ``begin`` uses ROUND_BUDGETS and TOKEN_BUDGETS above; a malformed file fails closed.
+REVIEW_LIMITS_SCHEMA = "review-limits/1"
+REVIEW_LIMITS_FILE = Path(".agent") / "review-limits.json"
+REVIEW_LIMITS_KEYS = ("schema", "token_budgets", "rounds", "tokens")
+TOKEN_SWITCH = ("on", "off")
+#: The tree whose ``.agent/review-limits.json`` ``begin`` reads: ``core/`` in the package,
+#: the adopter's root in an adopted tree (this file lives in ``<root>/tools``).
+REPO_ROOT = Path(__file__).resolve().parent.parent
+#: The plan parameter (AC-7): a ``review_limits`` block in the ``--ac-file`` frontmatter, read
+#: only by plan and execution loops. The other modes take the repo file and the flags.
+PLAN_LIMIT_MODES = ("plan", "execution")
+PLAN_LIMIT_KEYS = (
+    "schema", "plan_rounds", "execution_rounds", "plan_tokens", "execution_tokens", "basis",
+)
+PLAN_BASES = ("repo", "tightened", "loosened")
+_PLAN_HEADER = re.compile(r"review_limits:\s*(?:#.*)?")
+_PLAN_LINE = re.compile(r"  ([a-z_]+): ([^\s#]+)(?:\s+#.*)?")
+#: A loosened block opens a loop only when ``run_parameters.py limits-check`` passes (D-2):
+#: the loosened values must be in an offer the human typed and the authorization verified.
+RUN_PARAMETERS = Path(__file__).resolve().with_name("run_parameters.py")
+
 #: ---------------------------------------------------------------------------
 #: THE ONE ALLOWLIST. Both ``save_ledger`` and ``load_ledger`` use these, and nothing
 #: else may. A write path and a read path maintained separately drift toward each
@@ -161,7 +186,11 @@ LEDGER_KEYS = (
     "goal_anchor",
     "ac_ids",
     "vocabulary_path",
+    "limits_source",
 )
+#: ``limits_source``: what set the loop's limits at ``begin``. A ledger written before the
+#: review limits has none, and ``state`` says so.
+LIMITS_SOURCE_KEYS = ("repo", "plan", "flags")
 ROUND_KEYS = (
     "round", "agent", "verdict", "date", "blocking", "findings",
     "usage", "unmeasured", "intent_achieved",
@@ -214,6 +243,277 @@ def ledger_dir() -> Path:
 
 def ledger_path(loop_id: str) -> Path:
     return ledger_dir() / f"{loop_id}.json"
+
+
+def _is_count(value: object) -> bool:
+    """An int >= 1; ``bool`` is an int in Python and is refused."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _no_duplicates(pairs: list[tuple[str, object]]) -> dict:
+    keys = [k for k, _ in pairs]
+    dupes = sorted({k for k in keys if keys.count(k) > 1})
+    if dupes:
+        raise ValueError(f"duplicate key(s) {', '.join(dupes)}")
+    return dict(pairs)
+
+
+def _repo_limits_problem(data: object) -> str | None:
+    """Why ``data`` is not a ``review-limits/1`` document, or None."""
+    if not isinstance(data, dict):
+        return "the document is not a JSON object"
+    if set(data) != set(REVIEW_LIMITS_KEYS):
+        found = ", ".join(sorted(data))
+        return f"keys must be exactly {', '.join(REVIEW_LIMITS_KEYS)} (found {found})"
+    if data["schema"] != REVIEW_LIMITS_SCHEMA:
+        return f"schema must be {REVIEW_LIMITS_SCHEMA!r} (found {data['schema']!r})"
+    if data["token_budgets"] not in TOKEN_SWITCH:
+        return f"token_budgets must be 'on' or 'off' (found {data['token_budgets']!r})"
+    for key in ("rounds", "tokens"):
+        table = data[key]
+        if not isinstance(table, dict) or set(table) != set(ROUND_BUDGETS):
+            return f"{key} must name exactly the modes {', '.join(ROUND_BUDGETS)}"
+        bad = [mode for mode, value in table.items() if not _is_count(value)]
+        if bad:
+            return f"{key}.{bad[0]} must be an integer >= 1 (found {table[bad[0]]!r})"
+    return None
+
+
+def read_repo_limits(root: Path) -> tuple[dict, str] | None:
+    """The checked repo file and the sha256 of its bytes, or None when it is absent.
+
+    A file that is present but unreadable or malformed is FailClosed (exit 3), never a
+    fall back to the constants: a file the reader cannot read is not the same as no file.
+    """
+    path = Path(root) / REVIEW_LIMITS_FILE
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_bytes()
+        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicates)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise FailClosed(f"{path} is unreadable: {exc}") from exc
+    problem = _repo_limits_problem(data)
+    if problem:
+        raise FailClosed(
+            f"{path} is malformed: {problem}. Fix it, or delete it to use the built-in "
+            "defaults."
+        )
+    return data, hashlib.sha256(raw).hexdigest()
+
+
+def load_repo_limits(root: Path) -> dict | None:
+    """``<root>/.agent/review-limits.json`` checked strictly, or None when it is absent."""
+    found = read_repo_limits(root)
+    return None if found is None else found[0]
+
+
+def _limit_text(value: int | str) -> str:
+    return value if value == "off" else f"{value:,}"
+
+
+def _looser(value: int | str, than: int | str) -> bool:
+    """Is ``value`` looser than ``than``? ``off`` is looser than every number."""
+    if value == "off":
+        return than != "off"
+    return than != "off" and value > than
+
+
+def _frontmatter(path: Path) -> list[str]:
+    """The lines between the opening ``---`` and the next one; none without frontmatter."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0].strip() != "---":
+        return []
+    for end, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            return lines[1:end]
+    raise FailClosed(
+        f"cannot read review_limits from {path}: its frontmatter opens with --- and never "
+        "closes"
+    )
+
+
+def load_plan_limits(path: Path) -> dict | None:
+    """The ``review_limits`` block of ``path``'s frontmatter, or None when it has none.
+
+    A strict line parser, because this tool is stdlib-only: the ``review_limits:`` key, then
+    exactly the six PLAN_LIMIT_KEYS at two-space indent, each a plain scalar with an optional
+    trailing comment. Rounds are integers >= 1; tokens may also be ``off``. Anything else
+    is FailClosed (exit 3): a block read halfway would set limits nobody wrote.
+    """
+    try:
+        lines = _frontmatter(Path(path))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise FailClosed(f"cannot read review_limits from {path}: {exc}") from exc
+    starts = [i for i, line in enumerate(lines) if line.startswith("review_limits:")]
+    if not starts:
+        return None
+
+    def malformed(why: str) -> FailClosed:
+        return FailClosed(
+            f"review_limits in {path} is malformed: {why}. The block is `review_limits:` "
+            f"and then exactly {', '.join(PLAN_LIMIT_KEYS)} at two-space indent, each a "
+            "plain value (an integer >= 1, or off for a token key)."
+        )
+
+    if len(starts) > 1:
+        raise malformed("the key appears more than once")
+    if not _PLAN_HEADER.fullmatch(lines[starts[0]].rstrip()):
+        raise malformed("nothing but a comment may follow `review_limits:` on its line")
+    block: dict[str, str] = {}
+    for line in lines[starts[0] + 1:]:
+        if not line.startswith((" ", "\t")):
+            break
+        found = _PLAN_LINE.fullmatch(line.rstrip())
+        if not found:
+            raise malformed(f"{line.strip()!r} is not `key: value` at two-space indent")
+        key, value = found.groups()
+        if key not in PLAN_LIMIT_KEYS:
+            raise malformed(f"unknown key {key!r}")
+        if key in block:
+            raise malformed(f"{key} appears twice")
+        block[key] = value
+    missing = [key for key in PLAN_LIMIT_KEYS if key not in block]
+    if missing:
+        raise malformed(f"missing {', '.join(missing)}")
+    if block["schema"] != REVIEW_LIMITS_SCHEMA:
+        raise malformed(f"schema must be {REVIEW_LIMITS_SCHEMA} (found {block['schema']!r})")
+    if block["basis"] not in PLAN_BASES:
+        raise malformed(f"basis must be one of {', '.join(PLAN_BASES)} (found {block['basis']!r})")
+    limits: dict = {"schema": block["schema"]}
+    for key in PLAN_LIMIT_KEYS[1:5]:
+        value = block[key]
+        if key.endswith("_tokens") and value == "off":
+            limits[key] = "off"
+        elif re.fullmatch(r"[0-9]+", value) and int(value) >= 1:
+            limits[key] = int(value)
+        else:
+            allowed = "an integer >= 1 or off" if key.endswith("_tokens") else "an integer >= 1"
+            raise malformed(f"{key} must be {allowed} (found {value!r})")
+    limits["basis"] = block["basis"]
+    return limits
+
+
+def _repo_mode_limits(repo: dict | None, mode: str) -> tuple[int, int | str]:
+    """``(rounds, tokens)`` for ``mode`` from the repo file, or the constants without one."""
+    if repo is None:
+        return ROUND_BUDGETS[mode], TOKEN_BUDGETS[mode]
+    tokens = "off" if repo["token_budgets"] == "off" else repo["tokens"][mode]
+    return repo["rounds"][mode], tokens
+
+
+def plan_basis(block: dict, repo: dict | None) -> str:
+    """How ``block`` relates to the repo limits: ``repo``, ``tightened`` or ``loosened``."""
+    pairs = []
+    for mode in PLAN_LIMIT_MODES:
+        rounds, tokens = _repo_mode_limits(repo, mode)
+        pairs += [(block[f"{mode}_rounds"], rounds), (block[f"{mode}_tokens"], tokens)]
+    if any(_looser(value, than) for value, than in pairs):
+        return "loosened"
+    return "repo" if all(value == than for value, than in pairs) else "tightened"
+
+
+def run_limits_check(plan: Path) -> tuple[int, str]:
+    """``run_parameters.py limits-check --plan <slug>``: its exit code and output (AC-13)."""
+    try:
+        done = subprocess.run(
+            [sys.executable, str(RUN_PARAMETERS), "limits-check", "--plan", plan.parent.name],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120, check=False, cwd=str(REPO_ROOT),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, f"limits-check could not run: {exc}"
+    return done.returncode, (done.stdout + done.stderr).strip()
+
+
+def verified_limits(said: str) -> dict | None:
+    """The ``review_limits`` a passing ``limits-check`` printed, or None when it printed none."""
+    for line in said.splitlines():
+        try:
+            out = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(out, dict) and out.get("result") == "limits_verified":
+            limits = out.get("review_limits")
+            return limits if isinstance(limits, dict) else None
+    return None
+
+
+def resolve_limits(args) -> tuple[int, int | str, dict, str]:
+    """``(round_budget, token_budget, limits_source, repo_said)`` for ``begin`` (AC-5 … AC-9).
+
+    The repo file (the constants when it is absent), then the ``--ac-file`` block for plan
+    and execution loops, then ``--round-budget`` and ``--token-budget``, which only tighten.
+    Raising a limit is a ``continue`` by a named human, or a block ``limits-check`` verified.
+    """
+    mode = args.review_mode
+    found = read_repo_limits(REPO_ROOT)
+    repo, sha = found if found else (None, None)
+    rounds, tokens = _repo_mode_limits(repo, mode)
+    repo_said = f"repo:{sha[:12]}" if sha else "constants (no .agent/review-limits.json)"
+    origin = repo_said
+    source: dict = {"repo": sha or "constants", "plan": None, "flags": []}
+
+    plan = Path(args.ac_file)
+    block = load_plan_limits(plan) if mode in PLAN_LIMIT_MODES else None
+    if block is not None:
+        task = plan.with_name("task.md")
+        if task.name != plan.name and task.is_file():
+            other = load_plan_limits(task)
+            if other is not None and other != block:
+                raise Refuse(
+                    "review_limits differs between implementation-plan.md and task.md "
+                    f"({plan} and {task}). The two carriers must hold the same block; fix "
+                    "the one that drifted."
+                )
+        basis = plan_basis(block, repo)
+        if block["basis"] != basis and (block["basis"], basis) != ("tightened", "repo"):
+            raise FailClosed(
+                f"review_limits in {plan} says basis: {block['basis']}, but against "
+                f"{repo_said} its values are {basis}. The basis records the relation the "
+                "plan was approved under; correct the values or the basis."
+            )
+        if block["basis"] == "loosened":
+            code, said = run_limits_check(plan)
+            if code != 0:
+                raise Refuse(
+                    f"review_limits in {plan} loosens the repo limits ({repo_said}), and "
+                    f"`run_parameters.py limits-check --plan {plan.parent.name}` refused it "
+                    f"(exit {code}): {said or '(no output)'}. A plan may loosen a limit only "
+                    "through a value the human typed into a verified offer (D-2)."
+                )
+            verified = verified_limits(said)
+            if verified != block:
+                raise Refuse(
+                    f"review_limits in {plan} is not the block limits-check verified for "
+                    f"--plan {plan.parent.name}: it read the repository plan, and printed "
+                    f"{verified!r}. Pass the repository plan as --ac-file."
+                )
+        rounds, tokens = block[f"{mode}_rounds"], block[f"{mode}_tokens"]
+        source["plan"] = str(plan)
+        origin = str(plan)
+
+    for flag, key in (("--round-budget", "round_budget"), ("--token-budget", "token_budget")):
+        value = getattr(args, key, None)
+        if value is None:
+            continue
+        current = rounds if key == "round_budget" else tokens
+        if not _is_count(value) and (value != "off" or key == "round_budget"):
+            allowed = "an integer >= 1 or off" if key == "token_budget" else "an integer >= 1"
+            raise Refuse(f"{flag} must be {allowed} (got {value!r})")
+        if _looser(value, current):
+            raise Refuse(
+                f"{flag} {_limit_text(value)} is looser than the resolved "
+                f"{key.replace('_', ' ')} {_limit_text(current)} (from {origin}). A flag may "
+                "only tighten. Raising a limit is a continue by a named human, or a "
+                "loosened review_limits block that limits-check verified."
+            )
+        source["flags"].append(key)
+        if key == "round_budget":
+            rounds = value
+        else:
+            tokens = value
+    return rounds, tokens, source, repo_said
 
 
 def _filter(record: dict, keys: tuple[str, ...], what: str) -> dict:
@@ -314,6 +614,21 @@ def load_ledger(loop_id: str) -> dict:
     ledger["mechanism_reliefs"] = [
         _filter(r, RELIEF_KEYS, "relief") for r in raw.get("mechanism_reliefs", [])
     ]
+    budget = ledger.get("token_budget", "off")
+    if budget != "off" and not _is_count(budget):
+        raise FailClosed(
+            f"ledger at {path} has token_budget {budget!r}; it must be an integer >= 1 or "
+            '"off". Refusing rather than falling back to the default: a budget nobody set '
+            "is not a budget."
+        )
+    source = ledger.get("limits_source")
+    if source is not None and (
+        not isinstance(source, dict) or set(source) != set(LIMITS_SOURCE_KEYS)
+    ):
+        raise FailClosed(
+            f"ledger at {path} has a limits_source that is not "
+            f"{{{', '.join(LIMITS_SOURCE_KEYS)}}}: {source!r}"
+        )
     return ledger
 
 
@@ -415,7 +730,7 @@ def read_usage(receipt: Path) -> int | None:
     return int(found.group(1)) if found else None
 
 
-def tokens_spent(ledger: dict) -> tuple[int, int, int]:
+def tokens_spent(ledger: dict) -> tuple[int, int, int | str]:
     """``(spent, reserve, budget)`` for the token stop.
 
     ``spent`` sums ``usage`` over measured rounds only: an unmeasured round is recorded
@@ -423,7 +738,8 @@ def tokens_spent(ledger: dict) -> tuple[int, int, int]:
     stop on a number nobody observed (AC-4). ``reserve`` is what the *next* round is
     expected to cost -- the most recent measured round's usage, or the budget's
     per-round share while nothing has been measured. ``budget`` is the loop's base
-    budget plus every ``tokens`` a continue has granted.
+    budget plus every ``tokens`` a continue has granted, or ``"off"`` for a loop opened
+    without a token budget: then nothing is reserved from a share and nothing is added.
     """
     measured = [
         r["usage"]
@@ -431,7 +747,10 @@ def tokens_spent(ledger: dict) -> tuple[int, int, int]:
         if isinstance(r.get("usage"), int) and not r.get("unmeasured")
     ]
     spent = sum(measured)
-    base = ledger.get("token_budget") or TOKEN_BUDGETS[ledger["review_mode"]]
+    # An absent key is a ledger older than the token budget; load_ledger refuses 0 or null.
+    base = ledger.get("token_budget", TOKEN_BUDGETS[ledger["review_mode"]])
+    if base == "off":
+        return spent, measured[-1] if measured else 0, "off"
     budget = base + sum(g.get("tokens") or 0 for g in ledger.get("grants", []))
     reserve = measured[-1] if measured else base // ledger["round_budget"]
     return spent, reserve, budget
@@ -468,7 +787,7 @@ def stops(ledger: dict) -> list[tuple[str, str]]:
     # needs is permitted, and the selftest pins the boundary from both sides so a `>=`
     # cannot creep in.
     spent, reserve, token_budget = tokens_spent(ledger)
-    if spent + reserve > token_budget:
+    if token_budget != "off" and spent + reserve > token_budget:
         reasons.append(("tokens",
             f"tokens: {spent:,} spent + {reserve:,} reserved for the next round > "
             f"budget {token_budget:,}. The reserve is the last measured round's cost, so "
@@ -576,6 +895,7 @@ def stop_readout(ledger: dict) -> str:
         f"  achieved    {achieved}",
         f"  blocking    {', '.join(blockers) or 'none'}",
         f"  rounds      {len(rounds)}/{rounds_allowed(ledger)}",
+        f"  tokens      off ({spent:,} spent, not budgeted)" if token_budget == "off" else
         f"  tokens      {spent:,}/{token_budget:,} (next round reserved at {reserve:,})",
         f"  mechanisms  {tally}",
         f"  continue    {command}" + ("" if active else "  (no stop active)"),
@@ -697,11 +1017,6 @@ def cmd_begin(args) -> int:
             f"review-mode {args.review_mode!r} unknown; expected one of "
             f"{', '.join(sorted(ROUND_BUDGETS))}"
         )
-    token_budget = getattr(args, "token_budget", None)
-    if token_budget is None:
-        token_budget = TOKEN_BUDGETS[args.review_mode]
-    elif token_budget < 1:
-        raise Refuse(f"--token-budget must be a positive integer (got {token_budget})")
 
     # Intent is registered at the door. A loop that never said what it was for cannot
     # have a verdict judged against it, and the citable AC set comes from the plan file.
@@ -726,11 +1041,12 @@ def cmd_begin(args) -> int:
             "loop would reset the counts that are the only thing making its stops "
             "real. Use a new loop-id, or `state` to inspect this one."
         )
+    round_budget, token_budget, source, repo_said = resolve_limits(args)
     ledger = {
         "schema_version": SCHEMA_VERSION,
         "loop_id": args.loop_id,
         "review_mode": args.review_mode,
-        "round_budget": ROUND_BUDGETS[args.review_mode],
+        "round_budget": round_budget,
         "token_budget": token_budget,
         "producer": args.producer,
         "opened": datetime.date.today().isoformat(),
@@ -741,11 +1057,15 @@ def cmd_begin(args) -> int:
         "goal_anchor": goal,
         "ac_ids": ac_ids,
         "vocabulary_path": str(vocabulary),
+        "limits_source": source,
     }
     save_ledger(ledger)
     print(
         f"OK: opened loop {args.loop_id!r} mode={args.review_mode} "
-        f"budget={ledger['round_budget']} tokens={token_budget:,} producer={args.producer!r}"
+        f"budget={ledger['round_budget']} tokens={_limit_text(token_budget)} "
+        f"producer={args.producer!r} source={repo_said}"
+        + (f" plan={source['plan']}" if source["plan"] else "")
+        + (f" flags={','.join(source['flags'])}" if source["flags"] else "")
     )
     print(f"     intent: {goal}")
     print(f"     citable: {', '.join(ac_ids)}  vocabulary: {vocabulary}")
@@ -999,6 +1319,11 @@ def cmd_continue(args) -> int:
     except ValueError:
         print(f"USAGE: --at must be an ISO-8601 timestamp (got {at!r}).")
         return 2
+    if tokens and tokens_spent(ledger)[2] == "off":
+        raise Refuse(
+            "token budget is off for this loop; nothing to lift. Continue with --rounds "
+            "or --relieve-mechanism instead."
+        )
     if not by.strip():
         raise Refuse("--by must name a person. An unattributed override is not one.")
     substance = len("".join(said.split()))
@@ -1060,7 +1385,8 @@ def cmd_continue(args) -> int:
     )
     print(
         f"     rounds {len(ledger['rounds'])}/{rounds_allowed(ledger)}  "
-        f"tokens {spent:,}/{token_budget:,}"
+        + (f"tokens off ({spent:,} spent, not budgeted)" if token_budget == "off"
+           else f"tokens {spent:,}/{token_budget:,}")
     )
     if remaining:
         print("     still stopped -- this continue did not lift:")
@@ -1079,7 +1405,18 @@ def cmd_state(args) -> int:
           f" (base {ledger['round_budget']} + {budget - ledger['round_budget']} bought by "
           f"{len(ledger['grants'])} continue(s))")
     spent, reserve, token_budget = tokens_spent(ledger)
-    print(f"     tokens     {spent:,}/{token_budget:,} spent, next round reserved at {reserve:,}")
+    if token_budget == "off":
+        print(f"     tokens     off ({spent:,} spent, not budgeted)")
+    else:
+        print(f"     tokens     {spent:,}/{token_budget:,} spent, "
+              f"next round reserved at {reserve:,}")
+    source = ledger.get("limits_source")
+    if source is None:
+        print("     limits: (pre-review-limits ledger)")
+    else:
+        repo = source["repo"] if source["repo"] == "constants" else f"repo:{source['repo'][:12]}"
+        print(f"     limits: {repo} plan={source['plan'] or 'none'} "
+              f"flags={','.join(source['flags']) or 'none'}")
     for entry in ledger["rounds"]:
         usage = entry.get("usage")
         print(
@@ -1119,6 +1456,8 @@ def cmd_selftest(_args) -> int:
     the must-REFUSE ones: a ledger that refuses everything satisfies every negative
     arm and is useless (V3).
     """
+    # The limits arms point the repo root and limits-check at the temp dir; restored below.
+    global REPO_ROOT, run_limits_check
     import contextlib
     import io
     import tempfile
@@ -1211,6 +1550,13 @@ def cmd_selftest(_args) -> int:
     with tempfile.TemporaryDirectory(prefix="review-ledger-selftest-") as tmp:
         previous = os.environ.get("RECEIPTS_DIR")
         os.environ["RECEIPTS_DIR"] = tmp
+        saved_root, saved_check = REPO_ROOT, run_limits_check
+        REPO_ROOT = Path(tmp) / "repo-root"
+
+        def refuse_check(plan):
+            return 1, "selftest: limits-check is not run here"
+
+        run_limits_check = refuse_check
         try:
             vdir = Path(tmp) / "verdicts"
             vdir.mkdir()
@@ -1729,6 +2075,118 @@ def cmd_selftest(_args) -> int:
                 verdict_file=write("u2.json", verdict_doc(
                     "loop-u", 2, findings=[finding("U2")])))
 
+            # --- review limits (AC-5 ... AC-10) ---------------------------------
+            # The repo file, then the plan block, then the flags, which only tighten; and
+            # "off" has no tokens stop. REPO_ROOT is in the temp dir, so the arms above saw
+            # the constants and these see only the files they write.
+            limits_file = REPO_ROOT / ".agent" / "review-limits.json"
+            limits_file.parent.mkdir(parents=True, exist_ok=True)
+
+            def repo_limits(switch="on", **rounds):
+                limits_file.write_text(json.dumps({
+                    "schema": REVIEW_LIMITS_SCHEMA, "token_budgets": switch,
+                    "rounds": {**ROUND_BUDGETS, **rounds}, "tokens": dict(TOKEN_BUDGETS),
+                }), encoding="utf-8")
+
+            def plan_with(name, block):
+                folder = vdir / name
+                folder.mkdir()
+                path = folder / "implementation-plan.md"
+                path.write_text("---\n" + block + "---\n| AC-1 | x |\n", encoding="utf-8")
+                return str(path)
+
+            def edit_ledger(loop, **changes):
+                path = ledger_path(loop)
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                raw.update(changes)
+                path.write_text(json.dumps(raw), encoding="utf-8")
+
+            def usage_round(n, usage):
+                return {"round": n, "agent": "reviewer-a", "verdict": "changes_required",
+                        "date": "2026-10-20", "blocking": 0, "findings": [], "usage": usage,
+                        "unmeasured": False, "intent_achieved": "partial"}
+
+            tightened = (
+                "review_limits:\n  schema: review-limits/1\n  plan_rounds: 2\n"
+                "  execution_rounds: 4\n  plan_tokens: 5000\n  execution_tokens: 9000\n"
+                "  basis: tightened\n"
+            )
+            arm("limits-no-repo-file-is-constants", "OK", cmd_begin, loop_id="loop-l0",
+                must_say="source=constants", review_mode="plan", producer="builder-x")
+            repo_limits(plan=5)
+            arm("limits-repo-file-is-read", "OK", cmd_begin, loop_id="loop-l1",
+                must_say="budget=5 ", review_mode="plan", producer="builder-x")
+            limits_file.write_text("{}", encoding="utf-8")
+            arm("limits-malformed-repo-file-fails-closed", "FAIL-CLOSED", cmd_begin,
+                loop_id="loop-l2", must_say="malformed", review_mode="plan",
+                producer="builder-x")
+            limits_file.unlink()
+            arm("limits-plan-block-tightens", "OK", cmd_begin, loop_id="loop-l3",
+                must_say="budget=4 ", review_mode="execution", producer="builder-x",
+                ac_file=plan_with("tight", tightened))
+            arm("limits-plan-basis-mismatch-fails-closed", "FAIL-CLOSED", cmd_begin,
+                loop_id="loop-l4", must_say="its values are loosened",
+                review_mode="execution", producer="builder-x",
+                ac_file=plan_with("mismatch", tightened.replace("rounds: 4", "rounds: 7")))
+            differs = plan_with("differs", tightened)
+            Path(differs).with_name("task.md").write_text(
+                "---\n" + tightened.replace("plan_rounds: 2", "plan_rounds: 1") + "---\n",
+                encoding="utf-8")
+            arm("limits-task-block-differs-refused", "REFUSE", cmd_begin, loop_id="loop-l5",
+                must_say="differs between", review_mode="execution", producer="builder-x",
+                ac_file=differs)
+            loosened = plan_with("loose", tightened.replace("rounds: 4", "rounds: 9")
+                                 .replace("basis: tightened", "basis: loosened"))
+            arm("limits-loosened-needs-limits-check", "REFUSE", cmd_begin, loop_id="loop-l6",
+                must_say="limits-check", review_mode="execution", producer="builder-x",
+                ac_file=loosened)
+
+            def other_check(plan):
+                return 0, json.dumps({"result": "limits_verified", "review_limits": {}})
+
+            run_limits_check = other_check
+            arm("limits-loosened-other-block-refused", "REFUSE", cmd_begin, loop_id="loop-l6",
+                must_say="not the block limits-check verified", review_mode="execution",
+                producer="builder-x", ac_file=loosened)
+            run_limits_check = refuse_check
+            arm("limits-round-flag-tightens", "OK", cmd_begin, loop_id="loop-l7",
+                must_say="flags=round_budget", review_mode="plan", producer="builder-x",
+                round_budget=1)
+            arm("limits-round-flag-loosening-refused", "REFUSE", cmd_begin,
+                loop_id="loop-l8", must_say="only tighten", review_mode="plan",
+                producer="builder-x", round_budget=4)
+            arm("limits-token-off-flag-against-number-refused", "REFUSE", cmd_begin,
+                loop_id="loop-l8", must_say="only tighten", review_mode="plan",
+                producer="builder-x", token_budget="off")
+            repo_limits("off")
+            arm("limits-repo-off-opens-unbudgeted", "OK", cmd_begin, loop_id="loop-off",
+                must_say="tokens=off", review_mode="plan", producer="builder-x")
+            edit_ledger("loop-off", rounds=[usage_round(1, 10**12)])
+            arm("limits-off-loop-has-no-tokens-stop", "OK", cmd_evaluate, loop_id="loop-off")
+            arm("limits-off-state-says-not-budgeted", "OK", cmd_state, loop_id="loop-off",
+                must_say="not budgeted")
+            arm("limits-off-continue-tokens-refused", "REFUSE", cmd_continue,
+                loop_id="loop-off", must_say="nothing to lift", rounds=0, tokens=5,
+                relieve_mechanism=None, said="x" * 30, by="Pat", at="2026-10-20T10:00:00")
+            limits_file.unlink()
+            arm("limits-budget-of-one-opens", "OK", cmd_begin, loop_id="loop-one",
+                review_mode="plan", producer="builder-x", token_budget=1)
+            edit_ledger("loop-one", rounds=[usage_round(1, 5)])
+            arm("limits-budget-of-one-still-stops", "REFUSE", cmd_evaluate,
+                loop_id="loop-one", must_say="tokens: 5 spent")
+            edit_ledger("loop-one", token_budget=0)
+            arm("limits-zero-budget-fails-closed", "FAIL-CLOSED", cmd_state,
+                loop_id="loop-one", must_say="token_budget 0")
+            edit_ledger("loop-one", token_budget=None)
+            arm("limits-null-budget-fails-closed", "FAIL-CLOSED", cmd_state,
+                loop_id="loop-one", must_say="token_budget None")
+            legacy = json.loads(ledger_path("loop-a").read_text(encoding="utf-8"))
+            legacy.pop("limits_source")
+            legacy["loop_id"] = "loop-legacy"
+            ledger_path("loop-legacy").write_text(json.dumps(legacy), encoding="utf-8")
+            arm("limits-legacy-ledger-state", "OK", cmd_state, loop_id="loop-legacy",
+                must_say="pre-review-limits ledger")
+
             # --- an unwritable ledger destination is 3, not a traceback -------
             # RECEIPTS_DIR pointed *through* a regular file, so mkdir cannot create the
             # ledger directory on any platform. The OSError used to escape main()'s
@@ -1768,6 +2226,7 @@ def cmd_selftest(_args) -> int:
                 status if "RECEIPTS_DIR is not set" in text else f"{status} (wrong reason)",
             ))
         finally:
+            REPO_ROOT, run_limits_check = saved_root, saved_check
             if previous is None:
                 os.environ.pop("RECEIPTS_DIR", None)
             else:
@@ -1793,6 +2252,16 @@ def cmd_selftest(_args) -> int:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _count_arg(text: str) -> int:
+    if not re.fullmatch(r"[0-9]+", text) or int(text) < 1:
+        raise argparse.ArgumentTypeError(f"must be an integer >= 1 (got {text!r})")
+    return int(text)
+
+
+def _budget_arg(text: str) -> int | str:
+    return "off" if text == "off" else _count_arg(text)
+
+
 def build_parser() -> argparse.ArgumentParser:
     doc = __doc__ or ""
     parser = argparse.ArgumentParser(
@@ -1807,8 +2276,10 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=sorted(ROUND_BUDGETS))
     p.add_argument("--producer", required=True,
                    help="the agent that produced the work; it may not author a verdict")
-    p.add_argument("--token-budget", type=int, default=None,
-                   help="tokens the loop may spend (default: TOKEN_BUDGETS for the mode)")
+    p.add_argument("--round-budget", type=_count_arg, default=None, metavar="N",
+                   help="tighten the resolved round budget (repo file, then the plan block)")
+    p.add_argument("--token-budget", type=_budget_arg, default=None, metavar="N|off",
+                   help="tighten the resolved token budget; off only where it is already off")
     p.add_argument("--goal-anchor", required=True,
                    help="one sentence of intent every verdict in this loop must quote")
     p.add_argument("--ac-file", required=True, metavar="PLAN",

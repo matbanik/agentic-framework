@@ -65,12 +65,14 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib.util
 import json
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import placeholders as ph  # noqa: E402
@@ -154,6 +156,8 @@ CONFIG_KEYS = {
     "PROJECT_NAME_TITLE": "project_name_title",
     "PROJECT_NAME_UPPER": "project_name_upper",
     "CREDITS_START_POLICY": "credits_start_policy",
+    "ROUND_CAPS": "round_caps",
+    "TOKEN_BUDGETS": "token_budgets",
 }
 
 # --- scheduled credits runs ---------------------------------------------------------------
@@ -210,6 +214,7 @@ RUN_PARAMETERS_WINDOWS_ONLY = (
     "tools/tests/run_parameters_fixtures",
     "tools/tests/test_agent_commit.py",
     "tools/tests/test_commit_batch.py",
+    "tools/tests/test_review_limits_audit.py",
     "tools/tests/test_run_parameters.py",
     "tools/tests/test_run_parameters_r1_corrections.py",
     "tools/tests/test_run_parameters_r2_corrections.py",
@@ -588,6 +593,113 @@ def _credits_problems(root: Path, receipts_dir: str | None) -> list[str]:
     return problems
 
 
+# --- review limits ------------------------------------------------------------------------
+#: The repo review limits (AC-1 … AC-4). The ledger reads it at ``begin``; the setup answers
+#: ``--round-caps`` and ``--token-budgets`` land here, and no answer keeps the shipped file.
+REVIEW_LIMITS = ".agent/review-limits.json"
+#: The reader that owns the file's schema; ``--verify`` and the write both go through it.
+REVIEW_LEDGER = "tools/review_ledger.py"
+REVIEW_MODES = ("plan", "execution", "discovery", "handoff", "multi-handoff")
+TOKEN_BUDGET_SWITCH = ("on", "off")
+_COUNT_RE = re.compile(r"[0-9]+")
+
+
+def parse_round_caps(text: str) -> dict[str, int]:
+    """``mode=N[,mode=N]`` with modes from REVIEW_MODES, each once, and N >= 1.
+
+    Raises:
+        ValueError: an empty item, an unknown or repeated mode, or N that is not an
+            integer >= 1.
+    """
+    caps: dict[str, int] = {}
+    for item in text.split(","):
+        mode, sep, value = item.partition("=")
+        if not sep:
+            raise ValueError(f"round_caps item {item!r} is not mode=N")
+        if mode not in REVIEW_MODES:
+            raise ValueError(
+                f"round_caps mode {mode!r} is not one of {', '.join(REVIEW_MODES)}"
+            )
+        if mode in caps:
+            raise ValueError(f"round_caps names {mode} twice")
+        if not _COUNT_RE.fullmatch(value) or int(value) < 1:
+            raise ValueError(f"round_caps {mode}={value!r} is not an integer >= 1")
+        caps[mode] = int(value)
+    return caps
+
+
+def _review_ledger(root: Path) -> ModuleType:
+    """The tree's own ``tools/review_ledger.py``, loaded by path."""
+    path = root / REVIEW_LEDGER
+    if not path.is_file():
+        raise ValueError(
+            f"{REVIEW_LIMITS} needs {REVIEW_LEDGER} to check it; copy core/tools first"
+        )
+    spec = importlib.util.spec_from_file_location("review_ledger_for_install", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"{REVIEW_LEDGER} cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    # No __pycache__ in the tree: --verify is read-only, and the snapshot tests say so.
+    prior = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = prior
+    return module
+
+
+def _checked_limits(root: Path) -> dict[str, object] | None:
+    """The tree's review-limits file through ``load_repo_limits``, or None when absent.
+
+    Raises:
+        ValueError: the reader refuses the file.
+    """
+    if not (root / REVIEW_LIMITS).exists():
+        return None
+    ledger = _review_ledger(root)
+    try:
+        return ledger.load_repo_limits(root)
+    except ledger.FailClosed as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _plan_review_limits(
+    root: Path, caps: dict[str, int], token_budgets: str | None
+) -> bytes | None:
+    """The new bytes of the review-limits file, or None when nothing changes."""
+    if not caps and token_budgets is None:
+        return None
+    current = _checked_limits(root)
+    if current is None:
+        raise ValueError(
+            f"round_caps and token_budgets need {REVIEW_LIMITS}; copy core/.agent first"
+        )
+    answer = copy.deepcopy(current)
+    answer["rounds"].update(caps)
+    if token_budgets is not None:
+        answer["token_budgets"] = token_budgets
+    return None if answer == current else _json_bytes(answer)
+
+
+def _review_limits_line(caps: dict[str, int], token_budgets: str | None) -> str:
+    parts = []
+    if caps:
+        parts.append("rounds=" + ",".join(f"{mode}:{n}" for mode, n in caps.items()))
+    if token_budgets is not None:
+        parts.append(f"token_budgets={token_budgets}")
+    return f"  write  {REVIEW_LIMITS} {' '.join(parts)}"
+
+
+def _review_limits_problems(root: Path) -> list[str]:
+    """The ``--verify`` finding for the review-limits file: what ``load_repo_limits`` refuses."""
+    try:
+        _checked_limits(root)
+    except ValueError as exc:
+        return [f"{REVIEW_LIMITS}: {exc}"]
+    return []
+
+
 def verify_only(
     root: Path, *, in_place: bool = False, receipts_dir: str | None = None
 ) -> int:
@@ -616,6 +728,7 @@ def verify_only(
         for rel in leftover_token_names:
             offenders.append((rel, 1))
     problems = [] if in_place else _credits_problems(root, receipts_dir)
+    limits = [] if in_place else _review_limits_problems(root)
     if offenders:
         print(f"VERIFY FAILED: {len(offenders)} file(s) still contain placeholders:")
         for rel, cnt in offenders:
@@ -624,7 +737,11 @@ def verify_only(
         print(f"VERIFY FAILED: {len(problems)} credits install problem(s):")
         for line in problems:
             print(f"  {line}")
-    if offenders or problems:
+    if limits:
+        print(f"VERIFY FAILED: {len(limits)} review-limits problem(s):")
+        for line in limits:
+            print(f"  {line}")
+    if offenders or problems or limits:
         return 2
     print("verify: OK (0 placeholder tokens remain)")
     return 0
@@ -637,16 +754,22 @@ def run(
     *,
     in_place: bool = False,
     credits_start_policy: str | None = None,
+    round_caps: str | None = None,
+    token_budgets: str | None = None,
 ) -> int:
     """Substitute the tokens, rename the agent files and install the credits pieces.
 
     ``credits_start_policy`` (or ``values["credits_start_policy"]`` from a config file;
     the argument wins) is written to ``.agent/credits/config.json``; None keeps the
-    template answer. Every check runs before the first write.
+    template answer. ``round_caps`` (``mode=N[,mode=N]``) and ``token_budgets``
+    (``on``/``off``) are written to ``.agent/review-limits.json`` the same way, each
+    answer replacing the config file's; None keeps the shipped values. Every check runs
+    before the first write.
 
     Raises:
         ValueError: a bad value, a rename collision, a network receipts directory, an
-            unknown policy, or an invalid settings, fragment or config file.
+            unknown policy, a bad round cap or token-budget switch, or an invalid
+            settings, fragment, config or review-limits file.
     """
     values = dict(values)
     policy = values.pop("credits_start_policy", None)
@@ -656,6 +779,19 @@ def run(
         raise ValueError(
             f"credits_start_policy {policy!r} is not one of {', '.join(CREDITS_START_POLICIES)}"
         )
+    caps_text = values.pop("round_caps", None)
+    if round_caps is not None:
+        caps_text = round_caps
+    switch = values.pop("token_budgets", None)
+    if token_budgets is not None:
+        switch = token_budgets
+    caps = parse_round_caps(caps_text) if caps_text is not None else {}
+    if switch is not None and switch not in TOKEN_BUDGET_SWITCH:
+        raise ValueError(
+            f"token_budgets {switch!r} is not one of {', '.join(TOKEN_BUDGET_SWITCH)}"
+        )
+    if in_place and (caps or switch is not None):
+        raise ValueError("round_caps and token_budgets apply to an adopter tree (--root)")
     receipts = values.get("receipts_dir", "")
     if is_network_path(receipts):
         raise ValueError(
@@ -667,6 +803,7 @@ def run(
     pairs = planned_agent_renames(root, slug)
     refuse_rename_collisions(pairs)
     credits = _CreditsPlan() if in_place else _plan_credits(root, policy)
+    limits_bytes = None if in_place else _plan_review_limits(root, caps, switch)
     removed = set(credits.removals)
 
     print("Placeholder -> value:")
@@ -701,6 +838,8 @@ def run(
         print(f"  merge  {HOOK_FRAGMENT} -> {HOOK_SETTINGS} ({credits.added_entries} added)")
     if credits.config_bytes is not None:
         print(f"  write  {CREDITS_CONFIG} credits_start_policy={policy}")
+    if limits_bytes is not None:
+        print(_review_limits_line(caps, switch))
 
     if not dry_run:
         for path, new_text, bom, _n in planned:
@@ -716,6 +855,8 @@ def run(
             settings_path.write_bytes(credits.settings_bytes)
         if credits.config_bytes is not None:
             (root / CREDITS_CONFIG).write_bytes(credits.config_bytes)
+        if limits_bytes is not None:
+            (root / REVIEW_LIMITS).write_bytes(limits_bytes)
 
     mode = "DRY-RUN (no files written)" if dry_run else "APPLIED"
     print("\n" + "=" * 60)
@@ -998,6 +1139,40 @@ def selftest() -> int:
             proc3.returncode == 2 and "collision" in (proc3.stderr or "").lower(),
         )
 
+    # Review limits: the answers parse strictly, the modes are the ledger's own, and the
+    # ledger's reader refuses a file that --verify must then report.
+    for bad in ("plan=0", "plan=x", "bogus=3", "plan=3,plan=4", "plan", ""):
+        try:
+            parse_round_caps(bad)
+            check(f"round-caps-refused[{bad}]", False)
+        except ValueError:
+            check(f"round-caps-refused[{bad}]", True)
+    check(
+        "round-caps-parsed",
+        parse_round_caps("plan=4,execution=8") == {"plan": 4, "execution": 8},
+    )
+    with tempfile.TemporaryDirectory(prefix="instantiate-limits-") as tmp:
+        tree = Path(tmp)
+        core = package_root() / "core"
+        (tree / ".agent").mkdir()
+        (tree / "tools").mkdir()
+        shutil.copy2(core / REVIEW_LIMITS, tree / REVIEW_LIMITS)
+        shutil.copy2(core / REVIEW_LEDGER, tree / REVIEW_LEDGER)
+        ledger = _review_ledger(tree)
+        check("review-modes-are-the-ledger-modes", tuple(ledger.ROUND_BUDGETS) == REVIEW_MODES)
+        planned = _plan_review_limits(tree, {"plan": 4}, "off")
+        answer = json.loads(planned) if planned is not None else {}
+        check(
+            "review-limits-answer-planned",
+            answer.get("token_budgets") == "off" and answer.get("rounds", {}).get("plan") == 4,
+        )
+        check("review-limits-no-answer-no-write", _plan_review_limits(tree, {}, None) is None)
+        check("review-limits-verify-clean", _review_limits_problems(tree) == [])
+        bad_file = json.loads((tree / REVIEW_LIMITS).read_text(encoding="utf-8"))
+        bad_file["rounds"]["plan"] = 0
+        (tree / REVIEW_LIMITS).write_text(json.dumps(bad_file), encoding="utf-8")
+        check("review-limits-verify-refuses-bad-file", bool(_review_limits_problems(tree)))
+
     failures = sum(1 for _, ok in arms if not ok)
     must_pass = sum(1 for _, ok in arms if ok)
     print(
@@ -1036,6 +1211,20 @@ def main() -> int:
         choices=CREDITS_START_POLICIES,
         help="who may start a scheduled credits run: human-only (the default the "
         "template ships) or agent-on-user-chat; written to .agent/credits/config.json",
+    )
+    parser.add_argument(
+        "--round-caps",
+        metavar="MODE=N[,MODE=N]",
+        help="review round caps per mode (plan, execution, discovery, handoff, "
+        "multi-handoff), each N >= 1; unnamed modes keep the shipped value; written to "
+        ".agent/review-limits.json",
+    )
+    parser.add_argument(
+        "--token-budgets",
+        metavar="on|off",
+        help="whether review loops also stop on a token budget (the shipped default is "
+        "on); off also lifts the USD caps of scheduled credits runs; written to "
+        ".agent/review-limits.json",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -1098,6 +1287,8 @@ def main() -> int:
             root=root,
             in_place=args.in_place_package,
             credits_start_policy=args.credits_start_policy,
+            round_caps=args.round_caps,
+            token_budgets=args.token_budgets,
         )
     except ValueError as exc:
         parser.error(str(exc))

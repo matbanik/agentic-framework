@@ -43,7 +43,10 @@ Use this workflow when validating a completed MEU. Codex is the **validation age
      --producer "<the agent that wrote the code>"
    ```
    `--producer` is what makes the self-review prohibition above enforceable rather than
-   advisory: `record` refuses a verdict whose author equals the producer.
+   advisory: `record` refuses a verdict whose author equals the producer. The loop's round
+   and token limits come from `.agent/review-limits.json` (the ledger's constants when it is
+   absent), then from a `review_limits` block in the `--ac-file` frontmatter; `begin` prints
+   their source.
 
 **Dispatch command:** (effort per `cli-dispatch/SKILL.md` §Reviewer Effort Policy — `medium` for routine review, `high` for hard/risk-path; `max`/`xhigh` only for tagged deep sub-reviews)
 ```powershell

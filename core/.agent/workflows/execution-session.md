@@ -61,7 +61,7 @@ The orchestrating agent will:
 4. Resolve under-specified requirements via local canonical docs + targeted web research before finalizing the FIC
 5. Generate `implementation-plan.md` and `task.md` in the project folder
 6. Auto-dispatch `/plan-critical-review` via the independent-reviewer chain (`independent_reviewer` → `fallback_reviewer` (`tools/Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer`, only on a rate-limit receipt, flagged same-vendor) → **human**; `.agent/docs/model-routing.md`)
-7. Loop corrections until APPROVED (or HARD STOP at the 3-round cap, presented as a Decision Brief — recommendation first — per `create-plan.md` §5 round-cap block and `.agent/docs/human-decision-protocol.md` §5)
+7. Loop corrections until APPROVED (or HARD STOP at the plan loop's round cap — `review_limits.plan_rounds`, else `.agent/review-limits.json`; default 3 — presented as a Decision Brief — recommendation first — per `create-plan.md` §5 round-cap block and `.agent/docs/human-decision-protocol.md` §5)
 8. On `approved`: continue to Step 4 per your harness's `plan_to_exec_gate` flag (`.agent/docs/harness-profiles.md`) — `reviewer-auto` continues immediately; `plan_to_exec_gate: human` (the primary-driver default) ends the turn and waits for the user's explicit next chat message before Step 4 (`create-plan.md` §5c, `GUARDRAILS.md` SIGN 1); a verified `run_parameters` `exec_start` grant in `task.md` gives that message in advance: `create-plan.md` §5d runs `PC`, then Step 4 starts in the same turn
 
 > **Note:** The `/create-plan` workflow now auto-dispatches plan critical review.
@@ -180,14 +180,17 @@ When every machine rung is rate-limited or unavailable, this loop does not fall 
 
 **Before the first round**, open the loop once (the wrapper never does this):
 `python tools/review_ledger.py begin --loop-id exec-<plan-slug> --review-mode execution --producer <builder agent> --goal-anchor "<one sentence: what this execution was for>" --ac-file docs/execution/plans/<plan>/implementation-plan.md`
-— the goal sentence must also appear verbatim in every review prompt (the wrapper's `evaluate --payload` refuses a prompt that omits it, before inference), and the reviewer writes its rolling review file under `{{RECEIPTS_DIR}}/dispatch/<label>/`, which you copy into `handoffs/` after the dispatch (a repository write during a review dispatch is a conduct violation).
+— `begin` sets the loop's limits from `.agent/review-limits.json` (the ledger's constants when it is absent), then the plan's `review_limits` block, read from `--ac-file` (a `basis: loosened` block only after `tools/run_parameters.py limits-check` verifies the human typed it), and prints their source; `--round-budget` and `--token-budget N|off` only tighten. The goal sentence must also appear verbatim in every review prompt (the wrapper's `evaluate --payload` refuses a prompt that omits it, before inference), and the reviewer writes its rolling review file under `{{RECEIPTS_DIR}}/dispatch/<label>/`, which you copy into `handoffs/` after the dispatch (a repository write during a review dispatch is a conduct violation).
 
 **Correction Loop (pause-and-`continue` protocol, 2026-09-21):**
 - If `changes_required`: read findings, apply code/test corrections, re-run quality gates, re-dispatch
   with the same `--LoopId` — the ledger numbers the rounds; nothing to refresh or abort.
 - If `approved`: **continue immediately to Step 5 in the same turn** — the 4c→5 boundary is NOT a stop point
 - **If the wrapper exits 9 (the ledger refused the round)**: a stop fired — round budget
-  (`ROUND_BUDGETS`, execution = 6), token budget (`TOKEN_BUDGETS`), a mechanism at `MECHANISM_LIMIT`,
+  (the loop's, set at `begin` from the plan's `review_limits` block or `.agent/review-limits.json`;
+  `ROUND_BUDGETS` in `review_ledger.py` holds the shipped defaults, execution default 6), token
+  budget (from the same sources, `TOKEN_BUDGETS` the defaults; none when the limits say `off`),
+  a mechanism at `MECHANISM_LIMIT`,
   scaffolding, or instrument drift. The ledger printed `STOP_READOUT`: intent first, the exact
   `continue` command last. What happens next depends only on who is present:
   - **attended** — a human is in this chat: show the `STOP_READOUT` verbatim, then frame it as a

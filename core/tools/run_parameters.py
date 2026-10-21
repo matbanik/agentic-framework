@@ -262,6 +262,23 @@ OFFER_KEYS: tuple[str, ...] = (
     "supersedes",
     "accept",
 )
+#: The offer key set of each offer schema. /2 adds ``review_limits``, the six keys of a plan's
+#: block, so that a human-typed offer can loosen the repo's review limits (AC-13, AC-14);
+#: a /1 offer keeps its fourteen keys and cannot carry it.
+OFFER_SCHEMAS: dict[str, tuple[str, ...]] = {
+    "run-parameters-offer/1": OFFER_KEYS,
+    "run-parameters-offer/2": (*OFFER_KEYS[:-1], "review_limits", "accept"),
+}
+REVIEW_LIMITS_SCHEMA = "review-limits/1"
+REVIEW_LIMITS_KEYS: tuple[str, ...] = (
+    "schema",
+    "plan_rounds",
+    "execution_rounds",
+    "plan_tokens",
+    "execution_tokens",
+    "basis",
+)
+REVIEW_LIMITS_BASES = frozenset({"repo", "tightened", "loosened"})
 #: V-6 — the projection that the offer and the authorization must share.
 PI_KEYS: tuple[str, ...] = (
     "project",
@@ -1075,6 +1092,23 @@ def _credits_state() -> ModuleType:
         return importlib.import_module("credits_state")
 
 
+def _review_ledger() -> ModuleType:
+    """``tools/review_ledger.py``, the one reader of the review limits and the ledgers (D-13).
+
+    Imported the way ``_credits_state`` is: ``tools.review_ledger`` from the repository root,
+    ``review_ledger`` when ``tools/`` is on ``sys.path`` (``begin`` runs this file by path).
+    """
+    try:
+        return importlib.import_module("tools.review_ledger")
+    except ModuleNotFoundError:
+        return importlib.import_module("review_ledger")
+
+
+def _is_windows() -> bool:
+    """Whether this host is Windows, where the authority runs (a seam for the tests)."""
+    return os.name == "nt"
+
+
 def _typed_record(
     transcript: Transcript, uid: str, session: str
 ) -> tuple[str, dict[str, Any]]:
@@ -1216,11 +1250,16 @@ def _offer_payload(text: str, *, self_contained: bool) -> list[str]:
 
 
 class _ValueParser:
-    """O-1a values on one line: quoted scalars, flow maps, flow lists and plain scalars."""
+    """O-1a values on one line: quoted scalars, flow maps, flow lists and plain scalars.
 
-    def __init__(self, text: str) -> None:
+    With ``ints``, a plain scalar of digits is an int (``review_limits``); a quoted one stays
+    a string, so ``"3"`` is not a round count.
+    """
+
+    def __init__(self, text: str, *, ints: bool = False) -> None:
         self.text = text
         self.pos = 0
+        self.ints = ints
 
     def fail(self, why: str) -> NoReturn:
         """Refuse the value."""
@@ -1363,13 +1402,35 @@ class _ValueParser:
             self.fail("plain scalar")
         if token in ("true", "false"):
             return token == "true"
+        if self.ints and token.isascii() and token.isdigit():
+            return int(token)
         return token
 
 
-def _offer_types_ok(values: Mapping[str, Any]) -> bool:
-    """O-1a's typed check of the fourteen keys, with the standing conditions."""
+def _review_limits_ok(value: object) -> bool:
+    """The six keys of ``review_limits``: rounds an int >= 1; tokens also ``off``."""
+    if not isinstance(value, dict):
+        return False
+    limits = cast(dict[str, Any], value)
     return (
-        values["schema"] == "run-parameters-offer/1"
+        set(limits) == set(REVIEW_LIMITS_KEYS)
+        and limits["schema"] == REVIEW_LIMITS_SCHEMA
+        and all(_is_int(limits[key], 1) for key in ("plan_rounds", "execution_rounds"))
+        and all(
+            limits[key] == "off" or _is_int(limits[key], 1)
+            for key in ("plan_tokens", "execution_tokens")
+        )
+        and isinstance(limits["basis"], str)
+        and limits["basis"] in REVIEW_LIMITS_BASES
+    )
+
+
+def _offer_types_ok(values: Mapping[str, Any]) -> bool:
+    """O-1a's typed check of the offer's keys, with the standing conditions."""
+    return (
+        isinstance(values["schema"], str)
+        and values["schema"] in OFFER_SCHEMAS
+        and ("review_limits" not in values or _review_limits_ok(values["review_limits"]))
         and _match(PROJECT_RE, values["project"])
         and _scope_ok(values["scope"])
         and _members_ok(values["members"])
@@ -1400,10 +1461,12 @@ def _parse_offer(payload: Sequence[str]) -> dict[str, Any]:
         key = match.group(1)
         if key in values:
             raise Refusal("offer_schema", f"duplicate key {key}")
-        values[key] = _ValueParser(match.group(2)).parse()
-    if set(values) != set(OFFER_KEYS):
+        values[key] = _ValueParser(match.group(2), ints=key == "review_limits").parse()
+    schema = values.get("schema")
+    keys = OFFER_SCHEMAS.get(schema, OFFER_KEYS) if isinstance(schema, str) else OFFER_KEYS
+    if set(values) != set(keys):
         raise Refusal("offer_schema", "keys")
-    ordered = {key: values[key] for key in OFFER_KEYS}
+    ordered = {key: values[key] for key in keys}
     if not _offer_types_ok(ordered):
         raise Refusal("offer_schema", "types")
     return ordered
@@ -3420,8 +3483,9 @@ FINAL_SHARED: tuple[str, ...] = (
 )
 #: The metrics table: the read set holds only the plan's rows of it (a projection).
 FINAL_METRICS = "docs/execution/metrics.md"
-#: The execution-review round cap (``create-plan.md`` Step 6, sanctioned stop 2); the
-#: closeout validator refuses a review state past it.
+#: The execution-review round cap of a legacy task when the repository has no
+#: ``.agent/review-limits.json`` (``create-plan.md`` Step 6, sanctioned stop 2). The final
+#: audit takes its cap from ``audit_round_cap`` (AC-15).
 EXEC_REVIEW_MAX_ROUNDS = 6
 FINAL_SEAL_SCHEMA = "final-seal/1"
 FINAL_FAILURE_SCHEMA = "final-failure/1"
@@ -3702,6 +3766,42 @@ def _validator(tool: Path, code: int, stage: str) -> dict[str, Any]:
     return {"exit": code, "version": f"{tool.stem}/{stage}", "sha256": _sha256(data)}
 
 
+def audit_round_cap(top: Path, plan: str) -> int:
+    """The execution-review round cap of the final audit of ``plan`` (AC-15).
+
+    The ``exec-<plan>`` ledger's ``rounds_allowed()`` (its base budget plus every continue
+    grant) when the ledger exists. Without one, a task that carries ``review_limits`` is
+    refused (the loop those limits bound was never opened); a legacy task takes the
+    repository's ``rounds.execution``, else ``EXEC_REVIEW_MAX_ROUNDS``. A ledger or limits
+    file that does not load is refused, never a fall back to the default.
+    """
+    ledger = _review_ledger()
+    loop = f"exec-{plan}"
+    try:
+        path: Path | None = ledger.ledger_path(loop)
+    except ledger.FailClosed:
+        path = None
+    if path is not None and path.exists():
+        try:
+            data = ledger.load_ledger(loop)
+            mode = data.get("review_mode")
+            cap = ledger.rounds_allowed(data)
+        except (ledger.FailClosed, KeyError, TypeError, AttributeError) as exc:
+            raise Refusal("binding", "exec_ledger_malformed") from exc
+        if mode != "execution":
+            raise Refusal("binding", "exec_ledger_mode")
+        if not _is_int(cap, 1):
+            raise Refusal("binding", "exec_ledger_malformed")
+        return cast(int, cap)
+    try:
+        if ledger.load_plan_limits(top / _final_paths(plan)["task"]) is not None:
+            raise Refusal("binding", "exec_ledger_missing")
+        repo = ledger.load_repo_limits(top)
+    except ledger.FailClosed as exc:
+        raise Refusal("schema", "review_limits_malformed") from exc
+    return cast(int, repo["rounds"]["execution"]) if repo else EXEC_REVIEW_MAX_ROUNDS
+
+
 def run_stage_validators(
     top: Path,
     plan: str,
@@ -3717,8 +3817,10 @@ def run_stage_validators(
     ``--stage final --for-produce`` (the audit and the receipt checks wait for the receipt);
     the preflight runs ``--stage final`` on the snapshot tree. ``manifest`` is the commit
     packet of the run's last publishing op (a ``commit_exec`` run). Returns
-    ``{"closeout": {exit, version, sha256}, "preflight": {...}}``.
+    ``{"closeout": {exit, version, sha256}, "preflight": {...}}``. Both closeout runs take
+    the round cap of ``audit_round_cap``; a refused cap raises before any validator runs.
     """
+    cap = str(audit_round_cap(top, plan))
     tools = Path(__file__).resolve().parent
     closeout_tool = tools / "validate_closeout_artifacts.py"
     preflight_tool = tools / "completion_preflight.py"
@@ -3743,7 +3845,7 @@ def run_stage_validators(
             "--expected-target-plan",
             _final_paths(plan)["plan"],
             "--max-review-rounds",
-            str(EXEC_REVIEW_MAX_ROUNDS),
+            cap,
             "--output",
             str(state),
         ],
@@ -3764,7 +3866,7 @@ def run_stage_validators(
             "--review-state-receipt",
             str(state),
             "--max-review-rounds",
-            str(EXEC_REVIEW_MAX_ROUNDS),
+            cap,
             "--expected-target-plan",
             _final_paths(plan)["plan"],
         ]
@@ -5754,6 +5856,55 @@ def _cmd_inspect(repo: Repo, args: argparse.Namespace) -> Outcome:
     }
 
 
+def _cmd_limits_check(repo: Repo, args: argparse.Namespace) -> Outcome:
+    """``limits-check``: a plan's loosened ``review_limits`` against the typed offer (AC-13).
+
+    Read-only. Passes only when the plan's grant verifies (V-A to V-7), the authorization
+    is ``self-contained`` (the human typed the offer, so the human typed the limits), the
+    store (when there is one) agrees with it, and the offer's ``review_limits`` equal the
+    plan's block and the task's block (when the task carries one) key for key.
+    """
+    if not _is_windows():
+        raise Refusal("disabled", "not_windows")
+    _gate(repo, None)
+    plan = cast(str, args.plan)
+    verified = _verify_plan(repo, plan, None)
+    if verified.reference.auth["form"] != "self-contained":
+        raise Refusal("consent", "limits_need_self_contained")
+    if (repo.store / "store.json").exists():
+        _snapshot(
+            repo,
+            lambda: _store_checks(
+                repo, verified, act=None, op=None, reader=True, check_consumed=False
+            ),
+        )
+    offered = verified.reference.offer.get("review_limits")
+    if offered is None:
+        raise Refusal("binding", "review_limits_not_offered")
+    ledger = _review_ledger()
+    folder = _plan_dir(repo, verified.plan)
+    try:
+        block = ledger.load_plan_limits(folder / "implementation-plan.md")
+        task = ledger.load_plan_limits(folder / "task.md")
+    except ledger.FailClosed as exc:
+        raise Refusal("schema", "review_limits_malformed") from exc
+    if block is None:
+        raise Refusal("binding", "review_limits_missing")
+    if task is not None and task != block:
+        raise Refusal("binding", "review_limits_task_differs")
+    if offered != block:
+        raise Refusal("binding", "review_limits_differs")
+    return EXIT_OK, {
+        "result": "limits_verified",
+        "authorized": True,
+        "failure": False,
+        "plan": verified.plan,
+        "message_uuid": verified.mu,
+        "review_limits": block,
+        "fixture": repo.marked,
+    }
+
+
 def _status(repo: Repo, plan: str | None) -> dict[str, Any]:
     """``status``: whether V-A passes, and why not; with ``plan``, whether it is done."""
     try:
@@ -5986,7 +6137,11 @@ _EFFECTIVE_VERBS = frozenset({"verify", "reserve"})
 
 
 def _parser() -> argparse.ArgumentParser:
-    """The command line: a global ``--repo`` and the fourteen verbs."""
+    """The command line: a global ``--repo``, the fourteen verbs and ``limits-check``.
+
+    ``limits-check`` stays out of ``RP_VERBS``: it serves ``review_ledger.py begin``, not
+    the run-parameters acts.
+    """
     parser = argparse.ArgumentParser(
         prog="run_parameters",
         description=__doc__.split("\n", 1)[0] if __doc__ else None,
@@ -6021,6 +6176,13 @@ def _parser() -> argparse.ArgumentParser:
         target = sub.add_mutually_exclusive_group(required=True)
         target.add_argument("--plan")
         target.add_argument("--block")
+    sub = verb(
+        "limits-check",
+        _cmd_limits_check,
+        "Verify that a plan's loosened review_limits are in the human-typed offer; "
+        "writes nothing.",
+    )
+    sub.add_argument("--plan", required=True)
     sub = verb(
         "status", _cmd_status, "Report whether the run-parameters authority is enabled."
     )

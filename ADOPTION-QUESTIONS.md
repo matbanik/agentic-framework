@@ -74,7 +74,19 @@ are tested; do not infer FullAccess from a temp directory.
 | B3 | Is a **third** reviewer available as a fallback (e.g. Gemini), and is it suitable only for *surface-level* work? | reviewer chain rungs 2–3 | none |
 | B3b | **Does each fallback rung fail by a different mechanism than the rung above it?** Name the mechanism each rung depends on: the CLI binary, the auth/credential store, the network egress path, the vendor's API. | whether the chain is a real chain or one rung wearing three hats | assume **not diverse** — collapse the chain to one rung plus B4's human, rather than counting rungs that die together |
 | B4 | **If NO automated independent reviewer exists:** who is the **human reviewer**, and what is the escalation path? | the no-dispatch fallback | **A human MUST review.** Self-review is never a fallback. |
-| B5 | How many review rounds before escalating to a human? | round caps (default: plan 3, execution 6) | 3 / 6 |
+| B5 | How many review rounds before escalating to a human? | round caps (default: plan 3, execution 6): `scripts/instantiate.py --round-caps plan=N,execution=N` (answers key `ROUND_CAPS`), written to `.agent/review-limits.json` | 3 / 6 |
+| B5b | Should review loops also stop on a token budget? | the token stop: `scripts/instantiate.py --token-budgets on\|off` (answers key `TOKEN_BUDGETS`), written to `.agent/review-limits.json`; `off` also lifts the USD caps of scheduled credits runs | **on** |
+
+> **On B5 and B5b — the repo's review limits.** The answers become `.agent/review-limits.json`,
+> which every review loop reads at `review_ledger.py begin`; no answer keeps the shipped
+> defaults. A plan may tighten them in its `review_limits` block, and may loosen them only when
+> the human typed the limits in the plan's offer (`create-plan.md` Step 0). With B5b `off`, a
+> review loop has no token stop (the round, mechanism, scaffolding and instrument stops still
+> apply), and a scheduled credits run may omit its USD caps (`segment_cap_usd`, `run_cap_usd`,
+> `chain_cap_usd`); a cap the manifest does give still binds, and the segment timeout still
+> applies. Switching B5b back to `on` stops an uncapped credits run at its next admission
+> (`caps_required`): its first start fails, and a stopped run cannot resume (register a new
+> run with caps, or set B5b back to `off`).
 
 > ⚠️ **The one rule that never bends:** the agent that produced the work never authors its own
 > `approved` verdict. If B1–B4 all fail, the work **stops and waits for a human** — it does not

@@ -519,13 +519,18 @@ function Invoke-Launcher {
     }
     $segmentId = [string](Get-Field $admitted 'segment_id')
     $reservation = [double](Get-Field $admitted 'reservation_usd')
+    # An uncapped admission (token_budgets "off", no cap in the manifest) runs with no
+    # --max-budget-usd: -MaxBudgetUsd 0 means no cap to the wrapper, and an omitted value
+    # would mean its $2 default.
+    $uncapped = (Get-Field $admitted 'uncapped') -eq $true
+    $maxBudget = if ($uncapped) { 0.0 } else { $reservation }
     $baseCommit = [string](Get-Field $admitted 'base_commit')
     # A resume runs on its own brief when the request named one (report section 5.3); a fresh
     # resume (admit resume=fresh) starts the new session that accept chose, with no --resume.
     $promptFile = [string](Get-Field $admitted 'brief')
     if (-not $promptFile) { $promptFile = [string](Get-Field $manifest 'brief') }
     $isFresh = [string](Get-Field $admitted 'resume') -eq 'fresh'
-    Write-LauncherLog 'INFO' 'credits_segment_admitted' @{ attempt_id = $attemptId; segment_id = $segmentId; reservation_usd = $reservation; base_commit = $baseCommit }
+    Write-LauncherLog 'INFO' 'credits_segment_admitted' @{ attempt_id = $attemptId; segment_id = $segmentId; reservation_usd = $reservation; uncapped = $uncapped; base_commit = $baseCommit }
 
     # The admission binds the attempt's session to the plan as headless (AC-F.4) before the CLI
     # starts. A refusal closes the open segment as launch_failed and starts nothing.
@@ -585,7 +590,7 @@ function Invoke-Launcher {
     $wrapperArgs = @('-NoProfile', '-NonInteractive', '-File', $WrapperScript, '-Scheduled',
         '-PromptFile', $promptFile, '-KeyFile', $KeyFile,
         '-ClaudeExecutable', [string](Get-Field $launch 'claude_exe'),
-        '-MaxBudgetUsd', $reservation.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture),
+        '-MaxBudgetUsd', $maxBudget.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture),
         '-DispatchId', $dispatchId, '-OutputDir', $OutputDir,
         '-WorkingDirectory', [string](Get-Field $launch 'working_directory'),
         '-TimeoutSec', [string][int](Get-Field $launch 'timeout_sec'),

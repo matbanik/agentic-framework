@@ -47,6 +47,7 @@ import argparse
 import ctypes
 import getpass
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -1681,8 +1682,9 @@ class Manifest:
     sha256: str
     kind: str
     lane: str
-    segment_cap_usd: float
-    run_cap_usd: float
+    # None when the manifest omits the cap, which only token_budgets "off" allows.
+    segment_cap_usd: float | None
+    run_cap_usd: float | None
     timeout_sec: int
     depends_on: tuple[tuple[str, tuple[str, ...]], ...] = ()
     phases: tuple[str, ...] = ()
@@ -1694,6 +1696,53 @@ def _positive(value: Any, name: str) -> float:
     if not math.isfinite(float(value)) or float(value) <= 0:
         raise Refusal("manifest_invalid", f"{name} must be > 0")
     return float(value)
+
+
+def _optional_cap(block: dict[str, Any], key: str, name: str) -> float | None:
+    """A cap that is present is checked by ``_positive``; an omitted one is None."""
+    return _positive(block[key], name) if key in block else None
+
+
+def _review_ledger() -> Any:
+    """``tools/review_ledger.py``, the one reader of ``.agent/review-limits.json`` (D-13).
+
+    Imported only when a manifest omits a cap, so a capped manifest never depends on it:
+    ``tools.review_ledger`` from the repository root, ``review_ledger`` when ``tools/``
+    itself is on ``sys.path`` (this file run by path).
+    """
+    try:
+        return importlib.import_module("tools.review_ledger")
+    except ModuleNotFoundError:
+        return importlib.import_module("review_ledger")
+
+
+def repo_token_budgets(root: Any) -> str:
+    """The ``token_budgets`` switch of ``<root>/.agent/review-limits.json``.
+
+    ``"on"`` when the file is absent (the shipped default) or ``root`` is not a folder; a
+    malformed file is ``review_limits_invalid``, never the default.
+    """
+    if not isinstance(root, str) or not os.path.isdir(root):
+        return "on"
+    ledger = _review_ledger()
+    try:
+        limits = ledger.load_repo_limits(Path(root))
+    except ledger.FailClosed as exc:
+        raise Refusal("review_limits_invalid", str(exc)) from exc
+    return "on" if limits is None else str(limits["token_budgets"])
+
+
+def omitted_caps(doc: dict[str, Any]) -> list[str]:
+    """The USD caps that a manifest omits, by their manifest names."""
+    names = []
+    if "segment_cap_usd" not in doc.get("launch", {}):
+        names.append("launch.segment_cap_usd")
+    if "run_cap_usd" not in doc.get("budget", {}):
+        names.append("budget.run_cap_usd")
+    chain = doc.get("chain")
+    if isinstance(chain, dict) and "chain_cap_usd" not in chain:
+        names.append("chain.chain_cap_usd")
+    return names
 
 
 def _repo_relative(value: Any) -> bool:
@@ -1749,12 +1798,17 @@ def parse_depends_on(
     return tuple(items)
 
 
-def parse_chain(value: Any) -> tuple[str, float]:
-    """Validate a ``chain`` block (R§5.4.4) and return (chain id, chain cap)."""
-    if not isinstance(value, dict) or set(value) != CHAIN_KEYS:
+def parse_chain(value: Any) -> tuple[str, float | None]:
+    """Validate a ``chain`` block (R§5.4.4) and return (chain id, chain cap).
+
+    ``chain_cap_usd`` is the one optional key; its absence (None) is allowed only under
+    token_budgets "off", which ``load_manifest`` checks.
+    """
+    if not isinstance(value, dict) or set(value) | {"chain_cap_usd"} != CHAIN_KEYS:
         raise Refusal(
             "manifest_invalid",
-            "chain is exactly {chain_id, quote, given_at, chain_cap_usd}",
+            "chain is exactly {chain_id, quote, given_at, chain_cap_usd}"
+            " (chain_cap_usd optional under token_budgets off)",
         )
     chain_id = value["chain_id"]
     if not isinstance(chain_id, str) or not KEY_RE.match(chain_id):
@@ -1763,7 +1817,7 @@ def parse_chain(value: Any) -> tuple[str, float]:
         text = value[name]
         if not isinstance(text, str) or not text.strip():
             raise Refusal("manifest_invalid", f"chain.{name} must be a non-empty text")
-    return chain_id, _positive(value["chain_cap_usd"], "chain.chain_cap_usd")
+    return chain_id, _optional_cap(value, "chain_cap_usd", "chain.chain_cap_usd")
 
 
 def parse_phases(value: Any) -> tuple[str, ...]:
@@ -1832,8 +1886,8 @@ def load_manifest(path: str, run_id: str) -> Manifest:
         raise Refusal("manifest_invalid", "launch and budget must be objects")
     if not isinstance(messaging, dict):
         raise Refusal("manifest_invalid", "messaging must be an object")
-    segment_cap = _positive(launch.get("segment_cap_usd"), "launch.segment_cap_usd")
-    run_cap = _positive(budget.get("run_cap_usd"), "budget.run_cap_usd")
+    segment_cap = _optional_cap(launch, "segment_cap_usd", "launch.segment_cap_usd")
+    run_cap = _optional_cap(budget, "run_cap_usd", "budget.run_cap_usd")
     timeout = launch.get("timeout_sec")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
         raise Refusal("manifest_invalid", "launch.timeout_sec must be an integer > 0")
@@ -1870,6 +1924,14 @@ def load_manifest(path: str, run_id: str) -> Manifest:
     phases = parse_phases(data["phases"]) if "phases" in data else ()
     if "chain" in data:
         parse_chain(data["chain"])
+    omitted = omitted_caps(data)
+    if omitted and repo_token_budgets(data.get("project_root")) != "off":
+        raise Refusal(
+            "manifest_invalid",
+            f"{', '.join(omitted)} may be omitted only under token_budgets \"off\";"
+            " token_budgets is on (the project_root's .agent/review-limits.json says on,"
+            " or there is none)",
+        )
     required = {name for _, require in depends for name in require}
     if "committed" in required and not worktree:
         raise Refusal(
@@ -2172,6 +2234,23 @@ def verb_accept(tx: Tx, args: argparse.Namespace) -> Outcome:
     )
 
 
+def caps_reason(doc: dict[str, Any]) -> str | None:
+    """Why a run that omits a cap may not start now, or None (D-11).
+
+    Each admission of such a run reads the repo switch again, so a human who turns
+    token budgets back on stops the run at its next start: ``"on"`` or no file is
+    ``caps_required``, a malformed file ``review_limits_invalid``. A run with every cap
+    never reads the file.
+    """
+    if not omitted_caps(doc):
+        return None
+    try:
+        switch = repo_token_budgets(doc.get("project_root"))
+    except Refusal as exc:
+        return exc.error
+    return None if switch == "off" else "caps_required"
+
+
 def verb_admit(
     tx: Tx, attempt_id: str, segment_id: str | None, base: str | None = None
 ) -> Outcome:
@@ -2227,6 +2306,7 @@ def verb_admit(
 
     reason: str | None = None
     reservation = 0.0
+    uncapped = False
     if lane is not None and tx.row(
         "SELECT 1 FROM lanes WHERE lane = ? AND segment_id IS NOT NULL", (lane,)
     ):
@@ -2248,14 +2328,24 @@ def verb_admit(
         ):
             reason = "carry_overlaps_prerequisite"
         else:
-            spent = run_spend(tx, run_id)
-            remaining = float(run["run_cap_usd"]) - sum(spent.values())
-            rooms = [float(run["segment_cap_usd"]), remaining]
+            reason = caps_reason(doc)
+        if reason is None:
+            # Rooms only from the caps that are present (D-11); with none, the segment
+            # runs uncapped with no reservation and no floor.
+            rooms: list[float] = []
+            if run["segment_cap_usd"] is not None:
+                rooms.append(float(run["segment_cap_usd"]))
+            if run["run_cap_usd"] is not None:
+                spent = run_spend(tx, run_id)
+                rooms.append(float(run["run_cap_usd"]) - sum(spent.values()))
             if "chain" in doc:
                 chain_id, chain_cap = parse_chain(doc["chain"])
-                rooms.append(chain_room(tx, chain_id, chain_cap))
-            reservation = money(min(rooms))
-            if reservation < FLOOR_USD:
+                room = chain_room(tx, chain_id, chain_cap)
+                if room is not None:
+                    rooms.append(room)
+            uncapped = not rooms
+            reservation = 0.0 if uncapped else money(min(rooms))
+            if not uncapped and reservation < FLOOR_USD:
                 reason = "budget_floor"
 
     request_id = str(request["request_id"])
@@ -2265,7 +2355,12 @@ def verb_admit(
         if resume:
             tx.move("run", run_id, "launching", "stopped")
             tx.notice("resume_refused", attempt_id, run_id, {"reason": reason})
-        elif reason in ("budget_floor", "carry_overlaps_prerequisite"):
+        elif reason in (
+            "budget_floor",
+            "carry_overlaps_prerequisite",
+            "caps_required",
+            "review_limits_invalid",
+        ):
             tx.move("run", run_id, "launching", "failed", {"stop_class": reason})
             tx.notice("start_refused", attempt_id, run_id, {"reason": reason})
         else:
@@ -2337,6 +2432,7 @@ def verb_admit(
             "attempt_id": attempt_id,
             "segment_id": segment_id,
             "reservation_usd": reservation,
+            "uncapped": uncapped,
             "job_name": JOB_NAME_PREFIX + segment_id,
             "resume": resume_mode,
             "brief": request["brief"],
@@ -2811,20 +2907,20 @@ def carry_overlaps(carry_allowed: Any, paths: frozenset[str]) -> bool:
     return False
 
 
-def chain_room(tx: Tx, chain_id: str, cap: float) -> float:
+def chain_room(tx: Tx, chain_id: str, cap: float | None) -> float | None:
     """The chain cap less the spend of every run of the chain (R§5.4.4).
 
     The cap is the smallest cap that a run of the chain holds: ``register`` keeps one
     block per chain, and a store that holds two caps never reserves above the smaller
-    one.
+    one. None when no run of the chain holds a cap (token_budgets "off").
     """
     spent = 0.0
     for other, block in stored_chain_blocks(tx, chain_id):
         spent += sum(run_spend(tx, other).values())
         held = block.get("chain_cap_usd")
         if isinstance(held, (int, float)) and not isinstance(held, bool) and held > 0:
-            cap = min(cap, float(held))
-    return money(cap - spent)
+            cap = float(held) if cap is None else min(cap, float(held))
+    return None if cap is None else money(cap - spent)
 
 
 def verb_predicates(tx: Tx, run_id: str, base: str | None) -> Outcome:
@@ -2919,7 +3015,8 @@ def verb_chain_candidates(tx: Tx) -> Outcome:
     A candidate is a run with a ``chain`` block, state ``registered`` or ``waiting``, no
     segment and no ``pending`` or ``accepted`` request (R§4.4 step 4). It is ``ready`` when
     its predicates hold, no predecessor is halted and the chain room is at least
-    ``FLOOR_USD``. The monitor starts only ready candidates.
+    ``FLOOR_USD`` (a chain with no cap has no room, None, and no floor). The monitor
+    starts only ready candidates.
     """
     candidates: list[dict[str, Any]] = []
     for run in tx.rows(
@@ -2957,7 +3054,7 @@ def verb_chain_candidates(tx: Tx) -> Outcome:
                 "holds": holds,
                 "halted": halted,
                 "chain_room_usd": room,
-                "ready": holds and not halted and room >= FLOOR_USD,
+                "ready": holds and not halted and (room is None or room >= FLOOR_USD),
                 "error": error,
             }
         )

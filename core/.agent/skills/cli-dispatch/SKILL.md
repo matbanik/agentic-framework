@@ -306,11 +306,18 @@ anything. Open the loop once, then pass the same id every round:
 
 ```bash
 export RECEIPTS_DIR=/absolute/path/outside/the/repo   # required; no default (F3/F3b)
+# --producer: this agent may never author a verdict in this loop
 python tools/review_ledger.py begin \
   --loop-id review-core-index-2026-09-07 \
   --review-mode execution \
-  --producer builder-agent          # this agent may never author a verdict in this loop
+  --producer builder-agent \
+  --goal-anchor "<one sentence: what this work was for>" \
+  --ac-file docs/execution/plans/<plan>/implementation-plan.md
 ```
+
+`begin` takes the loop's round and token limits from `.agent/review-limits.json` (the
+ledger's constants when it is absent), then from the plan's `review_limits` block in the
+`--ac-file` frontmatter, and prints their source.
 
 After each dispatch, record the verdict so the next round is counted:
 
@@ -398,7 +405,7 @@ When it is limited too, the escalation is the **human handoff path in §0**. Con
 
 ### 4. Capability and Round-Cap Constraints
 - **EGRESS_PRECEDENCE.** External review dispatch is mandatory unless PROFILE C1/C2/C3b or E5 forbids sending work to an external provider; then stop for B4's named human reviewer. That stop is **not** SIGN 1. Self-review remains prohibited. `plan_to_exec_gate: human` is a separate post-`approved` pause. Missing CLI (`can_dispatch_external_reviewer == no`) is **not** the same as forbidden egress: when dispatch was permitted but the CLI is missing, follow the rate-limit fallback below (including a provider web-prompt when that fallback applies). When egress is forbidden, you must not prepare a provider web-prompt and must not request manual external submission.
-- **Round-cap behavior**: The plan review correction loop is capped at 3 rounds. When the cap is reached, it is a HARD STOP. Do NOT bypass the gate; present the current state to the user and wait for explicit human instructions.
+- **Round-cap behavior**: The plan review correction loop is capped at the plan loop's round budget (`review_limits.plan_rounds`, else `rounds.plan` in `.agent/review-limits.json`; default 3; `review_ledger.py state` prints it). When the cap is reached, it is a HARD STOP. Do NOT bypass the gate; present the current state to the user and wait for explicit human instructions.
 
 ---
 

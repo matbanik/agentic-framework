@@ -140,6 +140,18 @@ watches every run and mails you when one stops. The agent rules are in `create-p
 
 1. Write the brief (§Hand-over, step 2) and the run manifest. The manifest is JSON and must pass
    `schemas/credits-run.v1.json`. Every path in it is an absolute local path.
+
+   The USD caps (`launch.segment_cap_usd`, `budget.run_cap_usd`, `chain.chain_cap_usd`) are
+   optional only under `token_budgets: "off"` in the project's `.agent/review-limits.json`
+   (ADOPTION-QUESTIONS B5b). With the switch `on`, or with no file, the store refuses a
+   manifest that omits one (`manifest_invalid`), and a malformed file refuses it too
+   (`review_limits_invalid`). A cap that the manifest gives still binds. A run with no cap at
+   all is admitted with no reservation and starts the CLI with no `--max-budget-usd`. What
+   bounds it then is the segment `timeout_sec`, the task's time limit (`timeout_sec` plus two
+   hours) and the rule that only a human resumes a stopped run. When the switch goes back to
+   `on`, the next admission of an uncapped run is refused with `caps_required`: a first start
+   fails, and a stopped run cannot resume. A started run cannot be registered again, so to
+   go on, set the switch back to `off` or register a new run that gives its caps.
 2. Register the run. The script checks the manifest and the M-1 gate receipt, imports the run
    into the credits store and registers the task `\{{PROJECT_NAME_TITLE}}\Credits\<run-id>` with no trigger.
    When the task `\{{PROJECT_NAME_TITLE}}\Credits\Monitor` is missing, it registers that task too (at logon and

@@ -221,6 +221,15 @@ NOT_A_PROMISE = {
         "expect from the sweep regex ('tui/tools/generate.go reported as "
         "tools/generate.go'). Naming it is the instruction, not a claim it exists."
     ),
+    (".agent/context/handoffs/2026-10-20-review-limits-parameters-plan-critical-review.md", 196, "core/tools/run_parameters.py.orig"): (
+        "Historical plan-review record (2026-10-20): the reviewer names a stray backup file it saw; not a claim the file ships."
+    ),
+    ("docs/execution/plans/2026-10-20-review-limits-parameters/implementation-plan.md", 232, "core/.agent/workflows/execution-session.md:182–205"): (
+        "The file exists; the approved plan cites the line range with an en dash, which LINE_CITATION does not parse."
+    ),
+    ("docs/execution/plans/2026-10-20-review-limits-parameters/task.md", 41, "scripts/tests/test_instantiate_review_limits.py::test_shipped_file_equals_constants"): (
+        "The file exists; the task row cites a pytest node id (``::test_...``), not a path."
+    ),
 }
 
 #: A ``tools/<name>.<ext>`` command path, wherever it appears on a line.

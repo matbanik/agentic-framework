@@ -4,8 +4,15 @@ date: "{YYYY-MM-DD}"
 source: "docs/build-plan/{section-reference}"
 meus: ["{MEU-ID-1}", "{MEU-ID-2}"]
 run_parameters: "{the create-plan.md Step 0 block, equal to task.md's | absent}"  # optional (v2.3)
+review_limits:  # optional (v2.4): create-plan.md Step 0; equal to task.md's; absent = .agent/review-limits.json
+  schema: review-limits/1
+  plan_rounds: "{integer >= 1}"
+  execution_rounds: "{integer >= 1}"
+  plan_tokens: "{integer >= 1 | off}"
+  execution_tokens: "{integer >= 1 | off}"
+  basis: "{repo | tightened | loosened}"
 status: "draft"
-template_version: "2.3"
+template_version: "2.4"
 ---
 
 # Implementation Plan: {Project Title}
@@ -85,6 +92,8 @@ Legacy 9-column tables remain valid.
 > GUARDRAILS SIGN 1). The urge to pause here and ask "is this plan OK?" is the bug.
 >
 > **Run parameters (v2.3):** {the offer block accepted at `create-plan.md` Step 0, echoed verbatim; or `manual`; or `none` (legacy rules)}. The values equal the `run_parameters` frontmatter.
+>
+> **Review limits (v2.4):** {`repo` (no `review_limits` block: the loops take `.agent/review-limits.json`) | the block's values and `basis`}. A `basis: loosened` block binds only through a human-typed `run-parameters-offer/2` offer that carries it (`create-plan.md` Step 0); `review_ledger.py begin` refuses it otherwise.
 
 ---
 

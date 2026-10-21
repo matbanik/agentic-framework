@@ -1,0 +1,18 @@
+{
+  "schema": "review-limits/1",
+  "token_budgets": "on",
+  "rounds": {
+    "plan": 3,
+    "execution": 6,
+    "discovery": 2,
+    "handoff": 3,
+    "multi-handoff": 3
+  },
+  "tokens": {
+    "plan": 10500000,
+    "execution": 21000000,
+    "discovery": 7000000,
+    "handoff": 10500000,
+    "multi-handoff": 10500000
+  }
+}

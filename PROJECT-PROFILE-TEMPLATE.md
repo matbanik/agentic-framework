@@ -48,7 +48,13 @@
 | Auth mode: **API key (metered)** or **subscription** (B2) | |
 | Reviewer rung 2 / 3 (B3) | |
 | Human reviewer + escalation path (B4) | |
-| Round caps (B5) | plan: __ · execution: __ |
+| Round caps (B5; `instantiate.py --round-caps`) | plan: __ · execution: __ |
+| Token budgets on review loops (B5b; `instantiate.py --token-budgets`) | on / off |
+
+> **B5/B5b** land in `.agent/review-limits.json`. `off` removes the review loops' token stop and
+> also lifts the USD caps on scheduled credits runs (a manifest may then omit them; a cap it
+> gives still binds, and the segment timeout still applies). Switching back to `on` stops an
+> uncapped run at its next admission.
 
 > **Never bends:** the agent that produced the work does not author its own `approved` verdict.
 > If no reviewer is reachable → **stop and wait for a human.** Self-review is never the fallback.

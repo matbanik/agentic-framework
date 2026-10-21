@@ -3,7 +3,7 @@ project: "{YYYY-MM-DD}-{project-slug}"
 source: "docs/execution/plans/{YYYY-MM-DD}-{project-slug}/implementation-plan.md"
 meus: ["{MEU-ID-1}", "{MEU-ID-2}"]
 status: "in_progress"
-template_version: "2.4"
+template_version: "2.5"
 stop_gate: "armed"  # optional: "armed" | "released:<round-cap|reviewer-unavailable|human-gate|handback|done>" (tools/stop_gate.py)
 run_parameters:  # optional (v2.4): the block create-plan.md Step 0 resolves; absent = the earlier rules
   schema: run-parameters/1
@@ -15,6 +15,13 @@ run_parameters:  # optional (v2.4): the block create-plan.md Step 0 resolves; ab
   tightened_from: "{none | grouping | plan}"
   authorization: "{the authorization/1 block from Step 0 | {schema: manual}}"
 bound_sessions: []  # written by tools/run_parameters.py bind --plan, never by hand
+review_limits:  # optional (v2.5): equal to the plan's block; absent = .agent/review-limits.json
+  schema: review-limits/1
+  plan_rounds: "{integer >= 1}"
+  execution_rounds: "{integer >= 1}"
+  plan_tokens: "{integer >= 1 | off}"
+  execution_tokens: "{integer >= 1 | off}"
+  basis: "{repo | tightened | loosened}"
 ---
 
 # Task — {Project Title}
@@ -28,6 +35,14 @@ bound_sessions: []  # written by tools/run_parameters.py bind --plan, never by h
 > finalize row. The H2-5a seal row is gone: the final audit and the seal are terminal steps, not
 > rows. `[x] n/a` is valid for `PC` under `commit_plan: false` and for `COMMIT` under
 > `commit_exec: false`. A task without the block keeps the earlier rules.
+>
+> **v2.5 — review limits.** The optional `review_limits` block (`create-plan.md` Step 0) equals
+> the plan's and sets the plan and execution review loops' round and token limits; a task
+> without it takes `.agent/review-limits.json` (the ledger's constants when the file is
+> absent), as before. `{configured-cap}` in H1-7a and H1-7b is the execution loop's round cap
+> as the ledger holds it: copy it from `python tools/review_ledger.py state --loop-id
+> exec-{YYYY-MM-DD}-{project-slug}` (its base budget plus every `continue` grant). The final
+> audit reads the same value.
 
 ## Context Tool Decision
 

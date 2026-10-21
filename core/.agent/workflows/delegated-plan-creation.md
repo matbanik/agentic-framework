@@ -34,7 +34,7 @@ Phase 1: Claude CLI (`architect` / `coordinator`) — Planning
 Phase 2: Orchestrator (`coordinator` class; primary driver per `.agent/docs/harness-profiles.md`) — Review Loop
   └── Dispatches `independent_reviewer` for /plan-critical-review
   └── Reads verdict, applies corrections if needed
-  └── Re-dispatches until approved or round cap (3)
+  └── Re-dispatches until approved or the plan loop's round cap (default 3; from review_limits or .agent/review-limits.json)
 
 Phase 3: Orchestrator or User — Execution
   └── Plan is ready for /tdd-implementation or /execution-session
@@ -247,11 +247,16 @@ $LOOP_ID = "planreview-{project-slug}-{YYYY-MM-DD}"
 python tools/review_ledger.py begin `
   --loop-id $LOOP_ID `
   --review-mode plan `
-  --producer "<the agent that wrote the plan>"
+  --producer "<the agent that wrote the plan>" `
+  --goal-anchor "<one sentence: what this plan is for>" `
+  --ac-file docs/execution/plans/<plan>/implementation-plan.md
 ```
 
-`--review-mode plan` is what sets the cap of 3 referenced in 5c — the number lives in
-the ledger, so there is one place to change it and no prose copy to drift.
+`begin` sets the cap referenced in 5c: the plan's `review_limits` block (read from
+`--ac-file`), else `rounds.plan` in `.agent/review-limits.json`, else the ledger's constant
+(default 3). It prints where the limits came from, and
+`review_ledger.py state --loop-id $LOOP_ID` shows them, so there is one place to read the
+number and no prose copy to drift.
 
 ```powershell
 powershell -NoProfile -File tools/Invoke-CodexDispatch.ps1 `
@@ -332,7 +337,7 @@ uv run python tools/render_review_verdict.py `
 ```
 
 4. Repeat until `approved`, or until the dispatch exits `9` — the ledger's cap for
-   `--review-mode plan` is 3 rounds, and it is enforced at dispatch time rather than by
+   the plan loop is its round budget (`review_ledger.py state` prints it; default 3), and it is enforced at dispatch time rather than by
    the orchestrator tracking `{N}` itself. Do not answer a `9` by re-running with
    `-NonReviewDispatch`; that is recorded in `status.json` as
    `ledger_gate: bypassed-non-review` and leaves the round uncounted. Read the stop kind
@@ -346,7 +351,7 @@ uv run python tools/render_review_verdict.py `
 
 ### 5d. Round Cap — HARD STOP
 
-If 3 rounds without approval, present the round-cap TL;DR as a Decision Brief — recommendation first, the alternatives (continue the loop / execute with guarded rows / answer the human-decision items / stop) compared against it, reversibility, default if unanswered — per `create-plan.md` §5 round-cap block and `.agent/docs/human-decision-protocol.md` §5, then wait for human direction.
+If the plan loop reaches its round cap (from `review_limits` or `.agent/review-limits.json`; default 3) without approval, present the round-cap TL;DR as a Decision Brief — recommendation first, the alternatives (continue the loop / execute with guarded rows / answer the human-decision items / stop) compared against it, reversibility, default if unanswered — per `create-plan.md` §5 round-cap block and `.agent/docs/human-decision-protocol.md` §5, then wait for human direction.
 
 ---
 
