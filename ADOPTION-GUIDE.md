@@ -390,6 +390,51 @@ Before you turn on either switch (`ruling_enabled: true`, or `gate_wait_max_min`
 
 ---
 
+## Parallel lanes (optional)
+
+This part is optional. Skip it if only one session at a time edits your repository. Lanes let
+two or more sessions work side by side, each in its own worktree, on paths that each task
+declares in advance.
+
+What ships:
+
+- `tools/lanes.py` keeps one card per lane in the git common directory (`<git common dir>/lanes/`),
+  so every worktree reads the same cards. Its commands are `claim`, `beat`, `release`, `list` and
+  `check`. A task can claim a lane only when its `task.md` has a `## Lane Ownership` section
+  (`TASK-TEMPLATE.md`); the workflows say when to run each command (`create-plan.md`
+  §Prerequisites, `execution-session.md` §Lanes).
+- `tools/os_lease.py` is the OS lock that the lane registry holds. It locks the same byte
+  (`2**20`) as the gate lease of `tools/executor_worktree.py`.
+- `tools/ref_guard.py` is a git `reference-transaction` hook. It refuses an update of
+  `refs/heads/main` unless `tools/commit_batch.py` wrote the matching intent first.
+- The `junction_files` key of `.agent/credits/worktree.json` lists the files that many lanes
+  change (status files, registries, the known-issue list). A lane never owns them. It lists the
+  change in the `Integration requests` section of its handoff, and the integrator applies it.
+  The package ships `[]`: write your project's list (PROFILE §F, F8). The key is required: a
+  config without it refuses `worktree_bad:config`.
+
+Platform boundary:
+
+| Part | Windows | macOS / Linux |
+|---|---|---|
+| Lane cards (`lanes.py`) and the lease (`os_lease.py`) | yes | yes |
+| `main` ref guard (`ref_guard.py`) | yes, where `tools/commit_batch.py` is the publish route | not installed: no governed publish route |
+
+On macOS and Linux the publish route is `agent-commit.sh`. It commits on `main` directly and
+cannot name the commit in advance, so `python tools/ref_guard.py install` prints
+`not installed: no governed publish route …` and exits 4. A POSIX guard comes with a POSIX
+publish route that writes the same intent.
+
+To install the guard on Windows (git 2.46 or later, the `files` ref backend), run
+`python tools/ref_guard.py install`. It writes the hook shim into the hooks folder (the
+`core.hooksPath` folder when one is set), moves an existing `reference-transaction` hook to
+`reference-transaction.local` and chains it, and sets `gc.packRefs` and
+`maintenance.pack-refs.enabled` to `false`. `python tools/ref_guard.py uninstall` restores the
+hook and both values. The one human escape is `{{PROJECT_NAME_UPPER}}_REF_GUARD=off` in the
+environment of one git command; an agent never sets it.
+
+---
+
 ## Provider substitution — Pomera MCP (manual adopter edit)
 
 > **Not provider-neutral.** The shipped `/inspiration-research` workflow and

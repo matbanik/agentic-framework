@@ -64,7 +64,8 @@ DIST_FILE = "mcp-server/dist/index.js"
 CONFIG = ".agent/credits/worktree.json"
 CONFIG_BYTES = (
     b'{"env_files": [".env"], "frozen_dirs": ["mcp-server/dist"], '
-    b'"venv_build": ["uv", "sync"], "linked_trees": ["node_modules"]}\n'
+    b'"venv_build": ["uv", "sync"], "linked_trees": ["node_modules"], '
+    b'"junction_files": []}\n'
 )
 
 ENV_BYTES = b"GT6_ENV=placeholder\n"

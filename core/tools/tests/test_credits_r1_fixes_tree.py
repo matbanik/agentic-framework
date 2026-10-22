@@ -61,7 +61,8 @@ DAY = "2026-10-16"
 # no venv, so ``venv_build`` is null.
 WORKTREE_CONFIG = ".agent/credits/worktree.json"
 WORKTREE_CONFIG_BODY = (
-    '{"env_files": [], "frozen_dirs": [], "venv_build": null, "linked_trees": []}\n'
+    '{"env_files": [], "frozen_dirs": [], "venv_build": null, "linked_trees": [], '
+    '"junction_files": []}\n'
 )
 
 

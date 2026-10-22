@@ -109,6 +109,8 @@ WORKTREE_TEMPLATE = {
     "frozen_dirs": [],
     "venv_build": None,
     "linked_trees": ["node_modules"],
+    # MEU-784 D-P10: required, and empty in the template (design §9.2 "No project defaults").
+    "junction_files": [],
 }
 
 #: The source project's name, split so this file does not hold it.
@@ -431,7 +433,7 @@ def test_worktree_helper_has_no_project_gate_import() -> None:
 
 
 def test_worktree_config_template_keys() -> None:
-    """AC-J.2: the adopter config template has exactly the four project parts."""
+    """AC-J.2, AC-784.20: the adopter config template has exactly the five project parts."""
     assert json.loads(_text(CORE / ".agent" / "credits" / "worktree.json")) == WORKTREE_TEMPLATE
 
 
@@ -448,7 +450,12 @@ def _write_config(root: Path, data: object) -> None:
 def test_worktree_config_loads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """AC-J.2: ``load_worktree_config`` returns the adopter's values."""
     ew = _worktree(monkeypatch)
-    data = {**WORKTREE_TEMPLATE, "frozen_dirs": ["ui/dist"], "venv_build": ["uv", "sync"]}
+    data = {
+        **WORKTREE_TEMPLATE,
+        "frozen_dirs": ["ui/dist"],
+        "venv_build": ["uv", "sync"],
+        "junction_files": ["docs/BUILD_PLAN.md", ".secrets.baseline"],
+    }
     _write_config(tmp_path, data)
     assert ew.load_worktree_config(tmp_path) == data
 
@@ -463,8 +470,38 @@ def test_worktree_config_loads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
         {**WORKTREE_TEMPLATE, "frozen_dirs": [1]},
         {**WORKTREE_TEMPLATE, "venv_build": "uv sync"},
         [],
+        {k: v for k, v in WORKTREE_TEMPLATE.items() if k != "junction_files"},
+        {**WORKTREE_TEMPLATE, "junction_files": "docs/BUILD_PLAN.md"},
+        {**WORKTREE_TEMPLATE, "junction_files": ["/docs/BUILD_PLAN.md"]},
+        {**WORKTREE_TEMPLATE, "junction_files": ["docs/"]},
+        {**WORKTREE_TEMPLATE, "junction_files": ["docs\\BUILD_PLAN.md"]},
+        {**WORKTREE_TEMPLATE, "junction_files": ["C:/repo/x.md"]},
+        {**WORKTREE_TEMPLATE, "junction_files": ["docs/*.md"]},
+        {**WORKTREE_TEMPLATE, "junction_files": ["docs/../x.md"]},
+        {**WORKTREE_TEMPLATE, "junction_files": ["docs//x.md"]},
+        {**WORKTREE_TEMPLATE, "junction_files": ["docs/x\n.md"]},
+        {**WORKTREE_TEMPLATE, "junction_files": [""]},
     ],
-    ids=["missing", "unknown-key", "missing-key", "str-list", "int-item", "str-command", "array"],
+    ids=[
+        "missing",
+        "unknown-key",
+        "missing-key",
+        "str-list",
+        "int-item",
+        "str-command",
+        "array",
+        "junction-missing",
+        "junction-str",
+        "junction-absolute",
+        "junction-prefix",
+        "junction-backslash",
+        "junction-drive",
+        "junction-glob",
+        "junction-dotdot",
+        "junction-empty-part",
+        "junction-control",
+        "junction-empty",
+    ],
 )
 def test_worktree_config_refuses(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, data: object

@@ -106,9 +106,17 @@ DIRECT_RE = re.compile(
 )
 WORD_RE = re.compile(r"[a-z']+")
 NEGATORS = frozenset(
-    {"not", "never", "no", "if", "when", "once", "after", "unless", "before"}
+    {"not", "never", "no", "nothing", "if", "when", "once", "after", "unless", "before"}
 )
-BRANCH_SCOPE_RE = re.compile(r"\b(?:on|to)\s+([A-Za-z0-9._/-]+)", re.IGNORECASE)
+# A phrase that only rules out a push ("..., with no push", "but do not push") negates
+# nothing; this tool never pushes. Removed before the negator checks.
+PUSH_ONLY_RE = re.compile(
+    r"[\s,;]*(?:\b(?:and|but|with|then)\s+)?"
+    r"(?:\bdo\s+not\b|\bdon'?t\b|\b(?:no|not|never|without)\b)\s+"
+    r"(?:(?:a|any)\s+)?push(?:es|ed|ing)?\b",
+    re.IGNORECASE,
+)
+BRANCH_SCOPE_RE = re.compile(r"\b(on|to)\s+([A-Za-z0-9._/-]+)", re.IGNORECASE)
 REPO_SCOPE_RE = re.compile(r"\bin\s+([A-Za-z0-9._-]+)", re.IGNORECASE)
 PLAN_THE_RE = re.compile(r"\bthe\s+([a-z0-9-]+)\s+plan\b", re.IGNORECASE)
 PLAN_NAMED_RE = re.compile(r"^\s*(?:the\s+)?plan\s+([a-z0-9-]+)", re.IGNORECASE)
@@ -605,7 +613,7 @@ def _open_op(
         packet=packet,
         parent=parent,
         folder=folder,
-        candidate=Path(rp.display_path(root / op)),
+        candidate=Path(rp.display_path(root / op.replace("/", "-"))),
         record={},
         reserved=reserved,
         verified=verified,
@@ -741,6 +749,19 @@ def _direction_plans(repo: rp.Repo, session: str) -> tuple[list[str], list[str]]
     return bound + manual, bound + manual + named_only
 
 
+def _branch_scope(repo: rp.Repo, rest: str, current: str) -> str:
+    """The branch a direction names: "on <name>" always, "to <name>" only for an existing
+    branch ("commit to land ..." names none); else the current branch."""
+    for match in BRANCH_SCOPE_RE.finditer(rest):
+        name = match.group(2)
+        if match.group(1).lower() == "on":
+            return name
+        proc = _run_git(repo.top, "show-ref", "--verify", "-q", f"refs/heads/{name}")
+        if proc.returncode == 0:
+            return name
+    return current
+
+
 def _consent(
     repo: rp.Repo, session: str, uid: str, text: str, packet: Packet
 ) -> dict[str, Any]:
@@ -758,10 +779,11 @@ def _consent(
         if not sentence or sentence.endswith("?"):
             continue
         clause = sentence.rstrip(".!").strip()
-        direct = DIRECT_RE.fullmatch(clause)
+        stripped = PUSH_ONLY_RE.sub("", clause)
+        direct = DIRECT_RE.fullmatch(stripped)
         if direct is None:
             continue
-        lowered = clause.lower()
+        lowered = stripped.lower()
         if "n't" in lowered or set(WORD_RE.findall(lowered)) & NEGATORS:
             continue
         rest = direct.group("rest")
@@ -773,8 +795,7 @@ def _consent(
             hits = list(unnamed)
         if len(hits) != 1 or hits[0] != packet.plan:
             continue
-        on = BRANCH_SCOPE_RE.search(rest)
-        branch = on.group(1) if on is not None else current
+        branch = _branch_scope(repo, rest, current)
         if branch != packet.branch:
             continue
         place = REPO_SCOPE_RE.search(rest)
@@ -985,6 +1006,11 @@ def _commit_candidate(ctx: Op) -> bool:
         "GIT_COMMITTER_NAME": name,
         "GIT_COMMITTER_EMAIL": email,
     }
+    # Hooks in the candidate run on the repository's environment: a ``uv run`` there would
+    # otherwise build ``<candidate>/.venv`` (``ignored_residue``).
+    venv = ctx.repo.top / ".venv"
+    if venv.is_dir():
+        env.update({"UV_PROJECT_ENVIRONMENT": str(venv), "UV_NO_SYNC": "1"})
     message = ctx.folder / "message.txt"
     if rp._read_bytes(message) != ctx.packet.message:
         rp._write_atomic(message, ctx.packet.message)
@@ -1089,7 +1115,16 @@ def _step_published(ctx: Op, resume: bool) -> None:
     _reverify(ctx)
     if _ref(ctx.repo, ctx.packet.branch) == commit:
         raise Stopped("ref_holds_candidate")
-    _start(ctx, "published")
+    # The publication intent the main ref guard reads (tools/ref_guard.py, AC-784.13).
+    intent = {
+        "repo": ctx.repo.common.as_posix(),
+        "ref": f"refs/heads/{ctx.packet.branch}",
+        "ref_old": ctx.parent,
+        "ref_new": commit,
+        "op": ctx.op,
+        "candidate": commit,
+    }
+    _start(ctx, "published", intent)
     _update_ref(ctx, commit)
     _effect(ctx, "published")
     _finish(ctx, "published", evidence)

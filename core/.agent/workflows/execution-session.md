@@ -102,6 +102,16 @@ permission to spawn. Do not reload completed independent rows wholesale after re
 3. Load only the next unchecked row's direct inputs; do not reconstruct state from the
    transcript or reload completed independent rows wholesale.
 
+#### Lanes (tasks with a `## Lane Ownership` section)
+
+These steps apply only to a task that has a `## Lane Ownership` section (`TASK-TEMPLATE.md`). A task without the section runs unchanged: skip this subsection.
+
+At session start, run `python tools/lanes.py list`. It shows the lane cards, any stale card and any `HALT`. If it shows `HALT`, stop and tell the human. Before the claim, choose one session id and keep it for the whole session: the harness session id when the harness shows one, else `<plan folder name>-<UTC start time>` (for example `2026-10-20-multi-agent-lanes-20261021T0930Z`). Pass it as `--session <session id>` on every claim, beat and release; a command without it refuses `no_session`. Then claim the lane with `python tools/lanes.py claim --plan <plan dir> --worktree <path> --session <session id>`. Claim only for a task that has the `## Lane Ownership` section; the claim refuses `no_ownership` without it. A refusal prints `refused: <reason>`: stop and tell the human.
+
+At every task-row boundary, run `python tools/lanes.py beat --plan <plan dir> --session <session id>` before you start the next row. If it ends with exit 3 (`HALT`) or refuses with `card_superseded`, stop before the next row and tell the human. Do not continue, do not remove `HALT`, and do not claim again: only the human frees a lane or removes `HALT`.
+
+At closeout, run `python tools/lanes.py release --plan <plan dir> --session <session id>`. Run it after the lane worktree is removed (H2-3c), or, for a lane on the main tree, after the work lands. A lane never edits a junction file: list the changes in the handoff's `Integration requests` section.
+
 Key rules during execution:
 
 > ⚠️ **P0 Terminal Pre-Flight** — Before the first shell command (your harness `shell_tool`, e.g. `run_command`/`Bash`) in this phase, invoke

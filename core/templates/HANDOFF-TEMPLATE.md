@@ -95,6 +95,21 @@ _For each modified file, include a fenced diff excerpt showing the key changes:_
 
 ---
 
+## Integration requests
+
+_Optional. Keep this section only when the work ran as a lane (`## Lane Ownership` in `task.md`). Skip it otherwise._
+
+A lane never edits a junction file (the `junction_files` list in `.agent/credits/worktree.json`). It lists what each junction file needs here, and the integrator applies the requests. Requests state facts and intent, never a file snapshot. Each request has an id `<lane>/<generation>/<n>`.
+
+| Id | Request |
+|----|---------|
+| `<lane>/<generation>/1` | MEU-12 status → done |
+| `<lane>/<generation>/2` | grouping cursor → next session |
+
+Other examples: "file known issue X with these fields", "close known issue Y", "metrics row: …".
+
+---
+
 ## Codex Validation Report
 
 _Left blank for reviewer agent. Reviewer fills this section during `/validation-review`._

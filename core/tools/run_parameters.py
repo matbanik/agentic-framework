@@ -173,6 +173,10 @@ REQUIRED_COMPONENTS: tuple[str, ...] = (
     f"{RUN_PARAMETERS_HOME}/schemas/authorization.v1.schema.json",
     f"{RUN_PARAMETERS_HOME}/governance/01-agents.diff",
     f"{RUN_PARAMETERS_HOME}/governance/02-guardrails.diff",
+    # MEU-784 AC-784.19 (multi-agent-lanes design §9.2 "Policy coverage"): the lane tools.
+    "tools/lanes.py",
+    "tools/os_lease.py",
+    "tools/ref_guard.py",
 )
 SETTINGS = ".claude/settings.json"
 #: The hook that ``.claude/settings.json`` must wire in ``PreToolUse`` for Bash (EA-34).

@@ -37,6 +37,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -228,6 +229,36 @@ def test_vec_v3_001_clean_run_journals_started_and_done_around_each_phase(
     assert out["index"] == {"change.txt": "updated"}
     assert rig.git("rev-parse", ":change.txt") == b3.blob_oid(CHANGE)
     assert rig.worktree() == worktree
+
+
+def test_ac784_13_published_started_records_the_ref_guard_intent(
+    tmp_path: Path,
+) -> None:
+    """AC-784.13: ``published``/``started`` carries the ref guard's intent (D§5.1 rule 2)."""
+    rig = _rig(tmp_path)
+    parent = rig.ref()
+    rig.reserve(OP)
+    commit = _reconciled(rig.commit(OP, rig.packet()))["commit"]
+    started = [
+        item
+        for item in rig.op_record(OP)["journal"]
+        if (item["phase"], item["status"]) == ("published", "started")
+    ]
+    assert len(started) == 1, started
+    evidence = started[0].get("evidence")
+    assert isinstance(evidence, dict), started
+    repo = evidence.get("repo")
+    assert isinstance(repo, str) and Path(repo).is_absolute(), evidence
+    assert os.path.normcase(str(Path(repo).resolve())) == os.path.normcase(
+        str(rig.fx.common_dir.resolve())
+    ), evidence
+    assert {key: value for key, value in evidence.items() if key != "repo"} == {
+        "ref": "refs/heads/main",
+        "ref_old": parent,
+        "ref_new": commit,
+        "op": OP,
+        "candidate": commit,
+    }
 
 
 @pytest.mark.parametrize("phase", b3.JOURNAL_PHASES)
@@ -635,6 +666,26 @@ def test_vec_v3_008_hook_drift_fails_the_candidate(tmp_path: Path, body: str) ->
     assert not (rig.repo / "change.txt").exists()
 
 
+def test_candidate_hooks_run_on_the_repository_environment(tmp_path: Path) -> None:
+    """AC-C.2: hooks in the candidate use the repository's ``.venv`` and never sync one there.
+
+    A hook's ``uv run`` in the candidate otherwise builds ``<candidate>/.venv``, which fails
+    ``ignored_residue:.venv/.gitignore``.
+    """
+    rig = _rig(tmp_path)
+    (rig.repo / ".venv").mkdir()
+    seen = tmp_path / "hook-env.txt"
+    rig.reserve(OP)
+    rig.install_hook(
+        "pre-commit",
+        f"printf '%s\\n%s\\n' \"$UV_PROJECT_ENVIRONMENT\" \"$UV_NO_SYNC\" > '{seen.as_posix()}'",
+    )
+    _reconciled(rig.commit(OP, rig.packet()))
+    venv, no_sync = seen.read_text(encoding="utf-8").splitlines()
+    assert Path(venv).resolve() == (rig.repo / ".venv").resolve()
+    assert no_sync == "1"
+
+
 def test_vec_v3_009_ignored_residue_outside_the_allow_list_fails(
     tmp_path: Path,
 ) -> None:
@@ -1038,6 +1089,43 @@ def test_vec_v3_019_non_directing_messages_refuse_before_any_mutation(
     assert _snapshot(rig) == before
 
 
+def test_push_qualifiers_and_to_phrases_keep_the_direction(tmp_path: Path) -> None:
+    """AC-C.6: a phrase that only rules out a push negates nothing ("commit to land the five
+    ... commits on main, with no push"), and "to <word>" scopes a branch only when the word
+    names an existing branch."""
+    rig = _rig(tmp_path)
+    rig.bind()
+    texts = [
+        "commit to land the five fixture commits on main, with no push",
+        "commit it but do not push",
+        "commit it without pushing",
+        "commit it to main, don't push",
+    ]
+    for n, text in enumerate(texts, 1):
+        parent = rig.ref()
+        uid = rig.fx.add_human(text)
+        out = _reconciled(
+            rig.human(uid, rig.packet(files={f"push-{n}.txt": b"push\n"}))
+        )
+        assert rig.parents(out["commit"]) == [parent] and rig.ref() == out["commit"]
+        consent = _evidence(rig, f"human-{uid}", "prepared", run=rig.fx.session)[
+            "consent"
+        ]
+        assert consent["scope"]["branch"] == "main", text
+    rig.git("branch", "feature-x")
+    packet = rig.packet()
+    before = _snapshot(rig)
+    for text in (
+        "commit it to feature-x",
+        "don't commit, no push",
+        "commit nothing, never push",
+        "do not commit and do not push",
+    ):
+        uid = rig.fx.add_human(text)
+        _refused(rig.human(uid, packet), "no_commit_direction")
+        assert _snapshot(rig) == before, text
+
+
 def _sdk_human(rig: b3.Rig, text: str, **over: Any) -> str:
     """The SDK shape of a typed turn (the VSCode extension): one text block, ``sdk`` source."""
     record: dict[str, Any] = {
@@ -1183,6 +1271,32 @@ def test_batch_commits_in_commit_rule_order_under_one_reservation(
         assert rig.message_bytes(commit) == f"{subjects[n - 1]}\n".encode()
         assert rig.journal(f"{OP}/{n}")[-1] == ("reconciled", "done")
     assert {f"batch-{n}.txt" for n in range(1, 6)} <= set(rig.tree_entries(commits[-1]))
+
+
+def test_each_batch_candidate_sits_directly_under_the_candidate_root(
+    tmp_path: Path,
+) -> None:
+    """AC-C.2: a batch sub-op's candidate is a child of the candidate root, as one packet's is.
+
+    The repository hooks reach the framework as ``../.agent`` from the candidate, so a sub-op
+    candidate nested at ``<root>/<op>/<n>`` cannot run them.
+    """
+    rig = _rig(tmp_path)
+    parent = rig.ref()
+    rig.reserve(OP)
+    packets = [
+        rig.packet(
+            files={f"cd-{n}.txt": f"{n}\n".encode()},
+            message=f"test: {n}\n",
+            parent=parent,
+        )
+        for n in (1, 2)
+    ]
+    _reconciled(rig.commit(OP, rig.batch(packets)))
+    root = rig.candidate_root.resolve()
+    for n in (1, 2):
+        candidate = rig.candidate_path(f"{OP}/{n}")
+        assert candidate.resolve().parent == root, candidate
 
 
 def test_batch_is_validated_whole_before_any_git_mutation(tmp_path: Path) -> None:

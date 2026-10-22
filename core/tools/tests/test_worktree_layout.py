@@ -66,7 +66,7 @@ SEED: dict[str, bytes] = {
     "pkg/mod.py": b"A = 1\n",
     ".agent/credits/worktree.json": (
         b'{"env_files": [], "frozen_dirs": [], '
-        b'"venv_build": ["uv", "sync"], "linked_trees": []}\n'
+        b'"venv_build": ["uv", "sync"], "linked_trees": [], "junction_files": []}\n'
     ),
 }
 _GIT_ENV_DROPPED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")

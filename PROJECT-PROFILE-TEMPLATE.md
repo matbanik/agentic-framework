@@ -120,6 +120,7 @@
 | Models: coordinator / builder / router (F5) | |
 | Cost constraints (F6) | metered / flat |
 | Stop-notification email (F7) | `no` \| `yes`: events, inbox role, credential store (**default `no`**, `enabled: false`; never write the address here) |
+| Junction files (F8) | repository-relative file paths that many lanes change (status files, registries, the known-issue list). Write them to `junction_files` in `.agent/credits/worktree.json` (**default `[]`**; the key is required). A lane never owns them; it files an integration request (`ADOPTION-GUIDE.md` §Parallel lanes) |
 
 ---
 

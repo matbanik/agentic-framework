@@ -55,6 +55,20 @@ context_tool_decision:
   human_message_reference: "{USER_EXPLICIT date/summary; null only for not_applicable}"
 ```
 
+## Lane Ownership
+
+This section is optional. Keep it only when the plan runs as a lane next to other sessions. Only a task with this section can be claimed as a lane: `tools/lanes.py claim` refuses `no_ownership` without it. A task without it runs as before.
+
+Each entry is a repository-relative exact path, or a directory prefix with a trailing `/`. Do not use globs, absolute paths, drive letters, backslashes, `.` or `..`. An `owns` entry and a `must_not_touch` entry must not overlap. A junction file (the `junction_files` list in `.agent/credits/worktree.json`) never goes in `owns`: the integrator edits it, and the lane files an integration request in its handoff.
+
+```yaml
+owns:
+  - src/example/
+  - tests/test_example.py
+must_not_touch:
+  - .agent/context/
+```
+
 ## Task Table
 
 > Classify every validation command through PROFILE D6 (D6_ADOPTER_ARGV) and

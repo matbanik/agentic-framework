@@ -6,7 +6,7 @@ runtime data — use selective contract merges for divergent files; recopy only 
 
 Source commit: 02eb4e37e513fe10579c9984d62227ae83ba834e + tree dfdaf8e6d3cdc33d8aade62d2a3eea920edf9ea6 (uncommitted at port time)
 
-Last refreshed: **2026-10-19** (run parameters: the `run_parameters` block, the M-list, the exact-scope commit route, the commit hook and the activation policy template). Previous: **2026-10-08** (dispatch resume and fork: `-ResumeDispatchId` / `-ForkDispatchId`
+Last refreshed: **2026-10-21** (parallel lanes stage 1: `tools/lanes.py`, `tools/os_lease.py`, `tools/ref_guard.py`, the `junction_files` worktree key, the ref-guard intent in `commit_batch.py`, the lane template and workflow text). Previous: **2026-10-19** (run parameters: the `run_parameters` block, the M-list, the exact-scope commit route, the commit hook and the activation policy template). Previous: **2026-10-08** (dispatch resume and fork: `-ResumeDispatchId` / `-ForkDispatchId`
 on both Codex wrappers, the new `Invoke-ClaudeDispatch.ps1`, review classes refused, docs routed
 through the Claude wrapper). Previous: **2026-10-07** (Cursor worker templates and the Gemini review rung
 retired; `scout` and `peer_reviewer` classes and agent templates added, `effort:` pinned in
@@ -149,8 +149,8 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 
 Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 
-> **Full tools set:** the packaged `core/tools/` tree ships **70 files** as of 2026-10-16 (both CLIs +
-> packages, the dispatch wrappers, the gates, `agent_notify.py`, the credits tools, `tests/`, and `__init__.py`). After copy, confirm
+> **Full tools set:** the packaged `core/tools/` tree ships **112 files** as of 2026-10-21 (both CLIs +
+> packages, the dispatch wrappers, the gates, `agent_notify.py`, the credits tools, the lane tools, `tests/`, and `__init__.py`). After copy, confirm
 > the count with `find core/tools -type f -not -path '*__pycache__*' | wc -l` and that no `__pycache__` ships.
 
 ### Scheduled credits runs (optional, Windows-only)
@@ -163,7 +163,8 @@ Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 | `tools/credits_msg.py` | `core/tools/credits_msg.py` | **Hand-merge.** Keep the fourth key in `CONFIG_KEYS` and `START_POLICIES` |
 | `.claude/hooks/credits_inbox.py` | `core/.claude/hooks/credits_inbox.py` | Re-copy |
 | `tools/stop_gate.py` | `core/tools/stop_gate.py` | Re-copy; `RELEASE_REASONS` holds `done` |
-| `tools/executor_worktree.py` | `core/tools/executor_worktree.py` | **Hand-merge.** A missing or invalid worktree config is refused with `worktree_bad:config`; the package has no project defaults |
+| `tools/executor_worktree.py` | `core/tools/executor_worktree.py` | **Hand-merge.** A missing or invalid worktree config is refused with `worktree_bad:config`; the package has no project defaults. The config has five keys: `junction_files` (stage 1) is required, each item a repository-relative file path |
+| `.agent/credits/worktree.json` | `core/.agent/credits/worktree.json` | **Do not re-copy.** Package values (no project paths); `junction_files` ships `[]` |
 | `tools/Invoke-ClaudeDispatch.ps1` | `core/tools/Invoke-ClaudeDispatch.ps1` | **Hand-merge** (§Accepted divergences): the author-vendor variable is read with `GetEnvironmentVariable` |
 | `tools/Get-ClaudeDispatch.ps1` | `core/tools/Get-ClaudeDispatch.ps1` | Re-copy, then scrub project names |
 | _(package)_ | `core/.claude/settings.hooks.json` | Hook fragment: the stop gate, the inbox hook, the commit gate and the six `ask` rules. `scripts/instantiate.py` merges its hook entries and its `permissions` rules into the adopter's `.claude/settings.json`; `--verify` reports a missing one |
@@ -177,8 +178,8 @@ still copies them.
 
 | Source | Destination | Notes |
 |---|---|---|
-| `tools/run_parameters.py` | `core/tools/run_parameters.py` | **Hand-merge.** Keep `TEMPLATE_HOME = ".agent/templates"`, `TRANSCRIPT_ADAPTER`, the FW policy-validator pairs and the review-round cap the package passes |
-| `tools/commit_batch.py` | `core/tools/commit_batch.py` | Re-copy, then scrub project names |
+| `tools/run_parameters.py` | `core/tools/run_parameters.py` | **Hand-merge.** Keep `TEMPLATE_HOME = ".agent/templates"`, `TRANSCRIPT_ADAPTER`, the FW policy-validator pairs and the review-round cap the package passes. `REQUIRED_COMPONENTS` lists the three lane tools; the policy template and `phase_b7.py` list them too |
+| `tools/commit_batch.py` | `core/tools/commit_batch.py` | Re-copy, then scrub project names. The `published` step records the ref-guard intent that `tools/ref_guard.py` reads (§Parallel lanes). A batch sub-op's candidate sits directly under the candidate root (the hooks reach `../.agent`), a candidate's hooks run on the repository `.venv`, and a phrase that only rules out a push ("with no push") never negates a commit direction |
 | `tools/validate_closeout_artifacts.py` | `core/tools/validate_closeout_artifacts.py` | **Hand-merge.** Keep the package's stage mode and its handoff and reflection formats |
 | `tools/validate_agent_files.py` | `core/tools/validate_agent_files.py` | **Hand-merge.** Keep `--policy run-parameters` reading its pairs from `.agent/run-parameters/governance/` |
 | `tools/completion_preflight.py` | `core/tools/completion_preflight.py` | Re-copy |
@@ -190,6 +191,41 @@ still copies them.
 | _(approved framework texts)_ | `core/.agent/run-parameters/governance/0{1,2}-*.diff` | The approved ledger diffs; never edit by hand (M-3) |
 | _(package)_ | `core/.agent/run-parameters.policy.json.template` | Placeholder digests: a copy left unedited keeps `status` at `disabled` |
 | the run-parameters tests and `run_parameters_fixtures/` | `core/tools/tests/` | Adapted to the package's formats; `scripts/tests/test_run_parameters_template.py` checks an instantiated adopter |
+
+### Parallel lanes (stage 1: lane cards, the lease and the `main` ref guard)
+
+The three tools are run-parameters components (`REQUIRED_COMPONENTS` in `tools/run_parameters.py`
+and the policy template). `ADOPTION-GUIDE.md` §Parallel lanes states the platform boundary.
+
+| Source | Destination | Notes |
+|---|---|---|
+| `tools/os_lease.py` | `core/tools/os_lease.py` | Re-copy, then fix the docstring: the package has no `validate_codebase.py`, so it names the `executor_worktree.py` gate lease (the same byte, `2**20`) |
+| `tools/lanes.py` | `core/tools/lanes.py` | **Hand-merge** (§Accepted divergences): the junction list comes from `junction_files` in `.agent/credits/worktree.json` (`junction_files(top)`; a bad config refuses `worktree_bad:config`), not the source's `JUNCTION_FILES` tuple; `SESSION_ENV = "{{PROJECT_NAME_UPPER}}_SESSION"` |
+| `tools/ref_guard.py` | `core/tools/ref_guard.py` | Re-copy, then scrub: `SWITCH = "{{PROJECT_NAME_UPPER}}_REF_GUARD"`. `install` prints `not installed: no governed publish route` and exits 4 off Windows |
+| `tests/tooling/test_os_lease.py` | `core/tools/tests/test_os_lease.py` | **Hand-merge.** The source's `validate_codebase` lease test becomes the gate-lease byte test (`executor_worktree.LEASE_LOCK_OFFSET`) |
+| `tests/tooling/test_lanes.py` | `core/tools/tests/test_lanes.py` | **Hand-merge.** The fixture repo writes a `worktree.json` with `junction_files`; the session env through `SESSION_ENV`; adds the AC-784.20 config tests (list from config, a config without the key refuses, `[]` admits the former junction owner) |
+| `tests/tooling/test_ref_guard.py` | `core/tools/tests/test_ref_guard.py` | Re-copy, then: fixture imports from `tools.tests.run_parameters_fixtures`; the switch through the literal `{{PROJECT_NAME_UPPER}}_REF_GUARD` |
+
+Changed files of this stage (rows above in their groups):
+
+- `tools/executor_worktree.py`: `WORKTREE_CONFIG_LISTS` gains `junction_files`; each item must be a
+  repository-relative file path (`_repo_file_ok`).
+- `.agent/credits/worktree.json` (package copy): `"junction_files": []`. **Migration:** an adopter
+  that updates must add the key to its own `worktree.json` (its project list, or `[]`), or every
+  `executor_worktree.py` command and `lanes.py claim` refuse `worktree_bad:config` (the other
+  `lanes.py` commands do not read it).
+- `tools/commit_batch.py`: the `published` step records the ref-guard intent (`repo`, `ref`,
+  `ref_old`, `ref_new`, `op`, `candidate`); the port test is
+  `test_ac784_13_published_started_records_the_ref_guard_intent`.
+- `tools/run_parameters.py`, `core/.agent/run-parameters.policy.json.template` and
+  `run_parameters_fixtures/phase_b7.py`: the three lane tools join the component list.
+- The worktree-config fixtures of `test_credits_port.py`, `test_credits_r1_fixes_tree.py`,
+  `test_executor_worktree.py`, `test_executor_worktree_base.py` and `test_worktree_layout.py`
+  carry `junction_files`; `test_credits_port.py` adds the item refusal cases.
+- `templates/TASK-TEMPLATE.md` (`## Lane Ownership`), `templates/HANDOFF-TEMPLATE.md`
+  (`## Integration requests`), `create-plan.md` (the `lanes.py list` read, the Lane Ownership
+  plan bullet) and `execution-session.md` (§Lanes): the package names the `junction_files` key
+  where the source names `JUNCTION_FILES` in `tools/lanes.py`, and the package example paths.
 
 ### Subagent agent definitions (required for subagent flows)
 
@@ -427,6 +463,8 @@ rtk proxy uv run python tools/_fw_hashdiff.py --ledger *> {{RECEIPTS_DIR}}/fw-le
 |---|---|---|
 | `.agent/credits/config.json` | authored | Four keys; the source has three. The package adds `credits_start_policy` (`human-only` \| `agent-on-user-chat`, default `human-only`), and `credits_msg.py`, `Register-CreditsRun.ps1` and `Start-CreditsRunTask.ps1` check it. Both switches ship off (`ruling_enabled: false`, `gate_wait_max_min: 0`). |
 | `tools/executor_worktree.py` | scrub | No project defaults: a missing or invalid worktree config refuses `create` and `check` with `worktree_bad:config`. |
+| `tools/lanes.py` | scrub | The junction list is project data: `junction_files` in `.agent/credits/worktree.json`, read through `executor_worktree.load_worktree_config`, not the source's `JUNCTION_FILES` tuple. The session env is `{{PROJECT_NAME_UPPER}}_SESSION`. |
+| `tools/os_lease.py` | scrub | The docstring names the `executor_worktree.py` gate lease instead of the source's `validate_codebase.py`, which does not ship. |
 | `tools/Invoke-ClaudeDispatch.ps1` | scrub | The author-vendor variable is read with `[Environment]::GetEnvironmentVariable('{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR')`, not `$env:`, so the template parses before token substitution. |
 | `.agent/docs/harness-profiles.md` | scrub | The source's `context_window` flag and column are not ported: its 1M-per-row protocol rests on the source's own measured window economics and a user-level toggle skill that does not ship. The `advisor` flag is ported. The Cursor host row keeps `injects_auto_approval: yes` (conservative). The `mid_run_messages` flag, the `monitor` notify value and the credits scheduler row are ported. |
 | `.agent/docs/model-routing.md` | scrub | Isolated-worker rungs rewritten to `claude -p` only; the 'not an independent-reviewer substitute' rule is kept. **Superseded 2026-09-07:** the same-vendor review rung is now removed outright, not relabelled — see §Independent-reviewer chain. Do not restore it from this row. **Superseded again 2026-10-07:** the rung returns as the conditional `fallback_reviewer` (rate-limit receipt, fresh process, tier floor, flagged verdict); port it from `model-routing.md` in that form only. |
@@ -451,7 +489,7 @@ rtk proxy uv run python tools/_fw_hashdiff.py --ledger *> {{RECEIPTS_DIR}}/fw-le
 | `templates/PLAN-TEMPLATE.md` | scrub | `eligible_tools` drops Serena. |
 | `templates/TASK-TEMPLATE.md` | scrub | `eligible_tools` drops Serena. |
 
--- 22 accepted divergence(s), all live --
+-- 24 accepted divergence(s), all live --
 
 
 Re-run `--ledger` after every refresh and update this table when the count or rows change.

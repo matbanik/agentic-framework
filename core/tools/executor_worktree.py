@@ -26,7 +26,11 @@ from ``.agent/credits/worktree.json`` in the main tree (``load_worktree_config``
 * ``venv_build``: the command that builds the worktree's ``.venv``, or null
   for a project without one. When it starts with ``uv``, ``--python`` and the
   main tree's interpreter version are added;
-* ``linked_trees``: ignored directory names linked back to the main tree. ``land`` writes every file that
+* ``linked_trees``: ignored directory names linked back to the main tree;
+* ``junction_files``: the repository-relative files that only the integrator
+  edits; ``tools/lanes.py`` refuses a lane whose ``owns`` names one.
+
+``land`` writes every file that
 differs from that baseline onto the main tree, uncommitted, under the main
 tree's gate lease, after checking that no sibling session changed the same
 file. ``sync`` refreshes one file from the main tree after such a refusal.
@@ -114,7 +118,7 @@ VENV_MARKER = ".venv/pyvenv.cfg"
 ENV_BASE_COMMIT = "CREDITS_BASE_COMMIT"
 # The adopter config: the project parts of a worktree (AC-J.2).
 WORKTREE_CONFIG = ".agent/credits/worktree.json"
-WORKTREE_CONFIG_LISTS = ("env_files", "frozen_dirs", "linked_trees")
+WORKTREE_CONFIG_LISTS = ("env_files", "frozen_dirs", "linked_trees", "junction_files")
 WORKTREE_CONFIG_KEYS = frozenset({*WORKTREE_CONFIG_LISTS, "venv_build"})
 # ``create`` writes this file in a worktree's git dir; its ``links`` are the
 # dependency trees linked back to ``source_root``.
@@ -216,13 +220,17 @@ def load_worktree_config(root: Path | str) -> dict[str, object]:
     """The project parts of a worktree, read from ``<root>/WORKTREE_CONFIG``.
 
     The file is one JSON object with exactly the keys ``env_files``,
-    ``frozen_dirs`` and ``linked_trees`` (lists of strings) and ``venv_build``
-    (a non-empty list of strings, or null).
+    ``frozen_dirs``, ``linked_trees`` and ``junction_files`` (lists of strings)
+    and ``venv_build`` (a non-empty list of strings, or null). Each
+    ``junction_files`` item is a repository-relative file path: no leading or
+    trailing ``/``, no ``\\``, drive, glob character, control character, empty,
+    ``.`` or ``..`` part.
 
     Raises:
         WorktreeConfigError: the file is missing or unreadable, is not JSON, is
-            not an object, has an unknown or a missing key, or a value has the
-            wrong type.
+            not an object, has an unknown or a missing key, a value has the
+            wrong type, or a ``junction_files`` item is not a repository-relative
+            file path.
     """
     path = Path(root) / WORKTREE_CONFIG
     try:
@@ -253,11 +261,28 @@ def load_worktree_config(root: Path | str) -> dict[str, object]:
         raise WorktreeConfigError(
             f"{WORKTREE_CONFIG}: venv_build is not a non-empty list of strings or null"
         )
+    for item in data["junction_files"]:
+        if not _repo_file_ok(item):
+            raise WorktreeConfigError(
+                f"{WORKTREE_CONFIG}: junction_files item {item!r} is not a "
+                "repository-relative file path"
+            )
     return data
 
 
 def _is_str_list(value: object) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _repo_file_ok(entry: str) -> bool:
+    """True for a repository-relative file path (the lane-ownership entry rules, no prefix)."""
+    if not entry or entry.startswith("/") or entry.endswith("/") or "\\" in entry:
+        return False
+    if _DRIVE_RE.match(entry) or any(ch in "*?[]" for ch in entry):
+        return False
+    if any(ord(ch) < 32 for ch in entry):
+        return False
+    return all(part not in ("", ".", "..") for part in entry.split("/"))
 
 
 def _config(root: Path) -> dict[str, object]:

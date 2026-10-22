@@ -72,7 +72,7 @@ SEED_TRACKED: dict[str, bytes] = {
     ".gitignore": b".venv/\n.env\n",
     CONFIG: (
         b'{"env_files": [".env"], "frozen_dirs": [], '
-        b'"venv_build": ["uv", "sync"], "linked_trees": []}\n'
+        b'"venv_build": ["uv", "sync"], "linked_trees": [], "junction_files": []}\n'
     ),
     STATUS: STATUS_V1,
     GUIDE: GUIDE_V1,

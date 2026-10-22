@@ -34,6 +34,8 @@ Then read `AGENTS.md`.
   Scan `.agent/docs/emerging-standards.md` for standards applicable to the MEUs
   being planned and add matching standards as explicit subtasks in Step 4.
 
+Then run `python tools/lanes.py list` to read the lane cards. If it shows `HALT`, stop and tell the human. A card that names your files is another session's lane: plan around it.
+
 ## Context Tool Decision Gate (Before Planning)
 
 Before Step 1, follow `.agent/docs/context-tool-decision-gate.md`. Inventory Graphify,
@@ -310,6 +312,7 @@ The plan must include:
 - Exact validation commands
 - Explicit stop conditions
 - Research URLs or document paths for any behavior resolved outside the target build-plan section
+- **If the plan will run as a lane next to other sessions:** a `## Lane Ownership` section in `task.md` (optional; `TASK-TEMPLATE.md`). The executing session claims it with `lanes.py claim` and runs `lanes.py beat` at every task-row boundary (`execution-session.md` §4, Lanes). A plan without the section is unchanged.
 - A **Handoff Set** that names one canonical path per product MEU:
   `.agent/context/handoffs/{YYYY-MM-DD}-{project-slug}-{MEU-ID}-handoff.md`.
   A non-product plan with `meus: []` instead names exactly one project handoff:

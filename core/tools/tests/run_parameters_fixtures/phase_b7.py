@@ -49,6 +49,10 @@ R48_COMPONENTS: tuple[str, ...] = (
     ".agent/run-parameters/schemas/authorization.v1.schema.json",
     ".agent/run-parameters/governance/01-agents.diff",
     ".agent/run-parameters/governance/02-guardrails.diff",
+    # MEU-784 AC-784.19: the lane tools.
+    "tools/lanes.py",
+    "tools/os_lease.py",
+    "tools/ref_guard.py",
 )
 GOVERNANCE = ".agent/run-parameters/governance"
 GOVERNANCE_DIFFS: dict[str, str] = {

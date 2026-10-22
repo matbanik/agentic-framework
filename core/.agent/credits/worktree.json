@@ -2,5 +2,6 @@
   "env_files": [".env"],
   "frozen_dirs": [],
   "venv_build": null,
-  "linked_trees": ["node_modules"]
+  "linked_trees": ["node_modules"],
+  "junction_files": []
 }
