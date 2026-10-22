@@ -10,3 +10,7 @@
 # reports `$'\r': command not found` on the shebang line. The .sh wrapper is the canonical
 # dispatch path on macOS/Linux, so that is a whole platform's entry point.
 *.sh text eol=lf
+
+# The commit-gate hook tests pin the byte hash of `_hook_common.split_segments`. A CRLF
+# checkout (core.autocrlf=true) changes those bytes, so the hooks check out LF too.
+core/.claude/hooks/*.py text eol=lf

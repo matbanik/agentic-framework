@@ -11,6 +11,8 @@ description: Agent-safe git operations with SSH commit signing. Handles commit, 
 >
 > Conventional commits; never interactive git: the message is given on the command line (`git commit -m "message"`) or from a file (`git commit -F <file>`, the child command that the exact-scope route runs behind its PowerShell wrapper's `-MessageFile` argument, `agent-commit.ps1:45,90`).
 
+> **Tag reads:** use `git for-each-ref refs/tags` (no prompt). `git tag -l` passes the commit gate, but a settings ask rule still prompts after a hook allow, so prefer `for-each-ref`.
+
 > [!CAUTION]
 > **NEVER use `--no-verify` without explicit human approval.**
 > Bypassing pre-commit hooks defeats the safety net and pushes broken code to CI.

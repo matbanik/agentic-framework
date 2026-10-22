@@ -53,8 +53,8 @@ Config file example (framework.vars)
 Scheduled credits runs (optional, Windows-only)
 -----------------------------------------------
 When the adopter tree holds ``.claude/settings.hooks.json``, the installer merges its hook
-entries into ``.claude/settings.json``: additive, idempotent, prior entries first and
-unchanged. An invalid ``settings.json`` is refused before any write. On any OS other
+entries and its ``permissions`` rules into ``.claude/settings.json``: additive, idempotent,
+prior entries first and unchanged. An invalid ``settings.json`` is refused before any write. On any OS other
 than Windows the installer refuses the scheduler: it removes the Windows-only files and
 writes no ``credits_inbox.py`` hook entry; ``--verify`` checks that refusal. The receipts
 directory must be local, because the credits store is SQLite in WAL mode: a UNC path is
@@ -163,6 +163,8 @@ CONFIG_KEYS = {
 # --- scheduled credits runs ---------------------------------------------------------------
 #: The hook fragment the package ships and the adopter settings file it merges into.
 HOOK_FRAGMENT = ".claude/settings.hooks.json"
+# The ``permissions`` rule lists the fragment may carry (run parameters D-19 A: ``ask``).
+PERMISSION_LISTS = ("allow", "ask", "deny")
 HOOK_SETTINGS = ".claude/settings.json"
 CREDITS_CONFIG = ".agent/credits/config.json"
 #: Who may start a scheduled run. ``human-only`` is the default the template ships.
@@ -387,13 +389,33 @@ def _hook_entries(settings: dict[str, object], label: str) -> list[tuple[str, st
     return out
 
 
+def _permission_rules(settings: dict[str, object], label: str) -> dict[str, list[str]]:
+    """Each ``permissions`` rule list of a settings document (empty when absent).
+
+    Raises:
+        ValueError: ``permissions`` is not an object, or a rule list is not a list of
+            strings.
+    """
+    permissions = settings.get("permissions", {})
+    if not isinstance(permissions, dict):
+        raise ValueError(f"{label}: 'permissions' is not an object")
+    out: dict[str, list[str]] = {}
+    for key in PERMISSION_LISTS:
+        rules = permissions.get(key, [])
+        if not isinstance(rules, list) or not all(isinstance(rule, str) for rule in rules):
+            raise ValueError(f"{label}: permissions.{key} is not a list of strings")
+        out[key] = list(rules)
+    return out
+
+
 def merge_hook_settings(
     settings: dict[str, object], fragment: dict[str, object]
 ) -> dict[str, object]:
-    """Return ``settings`` with each ``fragment`` hook entry added once.
+    """Return ``settings`` with each ``fragment`` hook entry and permission rule added once.
 
-    An entry is the same when its event, matcher and command are the same. The prior
-    entries keep their order and come first; an entry already present is not added
+    An entry is the same when its event, matcher and command are the same; a rule is the
+    same when its list (``allow``, ``ask``, ``deny``) and text are the same. The prior
+    entries and rules keep their order and come first; one already present is not added
     again, so a second merge returns an equal document. Neither input is changed.
 
     Raises:
@@ -402,6 +424,14 @@ def merge_hook_settings(
     merged = copy.deepcopy(settings)
     present = set(_hook_entries(merged, HOOK_SETTINGS))
     _hook_entries(fragment, HOOK_FRAGMENT)
+    have_rules = _permission_rules(merged, HOOK_SETTINGS)
+    fragment_rules = _permission_rules(fragment, HOOK_FRAGMENT)
+    for key, rules in fragment_rules.items():
+        fresh = [rule for rule in dict.fromkeys(rules) if rule not in have_rules[key]]
+        if fresh:
+            permissions = merged.setdefault("permissions", {})
+            assert isinstance(permissions, dict)  # checked by _permission_rules above
+            permissions[key] = have_rules[key] + fresh
     hooks = merged.setdefault("hooks", {})
     assert isinstance(hooks, dict)  # checked by _hook_entries above
     fragment_hooks = fragment.get("hooks", {})
@@ -571,10 +601,13 @@ def _credits_problems(root: Path, receipts_dir: str | None) -> list[str]:
     if fragment is None and not settings_path.exists():
         return problems
     try:
-        have = (
-            _hook_entries(_load_json_object(settings_path, HOOK_SETTINGS), HOOK_SETTINGS)
-            if settings_path.exists()
-            else []
+        settings = (
+            _load_json_object(settings_path, HOOK_SETTINGS) if settings_path.exists() else {}
+        )
+        have = _hook_entries(settings, HOOK_SETTINGS)
+        have_rules = _permission_rules(settings, HOOK_SETTINGS)
+        fragment_rules = (
+            _permission_rules(fragment, HOOK_FRAGMENT) if fragment is not None else {}
         )
     except ValueError as exc:
         return problems + [str(exc)]
@@ -584,6 +617,10 @@ def _credits_problems(root: Path, receipts_dir: str | None) -> list[str]:
                 problems.append(
                     f"{HOOK_SETTINGS}: missing hook entry {event} [{matcher or '-'}] {command}"
                 )
+    for key, rules in fragment_rules.items():
+        for rule in rules:
+            if rule not in have_rules[key]:
+                problems.append(f"{HOOK_SETTINGS}: missing {key} rule {rule}")
     if not scheduler_supported():
         for event, matcher, command in have:
             if WINDOWS_ONLY_HOOK in command:

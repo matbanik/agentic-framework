@@ -2,7 +2,8 @@
 
 The {{PROJECT_NAME_TITLE}} source tests its two PreToolUse hooks in one module. The framework ships the
 commit hook alone (``.claude/hooks/commit_gate.py`` and ``_hook_common.py``), so this module
-holds the commit-gate subset: ``TestCommitGate``, the classifier tests and the settings wiring.
+holds the commit-gate subset: ``TestCommitGate``, the classifier tests, ``TestCommitGateStage0``
+(the stage-0 classifier cases and the prompt hotfix of 2026-10-21) and the settings wiring.
 
 * ``commit_gate.py`` denies a direct ``git commit`` in every mode and names the driver
   (``tools/commit_batch.py``); the canonical ``git <verb>`` and ``rtk proxy git <verb>`` of
@@ -115,7 +116,7 @@ def _read_log(path: Path) -> list[dict[str, Any]]:
 class TestCommitGate:
     ASK_REASON = (
         "[commit_gate] Human approval gate (AGENTS.md §Hard Gates): "
-        "commit/push/merge/tag require a USER_EXPLICIT chat message."
+        "push/merge/tag require a USER_EXPLICIT chat message."
     )
 
     # M-7 H-1 (run-parameters B-3; AC-C.8, AC-C.9): a direct ``git commit`` is denied in
@@ -157,14 +158,14 @@ class TestCommitGate:
         [
             "git status",
             "git log --oneline -5",
-            "git commit-tree HEAD^{tree}",
+            "git symbolic-ref --short HEAD",
             "rtk git diff --stat",
             "echo 'git commit' > note.txt",
         ],
         ids=[
             "status",
             "log",
-            "commit-tree-is-not-commit",
+            "symbolic-ref-read",
             "rtk-diff",
             "quoted-in-echo",
         ],
@@ -437,8 +438,10 @@ class TestCommitGateClassifier:
     ) -> None:
         _assert_outcome(command, "dontAsk", "allow")
 
-    # V3-021 / V3-051 (rule 6): a git token with an unsupported construct and no
-    # remote-verb token asks in the asking modes and denies in dontAsk or a missing mode.
+    # V3-021 / V3-051 (rule 6, prompt hotfix 2026-10-21): a git token with an unsupported
+    # construct, no remote-verb token and the word ``commit`` after the git token is denied
+    # in every mode and names the driver; an unknown verb (an alias) is denied. Nothing
+    # waits for a prompt.
     @pytest.mark.parametrize(
         "command",
         [
@@ -496,7 +499,97 @@ class TestCommitGateClassifier:
     def test_vec_v3_021_vec_v3_051_unsupported_construct_around_a_commit(
         self, command: str, mode: str | None
     ) -> None:
-        _assert_outcome(command, mode, _ask_or_deny(mode))
+        _assert_outcome(command, mode, "deny", commit="commit" in command)
+
+    # Prompt hotfix 2026-10-21 (rule 6): an unsupported construct that holds a git token
+    # but no commit, remote verb, ref-plumbing verb or unknown verb is allowed in every
+    # mode. These shapes caused most bypass-mode prompts (census 2026-10-20).
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "timeout 5 git log",
+            "echo $(git rev-parse HEAD)",
+            "git diff $(git merge-base HEAD main)",
+            "git -c user.name=x log -1",
+            "GIT_DIR=.git git status",
+            "find . -name '*.py' -exec git add {} \\;",
+            "xargs git add",
+            "cat <<EOF > C:/Temp/x.txt\ngit status shows the tree\nEOF",
+            "cat <<EOF > C:/Temp/x.txt\nthe git token, then a commit word\nEOF",
+            "git -C . hash-object -t blob --stdin <<< x",
+            "if true; then git status; fi",
+        ],
+        ids=[
+            "timeout-log",
+            "substitution-rev-parse",
+            "substitution-merge-base",
+            "c-key-log",
+            "git-dir-status",
+            "find-exec-add",
+            "xargs-add",
+            "heredoc-prose",
+            "heredoc-prose-commit-word",
+            "herestring-hash-object",
+            "if-status",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_hotfix_unsupported_construct_without_a_gated_word_is_allowed(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "allow")
+
+    # S-0 (ruled 2026-10-21; deny, not ask, so nothing waits): ref plumbing that writes a
+    # commit or moves a ref outside commit_batch.py is denied in every mode, also inside
+    # an unsupported construct. The read-only symbolic-ref forms stay silent.
+    @pytest.mark.parametrize(
+        "command",
+        [
+            f"git commit-tree HEAD^{{tree}} -m {MARK}",
+            f"git update-ref refs/heads/main {MARK}",
+            f"git update-ref -d refs/heads/{MARK}",
+            "git update-ref --stdin",
+            f"git symbolic-ref HEAD refs/heads/{MARK}",
+            "git symbolic-ref -d HEAD",
+            "git symbolic-ref --delete HEAD",
+            f"rtk proxy git update-ref refs/heads/main {MARK}",
+            f"timeout 5 git update-ref refs/heads/main {MARK}",
+            f"echo $(git commit-tree HEAD^{{tree}} -m {MARK})",
+        ],
+        ids=[
+            "commit-tree",
+            "update-ref",
+            "update-ref-delete",
+            "update-ref-stdin",
+            "symbolic-ref-write",
+            "symbolic-ref-d",
+            "symbolic-ref-delete",
+            "rtk-proxy-update-ref",
+            "timeout-update-ref",
+            "substitution-commit-tree",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_s0_ref_plumbing_is_denied(self, command: str, mode: str | None) -> None:
+        reason = _assert_outcome(command, mode, "deny")
+        assert "ref plumbing" in reason
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git symbolic-ref HEAD",
+            "git symbolic-ref -q HEAD",
+            "git symbolic-ref --short HEAD",
+            "git symbolic-ref --no-recurse HEAD",
+            "git symbolic-ref -q --short HEAD",
+        ],
+        ids=["plain", "quiet", "short", "no-recurse", "quiet-short"],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_s0_symbolic_ref_read_is_silent(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "allow")
 
     # V3-022 / V3-047 (rule 2): a remote-verb token inside an unsupported construct is
     # denied in every mode; rule 2 comes before rule 6.
@@ -819,7 +912,7 @@ class TestCommitGateClassifier:
             (f"git log & git commit -m {MARK}", "plan", "deny", True),
             (f"git status |& git tag {MARK}", "bypassPermissions", "ask", False),
             (f"echo {MARK} && git status", "default", "allow", False),
-            ("timeout 5 git log && git status", "default", "ask", False),
+            ("timeout 5 git log && git status", "default", "allow", False),
             (f"timeout 5 git log && git commit -m {MARK}", "default", "deny", True),
             (
                 "uv run python tools/commit_batch.py commit --op op-1 && "
@@ -847,8 +940,8 @@ class TestCommitGateClassifier:
             "async-commit",
             "pipe-stderr-tag",
             "all-allow",
-            "unsupported-ask-and-allow",
-            "unsupported-ask-and-deny",
+            "unsupported-and-allow",
+            "unsupported-and-deny",
             "driver-and-push",
             "driver-and-push-no-mode",
         ],
@@ -882,6 +975,546 @@ class TestCommitGateClassifier:
         assert segment is not None
         digest = hashlib.sha256(segment.encode("utf-8")).hexdigest()
         assert digest == SPLIT_SEGMENTS_SHA256
+
+
+class TestCommitGateStage0:
+    """The stage-0 classifier changes of 2026-10-20-multi-agent-lanes (MEU-783).
+
+    AC-783.2: ``push`` or ``send-pack`` in verb position after a git token, in a construct,
+    a loop or a wrapper, is denied and the reason names the human-directed push; the
+    canonical ``git push`` still asks. AC-783.3: a git invocation that sets
+    ``core.hooksPath`` is denied. AC-783.4: in a construct ``symbolic-ref`` is denied only in
+    the write form, with operands bound to one invocation. AC-783.5: separated global
+    option values are consumed. AC-783.6: tag list and verify forms are read-only.
+    AC-783.7: after a read-only verb later plain words are data, nested commands are still
+    scanned. AC-783.8: ``git refs`` and ``git lfs`` read forms. AC-783.9: the ref-guard
+    switch is the human's. AC-783.11: the round-2 attack strings and the D§2.6 "Effect"
+    list keep their stated outcome.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            f"timeout 5 git send-pack origin {MARK}",
+            f"timeout 5 git push origin {MARK}",
+            f"for r in a; do git send-pack $r {MARK}; done",
+            f"git send-pack origin {MARK}",
+            f"rtk git send-pack origin {MARK}",
+            f"echo $(git send-pack origin {MARK})",
+            f"git -C . push origin {MARK}",
+            f"f() {{ git push origin {MARK}; }}; f",
+            f"git -C . --no-pager send-pack origin {MARK}",
+        ],
+        ids=[
+            "timeout-send-pack",
+            "timeout-push",
+            "loop-send-pack",
+            "plain-send-pack",
+            "rtk-send-pack",
+            "substitution-send-pack",
+            "dash-c-push",
+            "function-push",
+            "global-options-send-pack",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_2_send_pack_or_push_in_verb_position_is_denied(
+        self, command: str, mode: str | None
+    ) -> None:
+        reason = _assert_outcome(command, mode, "deny")
+        assert "human-directed push" in reason
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            f"git push origin {MARK}",
+            f"rtk proxy git push origin {MARK}",
+            f"git push origin {MARK} && timeout 5 git log",
+        ],
+        ids=["push", "rtk-proxy-push", "push-then-wrapped-log"],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_2_send_pack_rule_keeps_the_canonical_push_ask(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, _ask_or_deny(mode))
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git -c core.hooksPath=/dev/null reset --hard",
+            "git -c CORE.HOOKSPATH=/dev/null reset --hard HEAD",
+            "git -ccore.hooksPath=/dev/null status",
+            "git --config-env=core.hooksPath=HP status",
+            "git --config-env core.hooksPath=HP status",
+            "timeout 5 git -c core.hooksPath=/dev/null reset --hard",
+            "for f in a; do git -c core.hookspath=x checkout main; done",
+            "echo $(git -c core.hooksPath=/dev/null status)",
+            "git -C . -c Core.HooksPath=/dev/null merge-base HEAD main",
+        ],
+        ids=[
+            "dash-c",
+            "dash-c-upper",
+            "dash-c-joined",
+            "config-env-joined",
+            "config-env-separated",
+            "timeout",
+            "loop-lower",
+            "substitution",
+            "after-dash-capital-c",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_3_hookspath_override_is_denied(
+        self, command: str, mode: str | None
+    ) -> None:
+        reason = _assert_outcome(command, mode, "deny")
+        assert "core.hooksPath" in reason
+
+    @pytest.mark.parametrize(
+        "command",
+        ["git -c core.editor=vi status", "git -c core.hooksPathx=1 log -1"],
+        ids=["other-key", "longer-key"],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_3_hookspath_rule_ignores_other_keys(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "allow")
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git -c core.hooksPath=/tmp/git status",
+            "git --config-env=core.hooksPath=/tmp/git status",
+            "git --config-env core.hooksPath=/tmp/git status",
+            "timeout 5 git -c core.hooksPath=/tmp/git reset --hard",
+            "git -ccore.hooksPath=/tmp/git status",
+        ],
+        ids=[
+            "dash-c",
+            "config-env-joined",
+            "config-env-separated",
+            "timeout",
+            "dash-c-joined",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_3_hookspath_value_ending_in_git_is_denied(
+        self, command: str, mode: str | None
+    ) -> None:
+        # A global option's value is never a git token, even when its last path
+        # component is "git" (R1-F2).
+        reason = _assert_outcome(command, mode, "deny")
+        assert "core.hooksPath" in reason
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            f"x=$(git symbolic-ref HEAD refs/heads/{MARK})",
+            f"timeout 5 git symbolic-ref HEAD refs/heads/{MARK}",
+            "timeout 5 git symbolic-ref -d HEAD",
+            "for r in a; do git symbolic-ref --delete HEAD; done",
+            f'git -C "$r" symbolic-ref HEAD refs/heads/{MARK}',
+            "timeout 5 git symbolic-ref -qd HEAD",
+            "timeout 5 git symbolic-ref --del HEAD",
+            f"timeout 5 git symbolic-ref -m why HEAD refs/heads/{MARK}",
+        ],
+        ids=[
+            "substitution-write",
+            "timeout-write",
+            "timeout-d",
+            "loop-delete",
+            "dash-c-write",
+            "short-cluster-d",
+            "delete-abbreviation",
+            "message-write",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_4_symbolic_ref_write_in_a_construct_is_denied(
+        self, command: str, mode: str | None
+    ) -> None:
+        reason = _assert_outcome(command, mode, "deny")
+        assert "ref plumbing" in reason
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo $(git symbolic-ref --short HEAD)",
+            "timeout 5 git symbolic-ref --short HEAD",
+            'git -C "$r" symbolic-ref -q HEAD',
+            "for r in a; do git symbolic-ref -q HEAD; done",
+            "b=$(git symbolic-ref --short HEAD); echo a b",
+            "for r in a; do git symbolic-ref -q HEAD; echo a b; done",
+            "timeout 5 git symbolic-ref -q HEAD && echo a b",
+            "timeout 5 git symbolic-ref -q HEAD || echo a b",
+            "for r in a; do git symbolic-ref -q HEAD | cat; done",
+            "echo $(git symbolic-ref --short HEAD) b",
+            "echo $(git symbolic-ref --short HEAD; echo a b)",
+            "for r in a; do git symbolic-ref -q HEAD\necho a b; done",
+            "git symbolic-ref --short HEAD; echo a b",
+        ],
+        ids=[
+            "substitution-short",
+            "timeout-short",
+            "dash-c-quiet",
+            "loop-quiet",
+            "semicolon",
+            "loop-semicolon",
+            "and",
+            "or",
+            "pipe",
+            "closing-paren",
+            "semicolon-inside-substitution",
+            "newline",
+            "parsed-semicolon",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_4_symbolic_ref_read_in_a_construct_is_allowed(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "allow")
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git --git-dir .git status",
+            "git --work-tree . status",
+            "git --namespace ns log -1",
+            "git --git-dir .git --work-tree . diff --stat",
+            "git --exec-path /usr/lib/git-core status",
+        ],
+        ids=["git-dir", "work-tree", "namespace", "git-dir-and-work-tree", "exec-path"],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_5_global_option_value_is_consumed(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "allow")
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            f"git --git-dir .git commit -m {MARK}",
+            f"git --work-tree . commit -m {MARK}",
+            f"git --bare commit -m {MARK}",
+            f"timeout 5 git --namespace ns commit -m {MARK}",
+        ],
+        ids=["git-dir", "work-tree", "bare-takes-no-value", "wrapped-namespace"],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_5_global_option_value_never_hides_the_commit_verb(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "deny", commit=True)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git tag -l",
+            "git tag --list",
+            "git tag -l 'v1*'",
+            "git tag -n5",
+            "git tag -n -l",
+            "git tag -v v1.0",
+            "git tag --verify v1.0",
+            "git tag --contains HEAD",
+            "git tag --points-at HEAD",
+            "git tag --sort=-v:refname",
+            "git tag --sort -creatordate -l",
+            "git tag '--format=%(refname)' -l",
+            "rtk git tag -l",
+            "rtk proxy git tag --list",
+            "git -C . tag -l",
+        ],
+        ids=[
+            "l",
+            "list",
+            "l-pattern",
+            "n-count",
+            "n-and-l",
+            "v",
+            "verify",
+            "contains",
+            "points-at",
+            "sort-joined",
+            "sort-separated",
+            "format",
+            "rtk-git",
+            "rtk-proxy-git",
+            "dash-c",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_6_tag_read_is_allowed(self, command: str, mode: str | None) -> None:
+        _assert_outcome(command, mode, "allow")
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git tag -l -d v1",
+            f"git tag -a v1 -m {MARK}",
+            "git tag --list --delete v1",
+            "git tag v1",
+            "git tag -f v1",
+            "git tag --sort=refname v2",
+            "git tag",
+        ],
+        ids=["l-d", "annotate", "list-delete", "name", "force", "sort-name", "bare"],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_6_tag_read_with_a_mutation_keeps_the_ask(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, _ask_or_deny(mode))
+
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_6_tag_read_rule_keeps_a_non_canonical_mutation_denied(
+        self, mode: str | None
+    ) -> None:
+        _assert_outcome("rtk git tag -l -d v1", mode, "deny")
+        _assert_outcome(f"git -C . tag -a v1 -m {MARK}", mode, "deny")
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'git -C "$r" grep -n push -- docs',
+            'git -C "$r" grep commit -n README.md',
+            'git -C "$r" log --grep=merge --oneline',
+            'git -C "$r" log --grep tag -1',
+            "for f in a; do git grep -n push docs; done",
+            'git -C "$r" show HEAD --stat -- merge',
+            'git -C "$r" diff HEAD -- push commit',
+            'git -C "$r" blame -L 1,2 tag.txt push',
+            'git -C "$r" ls-files push',
+            'git -C "$r" cat-file -p HEAD:push',
+            'git -C "$r" rev-parse --verify tag',
+            'git -C "$r" status --short push',
+        ],
+        ids=[
+            "grep-push",
+            "grep-commit-n",
+            "log-grep-merge",
+            "log-grep-tag",
+            "loop-grep-push",
+            "show",
+            "diff",
+            "blame",
+            "ls-files",
+            "cat-file",
+            "rev-parse",
+            "status",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_7_read_verb_data_is_allowed(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "allow")
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git -C . grep -e git -e push -- docs",
+            "git -C . grep -n git push -- docs",
+            f"git log git commit -m {MARK}",
+            f"for f in a; do git log git commit -m {MARK}; done",
+            "rtk proxy git grep -n git push -- docs",
+            "X=1 git grep git merge -- docs",
+        ],
+        ids=[
+            "grep-e-git-e-push",
+            "grep-git-push",
+            "log-git-commit",
+            "loop-log-git-commit",
+            "rtk-proxy-grep",
+            "assignment-grep",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_7_a_git_word_in_read_verb_data_is_data(
+        self, command: str, mode: str | None
+    ) -> None:
+        # A read verb in executable position reads to the end of its segment: a later
+        # "git" word is one of its arguments, not a new invocation (R1-F2).
+        _assert_outcome(command, mode, "allow")
+
+    @pytest.mark.parametrize(
+        ("command", "commit"),
+        [
+            (f'git grep "$(git push origin {MARK})"', False),
+            (f'git -C "$r" log $(git commit -m {MARK})', True),
+            (f"git -C \"$r\" grep `git push origin {MARK}`", False),
+            (f"for f in a; do git grep x; git push origin {MARK}; done", False),
+            (f'git -C "$r" grep push -- docs; timeout 5 git commit -m {MARK}', True),
+            (f"find . -exec git log {{}} \\; -exec git push origin {MARK} \\;", False),
+            (f"timeout 5 git log -1 git push origin {MARK}", False),
+        ],
+        ids=[
+            "grep-substitution-push",
+            "log-substitution-commit",
+            "grep-backtick-push",
+            "loop-next-command-push",
+            "next-command-commit",
+            "find-exec-read-then-push",
+            "wrapped-read-then-push",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_7_read_verb_never_hides_a_nested_command(
+        self, command: str, commit: bool, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "deny", commit=commit)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git refs list",
+            "git refs exists refs/heads/main",
+            "git refs verify",
+            "git lfs version",
+            "git lfs env",
+            "git lfs ls-files",
+            "git lfs status",
+            "rtk git lfs ls-files",
+        ],
+        ids=[
+            "refs-list",
+            "refs-exists",
+            "refs-verify",
+            "lfs-version",
+            "lfs-env",
+            "lfs-ls-files",
+            "lfs-status",
+            "rtk-lfs-ls-files",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_8_refs_lfs_read_is_allowed(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "allow")
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git refs migrate --ref-format=reftable",
+            "git refs",
+            "git lfs install",
+            f"git lfs push origin {MARK}",
+            "git lfs",
+        ],
+        ids=["refs-migrate", "refs-bare", "lfs-install", "lfs-push", "lfs-bare"],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_8_refs_lfs_other_forms_are_denied(
+        self, command: str, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, "deny")
+
+    # The hook holds the literal token form of the switch name, so these cases build it
+    # from ``_UPPER`` directly: the raw framework keeps the placeholder, an adopter its name.
+    @pytest.mark.parametrize(
+        "command",
+        [
+            f"{_UPPER}_REF_GUARD=off git update-ref refs/heads/main {MARK}",
+            f"export {_UPPER}_REF_GUARD=off".lower(),
+            f"{_UPPER}_REF_GUARD=off git status",
+            f"echo ${_UPPER}_REF_GUARD",
+            f"env {f'{_UPPER}_REF_GUARD'.title()}=0 git log",
+            f"unset {_UPPER}_REF_GUARD",
+            f"echo ok; export {_UPPER}_REF_GUARD=off",
+        ],
+        ids=[
+            "assignment-update-ref",
+            "export-lower",
+            "assignment-status",
+            "read",
+            "env-mixed-case",
+            "unset",
+            "second-command",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_9_ref_guard_env_is_denied(
+        self, command: str, mode: str | None
+    ) -> None:
+        reason = _assert_outcome(command, mode, "deny")
+        assert "only the human sets it" in reason
+        assert f"{_UPPER}_REF_GUARD" in reason
+
+    # D§2.6 "Effect on the round-2 attack strings": the seven round-2 inputs hide the act in
+    # a quoted interpreter argument or a pager option, which the hook does not read (the
+    # stated limit); they allow in both modes Astra ran.
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'for f in a; do git status; "sh" -c "git commit -am hidden"; done',
+            'for f in a; do git status; "sh" -c "git push origin HEAD"; done',
+            'for f in a; do git status; "eval" "git update-ref refs/heads/main HEAD~1"; done',
+            "for f in a; do git grep --op=vim needle; done",
+            "git grep --op=\"sh -c 'git commit -am hidden' --\" needle",
+            "for f in a; do git status; perl -e'system(\"git commit -am hidden\")'; done",
+            "for f in a; do git config --unset-a core.hooksPath; done",
+        ],
+        ids=[
+            "quoted-sh-commit",
+            "quoted-sh-push",
+            "quoted-eval-update-ref",
+            "grep-open-files-in-pager",
+            "grep-pager-shell",
+            "perl-attached-code",
+            "config-unset-abbreviation",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ["default", "bypassPermissions"])
+    def test_ac783_11_round2_attack_strings_keep_the_stated_limit(
+        self, command: str, mode: str
+    ) -> None:
+        _assert_outcome(command, mode, "allow")
+
+    @pytest.mark.parametrize(
+        ("command", "expected", "commit"),
+        [
+            (f"timeout 5 git commit -m {MARK}", "deny", True),
+            (f"GIT_DIR=.git git commit -m {MARK}", "deny", True),
+            (f"echo $(git commit -m {MARK})", "deny", True),
+            (f"git commit-tree HEAD^{{tree}} -m {MARK}", "deny", False),
+            (f"git update-ref refs/heads/main {MARK}", "deny", False),
+            (f"timeout 5 git commit-tree HEAD^{{tree}} -m {MARK}", "deny", False),
+            (f"bash -c \"git commit -m {MARK}\"", "allow", False),
+            ("timeout 5 git ci", "allow", False),
+            ("git pull", "allow", False),
+            ("git rebase main", "allow", False),
+            ("git cherry-pick HEAD~1", "allow", False),
+            ("git revert HEAD", "allow", False),
+            (f"git am C:/Temp/{MARK}.patch", "allow", False),
+            ("git reset --hard", "allow", False),
+        ],
+        ids=[
+            "timeout-commit",
+            "git-dir-commit",
+            "substitution-commit",
+            "commit-tree",
+            "update-ref",
+            "timeout-commit-tree",
+            "bash-c-commit",
+            "timeout-alias",
+            "pull",
+            "rebase",
+            "cherry-pick",
+            "revert",
+            "am",
+            "reset-hard",
+        ],
+    )
+    @pytest.mark.parametrize("mode", ALL_MODES, ids=ALL_MODE_IDS)
+    def test_ac783_11_round2_effect_list(
+        self, command: str, expected: str, commit: bool, mode: str | None
+    ) -> None:
+        _assert_outcome(command, mode, expected, commit=commit)
 
 
 # --- settings wiring (FS row 44) -------------------------------------------------------

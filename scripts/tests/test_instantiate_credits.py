@@ -419,6 +419,56 @@ def test_verify_reports_a_missing_hook_entry(
     assert "stop_gate.py" in capsys.readouterr().out
 
 
+def _ask(settings: dict[str, object]) -> list[object]:
+    """The ``permissions.ask`` list of a settings document (empty when absent)."""
+    permissions = settings.get("permissions", {})
+    assert isinstance(permissions, dict)
+    ask = permissions.get("ask", [])
+    assert isinstance(ask, list)
+    return ask
+
+
+def test_merge_adds_the_fragment_ask_rules_once_after_the_prior_rules() -> None:
+    """Run parameters (D-19 A): the fragment's ``permissions.ask`` rules reach
+    ``settings.json`` once, after the prior rules; the prior ``allow`` list is kept."""
+    inst = _load_installer()
+    prior: dict[str, object] = {
+        "permissions": {"allow": ["Bash(ls *)"], "ask": ["Bash(echo mine)"]}
+    }
+    before = copy.deepcopy(prior)
+    fragment = _fragment()
+    rules = _ask(fragment)
+    assert rules, "the fragment carries no ask rules"
+    once = inst.merge_hook_settings(prior, fragment)
+    twice = inst.merge_hook_settings(once, fragment)
+    assert prior == before, "merge_hook_settings mutated its input"
+    assert twice == once
+    assert _ask(once) == ["Bash(echo mine)", *rules]
+    permissions = once["permissions"]
+    assert isinstance(permissions, dict)
+    assert permissions["allow"] == ["Bash(ls *)"]
+
+
+def test_run_installs_the_ask_rules_and_verify_reports_a_missing_one(
+    adopter: Path, on_windows: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Run parameters (D-19 A): ``run`` writes every fragment ``ask`` rule; ``--verify``
+    fails when one is missing."""
+    inst = _load_installer()
+    rules = _ask(_fragment())
+    assert inst.run(_values(adopter), dry_run=False, root=adopter) == 0
+    settings = _settings(adopter)
+    assert _ask(settings) == rules
+    assert inst.verify_only(adopter) == 0
+    permissions = settings["permissions"]
+    assert isinstance(permissions, dict)
+    permissions["ask"] = rules[1:]
+    (adopter / ".claude" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    capsys.readouterr()
+    assert inst.verify_only(adopter) == 2
+    assert f"missing ask rule {rules[0]}" in capsys.readouterr().out
+
+
 def test_full_instantiation_of_core_verifies_clean(adopter: Path, on_windows: None) -> None:
     """AC-J.3: a copied ``core/`` instantiates to a tree that ``--verify`` passes, with the
     credits module substituted."""

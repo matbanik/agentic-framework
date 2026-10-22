@@ -166,7 +166,7 @@ Re-validate seeds after copy: `load()` both SSOTs from `core/` must succeed.
 | `tools/executor_worktree.py` | `core/tools/executor_worktree.py` | **Hand-merge.** A missing or invalid worktree config is refused with `worktree_bad:config`; the package has no project defaults |
 | `tools/Invoke-ClaudeDispatch.ps1` | `core/tools/Invoke-ClaudeDispatch.ps1` | **Hand-merge** (§Accepted divergences): the author-vendor variable is read with `GetEnvironmentVariable` |
 | `tools/Get-ClaudeDispatch.ps1` | `core/tools/Get-ClaudeDispatch.ps1` | Re-copy, then scrub project names |
-| _(package)_ | `core/.claude/settings.hooks.json` | Hook fragment: the stop gate and the inbox hook. `scripts/instantiate.py` merges it into the adopter's `.claude/settings.json` |
+| _(package)_ | `core/.claude/settings.hooks.json` | Hook fragment: the stop gate, the inbox hook, the commit gate and the six `ask` rules. `scripts/instantiate.py` merges its hook entries and its `permissions` rules into the adopter's `.claude/settings.json`; `--verify` reports a missing one |
 | the credits tests (`test_credits_*.py`, `*Credits*.Tests.ps1`) | `core/tools/tests/` | Sibling imports (`from test_credits_... import`), not `tests.unit.` imports |
 
 ### Run parameters (required: `create-plan.md` Step 0 reads them)
@@ -182,7 +182,8 @@ still copies them.
 | `tools/validate_closeout_artifacts.py` | `core/tools/validate_closeout_artifacts.py` | **Hand-merge.** Keep the package's stage mode and its handoff and reflection formats |
 | `tools/validate_agent_files.py` | `core/tools/validate_agent_files.py` | **Hand-merge.** Keep `--policy run-parameters` reading its pairs from `.agent/run-parameters/governance/` |
 | `tools/completion_preflight.py` | `core/tools/completion_preflight.py` | Re-copy |
-| `.claude/hooks/commit_gate.py`, `.claude/hooks/_hook_common.py` | `core/.claude/hooks/` | Re-copy, then scrub. `settings.hooks.json` wires `commit_gate.py` in `PreToolUse` and carries the six `ask` rules |
+| `.claude/hooks/commit_gate.py`, `.claude/hooks/_hook_common.py` | `core/.claude/hooks/` | Re-copy, then scrub: `ZORIVEST_` → `{{PROJECT_NAME_UPPER}}_`, the ref guard switch as `"{{PROJECT_NAME_UPPER}}_REF_GUARD".lower()`, the docstring rule-table pointer → the test module. LF on disk (`.gitattributes`). `settings.hooks.json` wires `commit_gate.py` in `PreToolUse` and carries the six `ask` rules |
+| the commit-gate cases of `tests/tooling/test_claude_hooks.py` | `core/tools/tests/test_commit_gate.py` | **Hand-merge.** Port each new case (stage 0: `TestCommitGateStage0`, the prompt-hotfix vectors); env names through `UPPER`, the ref guard through the literal `_UPPER` token; the pipe-guard tests stay out (the package ships no pipe guard) |
 | `.agent/skills/git-workflow/scripts/agent-commit.ps1` | same under `core/` | **Hand-merge.** Exact-scope mode delegates to `tools/commit_batch.py` under the gate lease (Windows byte lock at `2**20`) |
 | _(package)_ | `core/.agent/skills/git-workflow/scripts/agent-commit.sh` | Package-authored POSIX twin: the `flock` lease, the same reentrancy rule |
 | `docs/execution/plans/<plan>/artifacts/schemas/*.schema.json` | `core/.agent/run-parameters/schemas/` | Re-copy |
