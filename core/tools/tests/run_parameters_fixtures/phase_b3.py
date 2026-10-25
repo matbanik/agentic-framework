@@ -35,6 +35,9 @@ CRASH = "RUN_PARAMETERS_TEST_CRASH_AT"
 GRANT = "{{PROJECT_NAME_UPPER}}_COMMIT_GRANT"
 CRASH_EXIT = 97
 SCRIPT = ".agent/skills/git-workflow/scripts/agent-commit.ps1"
+# The bound on one driver or agent-commit.ps1 child. One batch run can pass 110 s
+# under a parallel gate's load (MEU-785 EA-70), as the lane rigs' CLI_TIMEOUT_S allows.
+DRIVER_TIMEOUT_S = 240
 CANDIDATE_MANIFEST = "candidate-worktree.json"
 JOURNAL_PHASES = (
     "prepared",
@@ -426,7 +429,7 @@ class Rig:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=110,
+            timeout=DRIVER_TIMEOUT_S,
             check=False,
         )
         return proc.returncode, last_json(proc.stdout), proc.stdout + proc.stderr
@@ -499,7 +502,7 @@ class Rig:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=110,
+            timeout=DRIVER_TIMEOUT_S,
             check=False,
         )
         return proc.returncode, last_json(proc.stdout), proc.stdout + proc.stderr

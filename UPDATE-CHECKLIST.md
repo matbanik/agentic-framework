@@ -183,7 +183,7 @@ still copies them.
 | `tools/validate_closeout_artifacts.py` | `core/tools/validate_closeout_artifacts.py` | **Hand-merge.** Keep the package's stage mode and its handoff and reflection formats |
 | `tools/validate_agent_files.py` | `core/tools/validate_agent_files.py` | **Hand-merge.** Keep `--policy run-parameters` reading its pairs from `.agent/run-parameters/governance/` |
 | `tools/completion_preflight.py` | `core/tools/completion_preflight.py` | Re-copy |
-| `.claude/hooks/commit_gate.py`, `.claude/hooks/_hook_common.py` | `core/.claude/hooks/` | Re-copy, then scrub: `ZORIVEST_` → `{{PROJECT_NAME_UPPER}}_`, the ref guard switch as `"{{PROJECT_NAME_UPPER}}_REF_GUARD".lower()`, the docstring rule-table pointer → the test module. LF on disk (`.gitattributes`). `settings.hooks.json` wires `commit_gate.py` in `PreToolUse` and carries the six `ask` rules |
+| `.claude/hooks/commit_gate.py`, `.claude/hooks/_hook_common.py` | `core/.claude/hooks/` | Re-copy, then scrub: the source's uppercase project prefix → `{{PROJECT_NAME_UPPER}}_`, the ref guard switch as `"{{PROJECT_NAME_UPPER}}_REF_GUARD".lower()`, the docstring rule-table pointer → the test module. LF on disk (`.gitattributes`). `settings.hooks.json` wires `commit_gate.py` in `PreToolUse` and carries the six `ask` rules |
 | the commit-gate cases of `tests/tooling/test_claude_hooks.py` | `core/tools/tests/test_commit_gate.py` | **Hand-merge.** Port each new case (stage 0: `TestCommitGateStage0`, the prompt-hotfix vectors); env names through `UPPER`, the ref guard through the literal `_UPPER` token; the pipe-guard tests stay out (the package ships no pipe guard) |
 | `.agent/skills/git-workflow/scripts/agent-commit.ps1` | same under `core/` | **Hand-merge.** Exact-scope mode delegates to `tools/commit_batch.py` under the gate lease (Windows byte lock at `2**20`) |
 | _(package)_ | `core/.agent/skills/git-workflow/scripts/agent-commit.sh` | Package-authored POSIX twin: the `flock` lease, the same reentrancy rule |
@@ -226,6 +226,34 @@ Changed files of this stage (rows above in their groups):
   (`## Integration requests`), `create-plan.md` (the `lanes.py list` read, the Lane Ownership
   plan bullet) and `execution-session.md` (§Lanes): the package names the `junction_files` key
   where the source names `JUNCTION_FILES` in `tools/lanes.py`, and the package example paths.
+
+### Parallel lanes (stage 2: lane branches, the governed land and the gate adapter)
+
+The stage-2 port (MEU-785, AC-785.33) applies the source's stage-2 delta onto the package
+copies, so the stage-1 scrubs above stay. `ADOPTION-GUIDE.md` §Parallel lanes states what the
+adopter supplies and the Windows-only land.
+
+| Source | Destination | Notes |
+|---|---|---|
+| `tools/lanes.py` | `core/tools/lanes.py` | **Hand-merge** the stage-2 delta (commit helper, land prepare/publish/recover, `release --reset`, `gate run`, `deps`, the request integrator). Keep the stage-1 scrubs; `GATE_LEASE_NAME` through `executor_worktree.LEASE_NAME`; `GATE_SCRIPT = "tools/validate_codebase.py"` stays (adopter-supplied, §Accepted divergences) |
+| `tools/executor_worktree.py` | `core/tools/executor_worktree.py` | **Hand-merge** the stage-2 delta (`lane/<slug>` branch, `--base`, remove deletes a landed branch); keep `WORKTREE_PARENT = Path("{{PROJECT_ROOT}}-wt")` and the config refusal |
+| `tools/run_parameters.py` | `core/tools/run_parameters.py` | **Hand-merge** the stage-2 delta only (lane carrier, transcript lanes, the final-MEU handoff set); the package's own divergences stay |
+| `tools/commit_batch.py`, `tests/tooling/test_commit_batch.py` | `core/tools/`, `core/tools/tests/` | Re-copy, then the token scrubs (`{{PROJECT_NAME_UPPER}}_`, `{{PROJECT_NAME}}-gate.lock`); the land's tree adapter needs the full source sync |
+| `tools/issue_triage.py`, `tools/issue_triage/model.py` | `core/tools/issue_triage.py`, `core/tools/issue_triage/model.py` | Port `resolve` (the parser, `_cmd_resolve`, the model's `resolution`/`resolved` fields): the integrator's `ki-close` request runs it |
+| `tests/fixtures/run_parameters/phase_b3.py` | `core/tools/tests/run_parameters_fixtures/phase_b3.py` | Port `DRIVER_TIMEOUT_S = 240` only |
+| `tests/tooling/test_lanes_{commit,land,integrate,journal,recovery,recovery_abandon,census,gates,acceptance,docs}.py`, `test_executor_worktree_lane.py`, `test_run_parameters_{carrier,transcript_lanes,final_meu_handoffs}.py`, `test_commit_gate_lanes.py`, `test_stop_gate_lanes.py` | `core/tools/tests/` | **Hand-merge** (scrub script): imports through `tools.tests` and `tools.tests.run_parameters_fixtures`; `SESSION_ENV`, `GATE_LOCK`, hook-log and receipts names through the tokens; every rig seeds `lane_worktree_config.SEED`; `test_commit_gate_lanes.py` pins the package base `0dcdea0` and a `{{PROJECT_ROOT}}-wt` path; `test_lanes_docs.py` takes the adopter doc path first and the `core/` path second. Not ported: the `validate_codebase.py` registration section of `test_lanes_gates.py` and the `AGENTS.md` checks of `test_lanes_docs.py` (adopter-owned), and `test_tooling_conftest_timeout.py` |
+| _(package)_ | `core/tools/tests/lane_worktree_config.py` | The fixture `worktree.json` (nine junction files) that every lane rig seeds |
+| the source's junction-file canon | `core/tools/tests/lanes_fixtures/` | Fixture copies for `test_lanes_integrate.py`: `meu-status.yaml`, `meu-registry.md`, `known-issues.{yaml,md}`, `BUILD_PLAN.md`, `metrics.md`, `secrets.baseline`, `temp_citation_baseline.json`; `recovery-table.md` is the design's recovery table (design §5.6) for `test_lanes_recovery.py`. Regenerate from the source, never hand-edit |
+| `.agent/context/handoffs/TEMPLATE.md` §Integration requests | `core/templates/HANDOFF-TEMPLATE.md` | One code-span row per request form; no free-text examples |
+| `.agent/docs/commands.md` | `core/.agent/docs/commands.md` | The executor-worktree and lane lines (paths `{{PROJECT_ROOT}}-wt/<slug>`, `{{PROJECT_NAME_UPPER}}_SESSION`), the `issue_triage.py resolve` line and the D6 `gate run` note; no `uv run python tools/validate_codebase.py` line (`case_d6`) |
+| `.agent/skills/git-workflow/SKILL.md` §Lane Commits (D-1) | same under `core/` | Re-copy the section; the session env through the token |
+| `.agent/workflows/execution-session.md` §4 lane land paragraph | same under `core/` | Re-copy into `#### Lanes` |
+| `docs/execution/plans/TASK-TEMPLATE.md` H2-3c lane sentence | `core/templates/TASK-TEMPLATE.md` | Re-copy the sentence |
+| _(package)_ | `scripts/tests/test_adoption_contract.py` `--case lane-gate` | A disposable `acme` adoption: lane A's `gate run` blocks lane B's `deps begin --wait-s 0` (`deps_drain_timeout:1`); after A ends B is `exclusive` and A refuses `deps_pending`; killing only the adapter never yields `exclusive` while its child lives |
+| _(package)_ | `ADOPTION-GUIDE.md` §Parallel lanes, stage 2 | What the adopter supplies (`tools/validate_codebase.py`, `junction_files`) and the Windows-only land |
+
+`core/.agent/run-parameters/governance/01-agents.diff` carries the D-1 commit sentence of
+`AGENTS.md`; regenerate it from the approved source text (M-3), never by hand.
 
 ### Subagent agent definitions (required for subagent flows)
 
@@ -463,7 +491,7 @@ rtk proxy uv run python tools/_fw_hashdiff.py --ledger *> {{RECEIPTS_DIR}}/fw-le
 |---|---|---|
 | `.agent/credits/config.json` | authored | Four keys; the source has three. The package adds `credits_start_policy` (`human-only` \| `agent-on-user-chat`, default `human-only`), and `credits_msg.py`, `Register-CreditsRun.ps1` and `Start-CreditsRunTask.ps1` check it. Both switches ship off (`ruling_enabled: false`, `gate_wait_max_min: 0`). |
 | `tools/executor_worktree.py` | scrub | No project defaults: a missing or invalid worktree config refuses `create` and `check` with `worktree_bad:config`. |
-| `tools/lanes.py` | scrub | The junction list is project data: `junction_files` in `.agent/credits/worktree.json`, read through `executor_worktree.load_worktree_config`, not the source's `JUNCTION_FILES` tuple. The session env is `{{PROJECT_NAME_UPPER}}_SESSION`. |
+| `tools/lanes.py` | scrub | The junction list is project data: `junction_files` in `.agent/credits/worktree.json`, read through `executor_worktree.load_worktree_config`, not the source's `JUNCTION_FILES` tuple. The session env is `{{PROJECT_NAME_UPPER}}_SESSION`. The land gate stays `GATE_SCRIPT = "tools/validate_codebase.py"`: the package does not ship that script, the adopter supplies it (`ADOPTION-GUIDE.md` §Parallel lanes). |
 | `tools/os_lease.py` | scrub | The docstring names the `executor_worktree.py` gate lease instead of the source's `validate_codebase.py`, which does not ship. |
 | `tools/Invoke-ClaudeDispatch.ps1` | scrub | The author-vendor variable is read with `[Environment]::GetEnvironmentVariable('{{PROJECT_NAME_UPPER}}_AUTHOR_VENDOR')`, not `$env:`, so the template parses before token substitution. |
 | `.agent/docs/harness-profiles.md` | scrub | The source's `context_window` flag and column are not ported: its 1M-per-row protocol rests on the source's own measured window economics and a user-level toggle skill that does not ship. The `advisor` flag is ported. The Cursor host row keeps `injects_auto_approval: yes` (conservative). The `mid_run_messages` flag, the `monitor` notify value and the credits scheduler row are ported. |

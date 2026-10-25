@@ -103,10 +103,11 @@ A lane never edits a junction file (the `junction_files` list in `.agent/credits
 
 | Id | Request |
 |----|---------|
-| `<lane>/<generation>/1` | MEU-12 status → done |
-| `<lane>/<generation>/2` | grouping cursor → next session |
-
-Other examples: "file known issue X with these fields", "close known issue Y", "metrics row: …".
+| `<lane>/<generation>/<n>` | `meu-status <MEU-ID> -> closed reason=landed` |
+| `<lane>/<generation>/<n>` | `grouping-cursor <grouping-file> -> <session-id>` |
+| `<lane>/<generation>/<n>` | `ki-file <KI-ID> docs/execution/plans/<lane plan>/artifacts/ki/<KI-ID>.yaml` |
+| `<lane>/<generation>/<n>` | `ki-close <KI-ID> -> fixed in the lane` |
+| `<lane>/<generation>/<n>` | `metrics-row \| 2026-10-24 \| <MEU-ID> \| 1 \| 1 min \| 1 \| 0 \| 7/7 \| 100% \| 1 \| lane request example \|` |
 
 ---
 

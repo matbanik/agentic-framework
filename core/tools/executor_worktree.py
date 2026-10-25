@@ -7,7 +7,7 @@ Two execution sessions on one working tree void each other's gates. This tool
 gives a session its own tree beside the repository and moves its work back
 without a commit::
 
-    uv run python tools/executor_worktree.py create <slug> [--branch NAME] [--base REV] [--carry PATH]...
+    uv run python tools/executor_worktree.py create <slug> [--branch lane/<slug>] [--base REV] [--carry PATH]...
         [--run-id ID --op OP --plan PLAN]
     uv run python tools/executor_worktree.py check <path>
     uv run python tools/executor_worktree.py land <path>
@@ -35,6 +35,17 @@ differs from that baseline onto the main tree, uncommitted, under the main
 tree's gate lease, after checking that no sibling session changed the same
 file. ``sync`` refreshes one file from the main tree after such a refusal.
 ``remove`` deletes the worktree once everything in it has landed.
+
+A worktree works on its own branch ``lane/<slug>``, never on a detached HEAD
+(MEU-785, AC-785.1): ``create`` makes that branch at the base and checks it
+out; ``--branch`` takes only that name (``worktree_bad:branch``) and an existing
+``lane/<slug>`` is refused (``worktree_bad:branch_exists``). ``check`` refuses a
+linked worktree whose HEAD is ``main`` (``main_reserved:<path>``, AC-785.2).
+``remove`` deletes the lane branch when its tip is an ancestor of ``main`` and
+otherwise refuses ``worktree_bad:unlanded`` unless ``--discard``, which deletes
+it too (AC-785.9). A stage-1 manifest whose ``branch`` is null, absent or not
+``lane/<slug>`` keeps the stage-1 behaviour: ``remove`` deletes no branch
+(AC-785.10).
 
 ``remove`` refuses a worktree outside ``WORKTREE_PARENT`` that is not a
 grandfathered lane (``worktree_bad:containment``; a lane matches by the path it
@@ -110,6 +121,8 @@ _REPO_ROOT = Path(os.path.abspath(__file__)).parent.parent
 
 WORKTREE_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,40}")
 WORKTREE_REF_PREFIX = "refs/executor-worktrees/"
+LANE_BRANCH_PREFIX = "lane/"
+MAIN_REF = "refs/heads/main"
 TEMP_INDEX = "executor-index.tmp"
 CANDIDATE_MANIFEST = "candidate-worktree.json"
 CANDIDATE_SCHEMA = "candidate-worktree/1"
@@ -188,7 +201,11 @@ class _ShapeError(Exception):
 
 @dataclass(frozen=True)
 class _Worktree:
-    """A listed executor worktree whose manifest and baseline ref were read."""
+    """A listed executor worktree whose manifest and baseline ref were read.
+
+    ``branch`` is the manifest's ``lane/<slug>``; None for a stage-1 manifest
+    (``branch`` null, absent or another name), whose branch ``remove`` never touches.
+    """
 
     path: Path
     main: Path
@@ -197,6 +214,7 @@ class _Worktree:
     links: tuple[str, ...]
     git_dir: Path
     baseline: str
+    branch: str | None = None
 
 
 @dataclass
@@ -660,9 +678,12 @@ def _pinned_python(main_root: Path) -> str:
     raise refusal
 
 
-def _build_venv(worktree: Path) -> int:
+def _build_venv(worktree: Path, config: dict[str, object] | None = None) -> int:
     """Build the worktree's own ``.venv`` with ``venv_build``; return the exit code.
 
+    The command is the ``venv_build`` of ``config`` when the caller passes the
+    config it validated (a land candidate passes T's, R2-F2), else of the main
+    tree's worktree config.
     Editable installs hold absolute paths, so a venv cannot be shared between
     trees. The caller's ``VIRTUAL_ENV`` is dropped so uv targets the worktree.
     A ``uv`` command gets ``--python`` with the main tree's interpreter version,
@@ -676,7 +697,7 @@ def _build_venv(worktree: Path) -> int:
         OSError: the command is not installed or ``worktree`` is not a directory.
     """
     main = _main_root_of(worktree)
-    command = _strings(_config(main), "venv_build")
+    command = _strings(_config(main) if config is None else config, "venv_build")
     if not command:
         return 0
     if command[0] == "uv":
@@ -761,6 +782,30 @@ def _drop_links(links: Iterable[Path]) -> None:
     for link in links:
         if _is_link(link):
             _drop_dir_link(link)
+
+
+def _drop_tree_links(top: Path) -> None:
+    """Drop every directory link under ``top`` as a link (R1-F6).
+
+    A land candidate links the lane's dependency trees; ``tools/lanes.py`` calls
+    this before it removes one. Links are never descended, so a removal after
+    this deletes only the tree's own files.
+
+    Raises:
+        OSError: a link cannot be dropped.
+    """
+    stack = [str(top)]
+    while stack:
+        try:
+            entries = list(os.scandir(stack.pop()))
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
+            continue
+        for entry in entries:
+            if entry.is_junction() or entry.is_symlink():
+                if entry.is_dir(follow_symlinks=True):
+                    _drop_dir_link(Path(entry.path))
+            elif entry.is_dir(follow_symlinks=False):
+                stack.append(entry.path)
 
 
 def _same_path(left: str | Path, right: str | Path) -> bool:
@@ -1003,6 +1048,7 @@ def _open_worktree(root: Path, path: Path) -> _Worktree:
         raise _Refusal(["worktree_bad:baseline"])
     links = manifest["links"]
     assert isinstance(links, list)  # _read_manifest validated the shape
+    lane = _lane_branch(slug)
     return _Worktree(
         path=path,
         main=main,
@@ -1011,7 +1057,61 @@ def _open_worktree(root: Path, path: Path) -> _Worktree:
         links=tuple(str(name) for name in links),
         git_dir=git_dir,
         baseline=baseline,
+        branch=lane if manifest.get("branch") == lane else None,
     )
+
+
+# ------------------------------------------------------------ lane branch
+
+
+def _lane_branch(slug: str) -> str:
+    """The branch ``create <slug>`` makes and checks out: ``lane/<slug>`` (AC-785.1)."""
+    return f"{LANE_BRANCH_PREFIX}{slug}"
+
+
+def _ref_commit(repo: Path, ref: str) -> str | None:
+    """The commit ``ref`` names in ``repo``; None when the ref does not exist.
+
+    Raises:
+        _GitFailure: git failed for a reason other than a missing ref.
+        OSError: git is not installed or ``repo`` is not a directory.
+    """
+    args = ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"]
+    proc = _run_git(args, cwd=repo)
+    if proc.returncode == 1:
+        return None
+    commit = proc.stdout.decode("utf-8", "replace").strip()
+    if proc.returncode != 0 or not commit:
+        raise _GitFailure("rev-parse", proc.stderr or b"")
+    return commit
+
+
+def _head_ref(path: Path) -> str | None:
+    """The symbolic ref of ``path``'s HEAD; None when HEAD is detached.
+
+    Raises:
+        _GitFailure: git failed for a reason other than a detached HEAD.
+        OSError: git is not installed or ``path`` is not a directory.
+    """
+    proc = _run_git(["symbolic-ref", "--quiet", "HEAD"], cwd=path)
+    if proc.returncode == 1:
+        return None
+    if proc.returncode != 0:
+        raise _GitFailure("symbolic-ref", proc.stderr or b"")
+    return proc.stdout.decode("utf-8", "replace").strip()
+
+
+def _is_landed(main: Path, tip: str) -> bool:
+    """True when ``tip`` is an ancestor of ``main`` (``refs/heads/main``) (AC-785.9).
+
+    Raises:
+        _GitFailure: git cannot compare them (for example, no ``main`` branch).
+        OSError: git is not installed or ``main`` is not a directory.
+    """
+    proc = _run_git(["merge-base", "--is-ancestor", tip, MAIN_REF], cwd=main)
+    if proc.returncode not in (0, 1):
+        raise _GitFailure("merge-base", proc.stderr or b"")
+    return proc.returncode == 0
 
 
 # ----------------------------------------------------------------- capture
@@ -1366,10 +1466,19 @@ def _identity(ns: argparse.Namespace) -> dict[str, str]:
 def _cmd_create(
     root: Path, ns: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> int:
-    """``create <slug>``: build the worktree, its environment and its baseline."""
+    """``create <slug>``: build the worktree on ``lane/<slug>``, its environment and
+    its baseline.
+
+    ``--branch`` other than ``lane/<slug>`` is ``worktree_bad:branch`` and an existing
+    ``lane/<slug>`` is ``worktree_bad:branch_exists``, both before anything is made
+    (AC-785.1).
+    """
     slug: str = ns.slug
     if not WORKTREE_SLUG_RE.fullmatch(slug):
         raise _Refusal(["worktree_bad:slug"])
+    branch = _lane_branch(slug)
+    if ns.branch is not None and ns.branch != branch:
+        raise _Refusal(["worktree_bad:branch"])
     identity = _identity(ns)
     carries = [_rel_arg(parser, "--carry", value) for value in ns.carry]
     path = worktree_path(root, slug)
@@ -1378,12 +1487,12 @@ def _cmd_create(
     if not contained(path):
         raise _Refusal(["worktree_bad:containment"])
     base = _resolve_base(root, ns.base)
+    if _ref_commit(root, f"refs/heads/{branch}") is not None:
+        raise _Refusal(["worktree_bad:branch_exists"])
     config = _config(root)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    branch: str | None = ns.branch
-    place = ["-b", branch] if branch is not None else ["--detach"]
-    _git([*_LF_CHECKOUT, "worktree", "add", *place, str(path), base], cwd=root)
+    _git([*_LF_CHECKOUT, "worktree", "add", "-b", branch, str(path), base], cwd=root)
     build = _Build(
         root=root,
         path=path,
@@ -1409,7 +1518,8 @@ def _cmd_create(
         _drop_links(build.links)
         sys.stderr.write(
             f"half-built worktree left at {path.as_posix()}; remove it with "
-            f"`git worktree remove --force` and `git worktree prune`\n"
+            f"`git worktree remove --force` and `git worktree prune`, then delete "
+            f"the branch {branch} if git made it\n"
         )
         raise
     _say(f"worktree_ready:{path.as_posix()}")
@@ -1422,9 +1532,15 @@ def _cmd_create(
 def _cmd_check(
     root: Path, ns: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> int:
-    """``check <path>``: validate the environment, never cleanliness."""
+    """``check <path>``: validate the environment, never cleanliness.
+
+    A linked worktree whose HEAD is ``main`` is refused ``main_reserved:<path>``
+    (AC-785.2); a stage-1 detached HEAD passes (AC-785.10).
+    """
     path = Path(os.path.abspath(ns.path))
     wt = _open_worktree(root, path)
+    if _head_ref(path) == MAIN_REF:
+        raise _Refusal([f"main_reserved:{path.as_posix()}"])
     overlay = path / OVERLAY_FILE
     if overlay.is_file() and b"\r" in overlay.read_bytes():
         raise _Refusal(["worktree_bad:overlay_crlf"])
@@ -1757,6 +1873,9 @@ def _cmd_remove(
     through ``tools/commit_batch.py``, so it has nothing to land. An executor worktree
     must be contained (AC-G.2), must not hold this process's folder and must not be held
     by another process (AC-G.3); a run's worktree gets the two H2-3c records (AC-G.4).
+    Its lane branch is deleted when the tip is an ancestor of ``main``; an unlanded tip
+    is ``worktree_bad:unlanded`` unless ``--discard``, which deletes it (AC-785.9). A
+    stage-1 manifest without a lane branch deletes no branch (AC-785.10).
     """
     path = Path(os.path.abspath(ns.path))
     if _listed(root, path) and _read_candidate(path) is not None:
@@ -1784,6 +1903,10 @@ def _cmd_remove(
             ) from None
         if now != wt.baseline:
             raise _Refusal(["worktree_bad:unlanded"])
+    lane_ref = None if wt.branch is None else f"refs/heads/{wt.branch}"
+    tip = None if lane_ref is None else _ref_commit(wt.main, lane_ref)
+    if tip is not None and not ns.discard and not _is_landed(wt.main, tip):
+        raise _Refusal(["worktree_bad:unlanded"])
     run = _removal_run(wt)
     if run is not None:
         _record_removal(wt, run, "worktree_removal_started")
@@ -1791,6 +1914,8 @@ def _cmd_remove(
     _git(["worktree", "remove", "--force", str(path)], cwd=wt.main)
     _git(["worktree", "prune"], cwd=wt.main)
     _git(["update-ref", "-d", wt.ref], cwd=wt.main)
+    if lane_ref is not None and tip is not None:
+        _git(["update-ref", "-d", lane_ref, tip], cwd=wt.main)
     if run is not None:
         _record_removal(wt, run, "worktree_removed")
     _say(f"worktree_removed:{path.as_posix()}")
@@ -1823,7 +1948,9 @@ def _parser() -> argparse.ArgumentParser:
 
     create = commands.add_parser("create", help="build <parent>/<slug>")
     create.add_argument("slug", help="lowercase letters, digits and dashes")
-    create.add_argument("--branch", help="create this branch instead of detaching")
+    create.add_argument(
+        "--branch", help="the lane branch; only lane/<slug>, which create always makes"
+    )
     create.add_argument(
         "--base",
         help=f"the commit to check out (default: ${ENV_BASE_COMMIT}, else HEAD)",
@@ -1853,7 +1980,9 @@ def _parser() -> argparse.ArgumentParser:
     remove.add_argument("path")
     mode = remove.add_mutually_exclusive_group()
     mode.add_argument(
-        "--discard", action="store_true", help="abandon work that has not landed"
+        "--discard",
+        action="store_true",
+        help="abandon work that has not landed, lane branch included",
     )
     mode.add_argument(
         "--ad-hoc",

@@ -1,0 +1,79 @@
+# yaml-language-server: $schema=../../tools/meu_status/meu-status.schema.json
+# Fixture MEU status of the lane integrate tests (tools/tests/test_lanes_integrate.py).
+version: 1
+phases:
+- id: LF
+  name: Lane fixture
+  band: P0
+  sources: []
+  execution_plans: []
+  last_updated: null
+  note: The fixture phase of the lane integrate tests.
+meus:
+- row_key: MEU-784
+  id: MEU-784
+  slug: lane-fixture-base
+  phase: LF
+  band: P0
+  matrix_item: fixture-784
+  build_ref: null
+  description: The base MEU of the lane fixture.
+  status: pending
+  status_labels:
+    registry: ⬜ pending
+    build_plan: ⬜
+  surface_overrides: null
+  dependencies_raw: No dependencies
+  dependency_parse_status: parsed
+  depends_on: []
+  execution_plan: null
+  updated: '2026-10-20'
+  closed_reason: null
+  note: null
+- row_key: MEU-785
+  id: MEU-785
+  slug: lane-fixture-target
+  phase: LF
+  band: P0
+  matrix_item: fixture-785
+  build_ref: null
+  description: The MEU whose status a meu-status request changes.
+  status: pending
+  status_labels:
+    registry: ⬜ pending
+    build_plan: ⬜
+  surface_overrides: null
+  dependencies_raw: Depends on MEU-784
+  dependency_parse_status: parsed
+  depends_on: 
+  - MEU-784
+  execution_plan: null
+  updated: '2026-10-20'
+  closed_reason: null
+  note: null
+- row_key: MEU-786
+  id: MEU-786
+  slug: lane-fixture-next
+  phase: LF
+  band: P0
+  matrix_item: fixture-786
+  build_ref: null
+  description: The MEU after the target.
+  status: pending
+  status_labels:
+    registry: ⬜ pending
+    build_plan: ⬜
+  surface_overrides: null
+  dependencies_raw: Depends on MEU-785
+  dependency_parse_status: parsed
+  depends_on: 
+  - MEU-785
+  execution_plan: null
+  updated: '2026-10-20'
+  closed_reason: null
+  note: null
+summary_bands:
+- key: P0
+  label: P0 — Lane fixture
+  range: MEU-784 → MEU-786
+narrative_sections: []

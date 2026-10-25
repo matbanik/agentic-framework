@@ -269,9 +269,11 @@ def test_mx_38_create_base_checks_out_b_after_head_moved(
     assert _ref(src, "at-base") == _git(src, "rev-parse", f"{base}^{{tree}}").strip()
     assert _git(wt, "status", "--porcelain").strip() == ""
 
-    branched = rig.create(MARK, "at-branch", "--branch", "credits-s5", "--base", base)
+    branched = rig.create(
+        MARK, "at-branch", "--branch", "lane/at-branch", "--base", base
+    )
     assert _head(branched) == base
-    assert _git(src, "rev-parse", "credits-s5").strip() == base
+    assert _git(src, "rev-parse", "lane/at-branch").strip() == base
 
 
 def test_mx_38_create_reads_the_base_from_the_environment(

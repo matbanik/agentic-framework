@@ -249,9 +249,21 @@ def validate(data: dict[str, Any]) -> list[str]:
                 errors.append(f"{prefix}.meu_links: must be a list")
 
         # Optional string field validation
-        for str_field in ("resolution_path", "notes"):
+        for str_field in ("resolution_path", "notes", "resolution"):
             if str_field in issue and not isinstance(issue[str_field], str):
                 errors.append(f"{prefix}.{str_field}: must be a string")
+
+        if "resolved" in issue:
+            resolved = issue["resolved"]
+            if isinstance(resolved, str) and resolved != "":
+                if not _ISO_DATE_RE.match(resolved):
+                    errors.append(
+                        f"{prefix}.resolved: '{resolved}' is not a valid ISO date (YYYY-MM-DD)"
+                    )
+            elif not isinstance(resolved, str):
+                errors.append(
+                    f"{prefix}.resolved: must be a string (YYYY-MM-DD or empty)"
+                )
 
         # Optional list-of-strings field validation
         for list_field in ("blocks", "blocked_by", "related"):

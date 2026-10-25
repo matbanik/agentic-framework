@@ -19,6 +19,12 @@ description: Agent-safe git operations with SSH commit signing. Handles commit, 
 > If a pre-commit hook fails, **stop and fix the underlying issue** — do NOT bypass the hook.
 > The only exception is if the user explicitly says "bypass the hooks" or "use --no-verify".
 
+## Lane Commits (D-1)
+
+> A lane commits only on its own branch `lane/<slug>`, in its own worktree, through the lane commit helper: `rtk proxy uv run python tools/lanes.py commit --worktree <path> --message-file <file>`. The helper needs no prompt. It reads the session from `{{PROJECT_NAME_UPPER}}_SESSION`, checks the caller's lane card and HEAD, runs `git commit -F <file>` with the hooks, and prints `commit_ok:<sha>`. A direct `git commit` in a lane stays denied.
+>
+> D-1 does not cover a commit on any other branch (`main` included), a branch delete, a reset, a rebase other than the land's rebase onto pinned `main`, or a push. These stay under the Commit Policy above. The lane reaches `main` only through the governed land: `tools/lanes.py land prepare`, the reviewer verdict (`land prepare --op <id> --verdict <file>`), then `tools/lanes.py land publish` under a verified grant or the human's typed direction. After the land closes, `tools/lanes.py release --worktree <path> --reset` moves the lane branch to the landed commit; that reset is part of the helper, not a manual `git reset` (`.agent/docs/commands.md`). The governed land is Windows-only in stage 2: on any other platform `tools/lanes.py land` refuses `land_unsupported_platform` and writes nothing.
+
 ## The One Rule
 
 > **Run the script. Don't improvise git commands.**

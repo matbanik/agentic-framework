@@ -27,6 +27,11 @@ bash tools/preflight.sh --phase build  # skip the codex/pwsh checks when no revi
 python -m pytest test_hello.py -q
 # Missing executable and failing children must exit nonzero; the receipt keeps
 # every diagnostic id (do not compact away the second failure).
+# In a lane worktree, run the same D6 argv as a registered, contained child of
+# the lane card: python tools/lanes.py gate run --worktree <path> -- <D6 argv...>
+# The governed land (tools/lanes.py land prepare, step 5) gates the candidate
+# tree with the adopter-supplied tools/validate_codebase.py; an adoption that
+# runs lanes ships that script (ADOPTION-GUIDE.md "Parallel lanes").
 
 # MEU Status SSOT
 uv run python tools/meu_status.py list --status pending --unblocked  # Next unblocked work
@@ -53,6 +58,27 @@ uv run python tools/issue_triage.py discover --root <DIR>            # Scan spec
 uv run python tools/issue_triage.py promote <ID>                     # Promote candidate → open
 uv run python tools/issue_triage.py dismiss <ID>                     # Dismiss candidate → dismissed
 uv run python tools/issue_triage.py render --include-candidates      # Render with candidate section
+uv run python tools/issue_triage.py resolve <ID> --resolution <TEXT> [--meu <MEU-ID>]  # Close an issue: status resolved, the resolution text and today's resolved date (--meu appends a meu_links entry); the lane integrator's ki-close request runs this verb
+
+# Executor worktrees and lanes (execution-session.md §4; git-workflow/SKILL.md §Lane Commits)
+uv run python tools/executor_worktree.py create <slug> [--branch lane/<slug>] [--base <rev>] [--carry <path>]...  # Executor worktree: a git worktree under `{{PROJECT_ROOT}}-wt/<slug>` on its own branch `lane/<slug>` (made at the base and checked out; `--branch` takes only that name, `worktree_bad:branch`; an existing `lane/<slug>` refuses `worktree_bad:branch_exists`) with its own venv and the carried uncommitted paths, the tree of record for one executing session; the standard carry set is the plan folder plus .agent/context/meu-status.yaml, .agent/context/meu-registry.md and .agent/context/current-focus.md; prints worktree_ready:<path> or worktree_bad:<reason> and leaves nothing behind on a refusal
+uv run python tools/executor_worktree.py check <worktree>                         # Before every gate run inside the worktree: worktree_ok, or worktree_bad:<reason> (unlisted, manifest, baseline, overlay_crlf, link:<name>, venv, env, case:<rel>)
+uv run python tools/executor_worktree.py land <worktree>                          # Run from the main tree (cwd on the main tree, never inside the worktree): writes the worktree's changes since its baseline onto the main tree under the gate lease; land_ok:<A>:<M>:<D>; land_fail:busy:<pid> is an ordering wait; land_fail:exists|missing|changed|case|shape:<rel> names the path to sync first
+uv run python tools/executor_worktree.py sync <worktree> <rel>...                 # Pulls the main tree's version of each named file into the worktree and its baseline, so the next land no longer collides on it; sync_ok:<rel> or sync_fail:ignored|case|shape:<rel>; nothing is written when any path is refused
+uv run python tools/executor_worktree.py remove <worktree> [--discard]            # Run from the main tree after land: removes the worktree, its baseline ref and its branch `lane/<slug>` when the tip is an ancestor of `main`; worktree_removed:<path>; refuses worktree_bad:unlanded unless --discard abandons the unlanded work and deletes the branch too; a stage-1 manifest without a `lane/<slug>` branch deletes no branch
+uv run python tools/lanes.py list                                                 # At session start: the lane cards, any stale card and any HALT
+uv run python tools/lanes.py claim --plan <plan dir> --worktree <path> --session <s>  # Claim the lane of a task with a `## Lane Ownership` section; refused: <reason> on a refusal
+uv run python tools/lanes.py beat --plan <plan dir> --session <s>                 # At every task-row boundary; exit 3 is HALT, card_superseded stops the session
+uv run python tools/lanes.py commit --worktree <path> --message-file <file> [--generation <g>]  # The lane commit helper (D-1, `git-workflow/SKILL.md` §Lane Commits): commits the staged change on the caller's own `lane/<slug>` with the hooks and no prompt; session from {{PROJECT_NAME_UPPER}}_SESSION; commit_ok:<sha>, or commit_fail:<reason> / refused: <reason>, exit 1
+uv run python tools/lanes.py land prepare --worktree <path> --l0 <sha> --message-file <file> [--op <id>]  # Land steps 1-5: freeze the lane at L0, rebase it onto pinned main in a disposable candidate, apply the handoff's Integration requests, keep and gate the tree T; prints land_review:* lines and land_ready:<op>:<tree>; land_conflict:<paths> and owns_violation:<path> set the card back to active
+uv run python tools/lanes.py land prepare --op <id> --verdict <file>  # Records the reviewer verdict on the ready land, bound to tree(T); land_verdict:<op>:<tree>:approved
+uv run python tools/lanes.py land publish --op <id> (--grant | --human-directed --session <s> --message-uuid <u>)  # Land step 6 onward: publishes T as one main commit C through tools/commit_batch.py, then moves the main tree to C; land_published:<op>:<C> and land_closed:<op>; with neither authority it refuses needs_human_publish; never pushes; Windows-only in stage 2 (land_unsupported_platform elsewhere)
+uv run python tools/lanes.py land recover --op <id>  # Re-runs a land op from its journal under the per-op recovery lease; exit 3 op_busy when another process holds the lease (an ordering wait, nothing written)
+uv run python tools/lanes.py release --plan <plan dir> --session <s>              # At closeout of a lane without its own branch: releases the card
+uv run python tools/lanes.py release --worktree <path> --reset [--session <s>]  # After land_closed: moves lane/<slug> from L0 to the landed C (read-tree -m -u, update-ref with the old value) and releases the card; without --reset a landing card with a live worktree refuses release_unreset
+uv run python tools/lanes.py gate run --worktree <path> -- <argv...>  # Runs a gate command as a registered, contained child of the lane card and exits with the child's code; refuses deps_pending while a deps claim is pending
+uv run python tools/lanes.py deps begin --worktree <path> [--wait-s <0-3600>]  # Before a dependency change: sets the pending deps claim, drains every registered gate (deps_wait:<lane>:<pid> lines), then deps_exclusive:<lane>; refuses deps_drain_timeout:<count> after the wait and clears its claim
+uv run python tools/lanes.py deps end --worktree <path>  # After the dependency change: clears the lane's deps claim; deps_cleared
 
 # CLI dispatch: resume and fork (.agent/skills/cli-dispatch/SKILL.md §Resume and Fork)
 pwsh -NoProfile -File tools/Invoke-CodexDispatch.ps1 -ModelClass <non-review class> -NonReviewDispatch -ResumeDispatchId <id> | -ForkDispatchId <id> -DispatchId <new> ...  # Continue (resume) or branch (fork) the Codex session recorded in <OutputDir>/<id>/status.json session_id; the switches are exclusive; review classes, -Kind and -LoopId dispatches refuse both (resume_refused_review_class); every refusal is named resume_* on stderr, exit 1, before any launch. POSIX: tools/Invoke-CodexDispatch.sh --ResumeDispatchId|--ForkDispatchId

@@ -16,6 +16,7 @@ Usage:
     uv run python tools/issue_triage.py discover [--root DIR] [--dry-run]
     uv run python tools/issue_triage.py promote <id>
     uv run python tools/issue_triage.py dismiss <id>
+    uv run python tools/issue_triage.py resolve <id> --resolution TEXT [--meu MEU-ID]
 
 Follows the meu_status.py CLI pattern (argparse + subcommands).
 """
@@ -312,6 +313,29 @@ def _cmd_promote(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_resolve(args: argparse.Namespace) -> int:
+    """Mark an issue resolved with a resolution note and ISO date."""
+    data = load(args.yaml)
+    target_id = args.id
+
+    for issue in data.get("issues", []):
+        if issue["id"] == target_id:
+            issue["status"] = "resolved"
+            issue["resolution"] = args.resolution
+            issue["resolved"] = date.today().isoformat()
+            if args.meu:
+                links = list(issue.get("meu_links") or [])
+                if args.meu not in links:
+                    links.append(args.meu)
+                issue["meu_links"] = links
+            save(data, args.yaml)
+            print(f"OK: Resolved '{target_id}'")
+            return 0
+
+    print(f"ERROR: Issue '{target_id}' not found", file=sys.stderr)
+    return 1
+
+
 def _cmd_dismiss(args: argparse.Namespace) -> int:
     """Dismiss a candidate issue."""
     data = load(args.yaml)
@@ -461,6 +485,20 @@ def main(argv: list[str] | None = None) -> int:
     dismiss_parser = sub.add_parser("dismiss", help="Dismiss a candidate issue")
     dismiss_parser.add_argument("id", help="Issue ID to dismiss")
 
+    resolve_parser = sub.add_parser(
+        "resolve", help="Mark an issue resolved (status + resolution + date)"
+    )
+    resolve_parser.add_argument("id", help="Issue ID to resolve")
+    resolve_parser.add_argument(
+        "--resolution",
+        required=True,
+        help="Resolution text recorded on the issue",
+    )
+    resolve_parser.add_argument(
+        "--meu",
+        help="Optional MEU id to append to meu_links if absent",
+    )
+
     args = parser.parse_args(argv)
 
     handlers = {
@@ -476,6 +514,7 @@ def main(argv: list[str] | None = None) -> int:
         "discover": _cmd_discover,
         "promote": _cmd_promote,
         "dismiss": _cmd_dismiss,
+        "resolve": _cmd_resolve,
     }
 
     handler = handlers.get(args.command)

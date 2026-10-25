@@ -61,7 +61,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
@@ -346,6 +346,8 @@ HEX64_RE = re.compile(r"[0-9a-f]{64}")
 ROOT_RE = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
 TOKEN_RE = re.compile(r"[0-9a-f]{32}")
 SAFE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+#: A git object id (SHA-1, 40 lowercase hex): a committed carrier's commit and blobs.
+OBJECT_ID_RE = re.compile(r"[0-9a-f]{40}")
 OFFER_LINE_RE = re.compile(r"  ([a-z_][a-z0-9_-]*): (.*)")
 FLOW_KEY_RE = re.compile(r"[a-z_][a-z0-9_-]*")
 TRAILING_COMMENT_RE = re.compile(r" +#.*")
@@ -474,6 +476,20 @@ def _read_config(top: Path, common: Path) -> dict[str, str]:
     return values
 
 
+@dataclass(frozen=True)
+class CommittedCarrier:
+    """A carrier commit and the blob ids of the carrier paths it binds (MEU-785 D:268).
+
+    ``commit`` is the lane's ``L1``; ``blobs`` maps a repository-relative POSIX path
+    (task.md, implementation-plan.md, the grouping file) to the blob id the land journal
+    recorded for it. ``_carrier_bytes`` reads a bound path by that blob id and any other
+    path at ``commit``; nothing is read from the working tree.
+    """
+
+    commit: str
+    blobs: Mapping[str, str]
+
+
 @dataclass
 class Repo:
     """One repository: its top level, its common dir, and the run-parameters keys of its config.
@@ -481,6 +497,10 @@ class Repo:
     ``main`` is the main working tree of the common dir (``top`` itself outside a linked
     worktree): a linked worktree reads its own carriers but the main tree's project folder
     and transcripts, since the human typed into the session of the main tree.
+    ``carrier`` is None for the working-tree carriers; ``bind_carrier`` sets it so that
+    every carrier read comes from a commit (the land's ``L1``) instead.
+    ``lane_display`` is None, or the display path of the reserving lane worktree whose
+    project folder the transcript lookup reads first (``with_lane``, MEU-785 R1-F4).
     """
 
     top: Path
@@ -489,6 +509,8 @@ class Repo:
     main: Path
     main_display: str
     config: dict[str, str] = field(default_factory=lambda: {})
+    carrier: CommittedCarrier | None = None
+    lane_display: str | None = None
 
     @property
     def store(self) -> Path:
@@ -630,6 +652,113 @@ def _read_text(path: Path) -> str | None:
     if data is None:
         return None
     return data.decode("utf-8-sig", errors="replace")
+
+
+# -- carrier reads (MEU-785 AC-785.20, D:268 "Authorization from the committed lane") -----
+# Every carrier read goes through these three functions: ``_load_carriers``, the
+# ``_grouping_sigma`` lookup and commit_batch's human-route discovery ``_direction_plans``.
+
+
+def bind_carrier(repo: Path | Repo, commit: str, blobs: Mapping[str, str]) -> Repo:
+    """A copy of ``repo`` whose carrier reads come from ``commit`` and the bound ``blobs``.
+
+    The repository identity, the authority store and the transcripts stay those of
+    ``repo``; only the carrier bytes change source.
+
+    Raises:
+        Refusal: ``carrier_mismatch`` when ``commit`` or a blob id is not 40 hex, or a
+            bound path is not a plain repository-relative POSIX path.
+    """
+    handle = _as_repo(repo)
+    if not OBJECT_ID_RE.fullmatch(commit):
+        raise Refusal("carrier_mismatch", f"carrier commit {commit!r} is not 40 hex")
+    for rel, oid in blobs.items():
+        parts = rel.split("/")
+        if not rel or rel.startswith("/") or any(p in ("", ".", "..") for p in parts):
+            raise Refusal("carrier_mismatch", f"carrier path {rel!r}")
+        if not OBJECT_ID_RE.fullmatch(oid):
+            raise Refusal("carrier_mismatch", f"carrier blob {oid!r} of {rel}")
+    return replace(handle, carrier=CommittedCarrier(commit=commit, blobs=dict(blobs)))
+
+
+def _carrier_rel(repo: Repo, path: Path) -> str | None:
+    """``path`` relative to the repository top as POSIX text, or None outside it."""
+    try:
+        return path.relative_to(repo.top).as_posix()
+    except ValueError:
+        return None
+
+
+def _carrier_bytes(repo: Repo, path: Path) -> bytes | None:
+    """The one carrier reader: a carrier file's bytes, or None when it does not exist.
+
+    Without a committed carrier this is the working file. With ``repo.carrier`` a bound
+    path is the recorded blob and any other path is the path at the carrier commit; a
+    path outside the repository, or one that is not a blob there, does not exist.
+
+    Raises:
+        Refusal: ``carrier_mismatch`` when git cannot read a recorded blob or the commit.
+    """
+    binding = repo.carrier
+    if binding is None:
+        return _read_bytes(path)
+    rel = _carrier_rel(repo, path)
+    if rel is None:
+        return None
+    oid = binding.blobs.get(rel)
+    try:
+        if oid is None:
+            listing = _git_bytes(
+                repo.top, "ls-tree", "-z", binding.commit, "--", rel
+            ).split(b"\0")[0]
+            meta, _tab, _name = listing.partition(b"\t")
+            fields = meta.split(b" ")
+            if len(fields) != 3 or fields[1] != b"blob":
+                return None
+            oid = fields[2].decode("ascii")
+        return _git_bytes(repo.top, "cat-file", "blob", oid)
+    except (GitError, OSError, UnicodeDecodeError) as exc:
+        raise Refusal("carrier_mismatch", f"{rel} at {binding.commit}: {exc}") from exc
+
+
+def _carrier_text(repo: Repo, path: Path) -> str | None:
+    """A carrier as UTF-8 text (a BOM is dropped), or None when it does not exist."""
+    data = _carrier_bytes(repo, path)
+    if data is None:
+        return None
+    return data.decode("utf-8-sig", errors="replace")
+
+
+def _carrier_tasks(repo: Repo) -> list[Path]:
+    """Every ``docs/execution/plans/<plan>/task.md`` of the carrier source, sorted.
+
+    Raises:
+        Refusal: ``carrier_mismatch`` when git cannot list the carrier commit.
+    """
+    plans = repo.top / "docs" / "execution" / "plans"
+    binding = repo.carrier
+    if binding is None:
+        return sorted(plans.glob("*/task.md"))
+    try:
+        out = _git_bytes(
+            repo.top,
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            binding.commit,
+            "--",
+            "docs/execution/plans",
+        )
+    except (GitError, OSError) as exc:
+        raise Refusal("carrier_mismatch", f"plans at {binding.commit}: {exc}") from exc
+    found: list[Path] = []
+    for raw in out.split(b"\0"):
+        name = raw.decode("utf-8", errors="replace")
+        parts = name.split("/")
+        if len(parts) == 5 and parts[4] == "task.md":
+            found.append(repo.top / name)
+    return sorted(found)
 
 
 def _write_durable(path: Path, data: bytes) -> None:
@@ -958,6 +1087,8 @@ class Carriers:
     task_meta: dict[str, Any]
     task_block: dict[str, Any]
     plan_block: dict[str, Any]
+    #: Read from a committed carrier (``Repo.carrier``): the task file is never edited.
+    committed: bool = False
 
     @property
     def auth(self) -> dict[str, Any]:
@@ -980,7 +1111,7 @@ def _load_carriers(repo: Repo, plan: str) -> Carriers:
     if not SLUG_RE.fullmatch(plan):
         raise Refusal("binding", "plan_slug")
     task_path = _plan_dir(repo, plan) / "task.md"
-    text = _read_text(task_path)
+    text = _carrier_text(repo, task_path)
     if text is None:
         raise Refusal("binding", "task_missing")
     meta = _frontmatter(text)
@@ -996,7 +1127,7 @@ def _load_carriers(repo: Repo, plan: str) -> Carriers:
         raise Refusal("schema", "store_seq")
     if kind != "v1":
         raise NonAuthorizing(kind)
-    plan_text = _read_text(_plan_dir(repo, plan) / "implementation-plan.md")
+    plan_text = _carrier_text(repo, _plan_dir(repo, plan) / "implementation-plan.md")
     if plan_text is None:
         raise Refusal("binding", "plan_missing")
     plan_meta = _frontmatter(plan_text)
@@ -1010,6 +1141,7 @@ def _load_carriers(repo: Repo, plan: str) -> Carriers:
         task_meta=meta,
         task_block=cast(dict[str, Any], meta["run_parameters"]),
         plan_block=cast(dict[str, Any], plan_meta["run_parameters"]),
+        committed=repo.carrier is not None,
     )
 
 
@@ -1047,19 +1179,117 @@ def _config_dir() -> Path:
     return Path(raw) if raw else Path.home() / ".claude"
 
 
-def _transcript_path(repo: Repo, session: str) -> Path:
-    """``<config>/projects/<slug of the main tree's display path>/<session>.jsonl`` (V-1)."""
-    slug = FOREIGN_SLUG_RE.sub("-", repo.main_display)
+def _project_transcript(display: str, session: str) -> Path:
+    """``<config>/projects/<slug of display>/<session>.jsonl`` in the Claude adapter folder."""
+    slug = FOREIGN_SLUG_RE.sub("-", display)
     return _config_dir() / "projects" / slug / f"{session}.jsonl"
 
 
+def _lanes() -> ModuleType:
+    """``tools/lanes.py``, the owner of the lane cards (MEU-785 AC-785.27, D:276).
+
+    ``tools.lanes`` from the repository root (``commit_batch.py``, the tests);
+    ``lanes`` when ``tools/`` itself is on ``sys.path`` (``python tools/run_parameters.py``).
+    """
+    try:
+        return importlib.import_module("tools.lanes")
+    except ModuleNotFoundError:
+        return importlib.import_module("lanes")
+
+
+def _lane_reserved(repo: Repo) -> bool:
+    """Whether ``repo.top`` is a registered lane worktree (MEU-785 AC-785.27, D:276).
+
+    True only for a linked worktree that ``git worktree list`` names AND that a valid
+    lane card in a reserving state (``active`` or ``landing``) names as its worktree.
+    The main tree is never a lane. An unreadable card or a failed worktree listing
+    reserves nothing: the mapping fails closed to the main tree's folder.
+    """
+    if os.path.normcase(display_path(repo.top.resolve())) == os.path.normcase(
+        display_path(repo.main.resolve())
+    ):
+        return False
+    lanes = _lanes()
+    lane_refusal = cast(type[Exception], getattr(lanes, "Refusal"))
+    here = repo.top.resolve().as_posix()
+    try:
+        if not lanes._listed(repo.top, repo.top):
+            return False
+        files = cast(list[Path], lanes._card_files(lanes._lanes_dir(repo.common)))
+    except (lane_refusal, OSError) as exc:
+        _log("lane_mapping_unavailable", detail=f"{type(exc).__name__}: {exc}")
+        return False
+    reserving = cast(tuple[str, ...], lanes.RESERVING_STATES)
+    for card_file in files:
+        try:
+            card = cast(dict[str, Any], lanes._load_card(card_file))
+        except (lane_refusal, OSError) as exc:
+            _log("lane_card_unreadable", path=str(card_file), detail=str(exc))
+            continue
+        if card["state"] in reserving and os.path.normcase(
+            str(card["worktree"])
+        ) == os.path.normcase(here):
+            return True
+    return False
+
+
+def with_lane(repo: Repo, worktree: Path) -> Repo:
+    """A copy of ``repo`` that also reads the transcripts of the lane ``worktree`` (R1-F4).
+
+    The publication handle is the main repository (its store and its target), but the
+    human may have typed into the lane's session (AC-785.18, AC-785.27, D:268, D:276).
+    The lane folder is added only when ``worktree`` is a linked worktree of the same
+    common dir that a reserving card names (``_lane_reserved``); any other path, and a
+    worktree that cannot be opened, leaves ``repo`` as it is (the main folder only).
+    """
+    try:
+        lane = _open_repo(worktree)
+    except Refusal as exc:
+        _log("lane_mapping_unavailable", detail=f"{exc.reason}: {exc.detail}")
+        return repo
+    same = os.path.normcase(str(lane.common.resolve())) == os.path.normcase(
+        str(repo.common.resolve())
+    )
+    if not same or not _lane_reserved(lane):
+        return repo
+    return replace(repo, lane_display=lane.display)
+
+
+def _transcript_path(repo: Repo, session: str) -> Path:
+    """The session transcript the V-1 lookup reads first.
+
+    ``<config>/projects/<slug of the main tree's display path>/<session>.jsonl``, or, for a
+    registered lane worktree (``_lane_reserved``), the same file under the slug of the
+    lane worktree's own display path (MEU-785 AC-785.27, D:276). A handle that
+    ``with_lane`` mapped reads its lane's folder first (R1-F4).
+    """
+    if repo.lane_display is not None:
+        return _project_transcript(repo.lane_display, session)
+    if _lane_reserved(repo):
+        return _project_transcript(repo.display, session)
+    return _project_transcript(repo.main_display, session)
+
+
 def _load_transcript(repo: Repo, session: str) -> Transcript:
-    """V-1: the session's transcript in this project's folder only; missing → ``transcript_missing``."""
+    """V-1: the session's transcript in this project's folder only.
+
+    A registered lane worktree reads its own project folder, then the main tree's
+    (AC-785.27). A linked worktree that no reserving card names reads the main tree's
+    folder only: a transcript found solely under its own slug refuses
+    ``transcript_unmapped``; no transcript at all refuses ``transcript_missing``.
+    """
     if not SAFE_NAME_RE.fullmatch(session):
         raise Refusal("transcript_missing", "session_name")
     path = _transcript_path(repo, session)
+    main_path = _project_transcript(repo.main_display, session)
     text = _read_text(path)
+    if text is None and path != main_path:
+        path = main_path
+        text = _read_text(path)
     if text is None:
+        own = _project_transcript(repo.display, session)
+        if own != main_path and own.is_file():
+            raise Refusal("transcript_unmapped", str(own))
         raise Refusal("transcript_missing", str(path))
     raw: list[str] = []
     records: list[dict[str, Any]] = []
@@ -1786,7 +2016,7 @@ def _grouping_sigma(
     grouping = cast(str, auth["scope"]["grouping"])
     if grouping == "none":
         return None
-    text = _read_text(_grouping_path(repo, grouping))
+    text = _carrier_text(repo, _grouping_path(repo, grouping))
     if text is None:
         return None
     return grouping_line_sigma(text, plan, auth)
@@ -1877,8 +2107,18 @@ def _check_act(auth: Mapping[str, Any], act: str, effective: Mapping[str, Any]) 
         raise Refusal("not_granted", act)
 
 
-def _check_scope(repo: Repo, auth: Mapping[str, Any], plan: str) -> None:
-    """V-7: the plan is in scope, the project is the main tree, and the branch exists by bytes."""
+def _check_scope(
+    repo: Repo, auth: Mapping[str, Any], plan: str, branch: str | None = None
+) -> None:
+    """V-7: the plan is in scope, the project is the main tree, and the branch exists by bytes.
+
+    With ``branch`` (the packet branch of a commit or a land publication), the authorized
+    branch must also equal it (MEU-785 AC-785.20, D:268); without it (``verify``,
+    ``reserve``, ``init``) no packet exists yet and only the existence rule applies.
+
+    Raises:
+        Refusal: ``scope`` (``plan``, ``project``, ``branch``) or ``scope_branch_mismatch``.
+    """
     if auth["standing"]:
         in_scope = plan in auth["members"]
     else:
@@ -1896,6 +2136,22 @@ def _check_scope(repo: Repo, auth: Mapping[str, Any], plan: str) -> None:
     ).split(b"\n")
     if ("refs/heads/" + cast(str, auth["scope"]["branch"])).encode("utf-8") not in refs:
         raise Refusal("scope", "branch")
+    if branch is not None:
+        _check_branch(auth, branch)
+
+
+def _check_branch(auth: Mapping[str, Any], branch: str) -> None:
+    """The authorized ``scope.branch`` equals the packet branch ``branch``.
+
+    Raises:
+        Refusal: ``scope_branch_mismatch``.
+    """
+    granted = cast(str, auth["scope"]["branch"])
+    if granted != branch:
+        raise Refusal(
+            "scope_branch_mismatch",
+            f"the grant is scoped to branch {granted}; the packet is on {branch}",
+        )
 
 
 @dataclass
@@ -1913,15 +2169,17 @@ class Verified:
         return cast(str, self.reference.auth["message_uuid"])
 
 
-def _verify_plan(repo: Repo, plan: str, act: str | None) -> Verified:
-    """V-0 to V-7 over the plan's carriers."""
+def _verify_plan(
+    repo: Repo, plan: str, act: str | None, *, branch: str | None = None
+) -> Verified:
+    """V-0 to V-7 over the plan's carriers; ``branch`` is the packet branch, when one exists."""
     carriers = _load_carriers(repo, plan)
     reference = _verify_reference(repo, carriers.auth)
     grouping = _grouping_sigma(repo, plan, carriers.auth)
     effective = _inherit(carriers, reference.offer, grouping)
     if act is not None:
         _check_act(reference.auth, act, effective)
-    _check_scope(repo, reference.auth, plan)
+    _check_scope(repo, reference.auth, plan, branch)
     return Verified(
         plan=plan, reference=reference, effective=effective, carriers=carriers
     )
@@ -2916,7 +3174,9 @@ def _initialize(repo: Repo, verified: Verified) -> tuple[int, dict[str, Any]]:
 
 
 def _task_store_seq(carriers: Carriers, seq: int) -> None:
-    """Raise the task's ``store_seq`` to ``seq`` (never lower it)."""
+    """Raise the task's ``store_seq`` to ``seq`` (never lower it); a committed carrier stays."""
+    if carriers.committed:
+        return
     current = carriers.task_meta.get("store_seq", 0)
     if not isinstance(current, int) or seq > current:
         _edit_frontmatter(carriers.task_path, store_seq=seq)
@@ -3077,7 +3337,7 @@ def _bind(
                 if hit:
                     files[f"sessions/{other}.json"] = _json_bytes(changed)
         seq = _txn(repo, _with_inventory(store, files, [f"sessions/{session}.json"]))
-    if carriers is not None:
+    if carriers is not None and not carriers.committed:
         bound = list(carriers.bound_sessions)
         if session not in bound:
             bound.append(session)
@@ -3313,9 +3573,12 @@ def _repair(
 def _index_entry(
     top: Path, path: str, env: Mapping[str, str] | None = None
 ) -> tuple[str, str] | None:
-    """``(mode, blob)`` of a stage-0 index entry, or None."""
-    out = _git(top, "ls-files", "-s", "--", path, env=env)
-    for line in out.splitlines():
+    """``(mode, blob)`` of a stage-0 index entry, or None.
+
+    ``-z`` gives the raw name, which a quoted ``core.quotepath`` line never equals (R5-F3).
+    """
+    out = _git(top, "ls-files", "-s", "-z", "--", path, env=env)
+    for line in out.split("\0"):
         meta, _, name = line.partition("\t")
         parts = meta.split()
         if name == path and len(parts) == 3 and parts[2] == "0":
@@ -3324,9 +3587,9 @@ def _index_entry(
 
 
 def _tree_entry(top: Path, commit: str, path: str) -> tuple[str, str] | None:
-    """``(mode, blob)`` of ``path`` in ``commit``, or None."""
-    out = _git(top, "ls-tree", commit, "--", path)
-    for line in out.splitlines():
+    """``(mode, blob)`` of ``path`` in ``commit``, or None (raw ``-z`` names, R5-F3)."""
+    out = _git(top, "ls-tree", "-z", commit, "--", path)
+    for line in out.split("\0"):
         meta, _, name = line.partition("\t")
         parts = meta.split()
         if name == path and len(parts) == 3:
@@ -3528,6 +3791,39 @@ def _final_paths(plan: str) -> dict[str, str]:
     }
 
 
+def _plan_meus(top: Path, plan: str) -> list[str]:
+    """AC-785.41: the ``meus`` of the plan's ``task.md`` under ``top``, in file order.
+
+    A missing ``task.md``, a ``task.md`` without frontmatter, and an absent, null or empty
+    ``meus`` all give ``[]``. A ``meus`` value that is not a list of MEU ids refuses
+    ``binding`` (``task_meus``); a frontmatter that is not strict YAML refuses ``schema``.
+    """
+    text = _read_text(top / _final_paths(plan)["task"])
+    meta = _frontmatter(text) if text is not None else None
+    raw = meta.get("meus") if meta is not None else None
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise Refusal("binding", "task_meus")
+    meus: list[str] = []
+    for item in cast(list[object], raw):
+        if not isinstance(item, str) or not MEU_ID_RE.fullmatch(item.strip()):
+            raise Refusal("binding", "task_meus")
+        meus.append(item.strip())
+    return meus
+
+
+def _handoff_paths(plan: str, meus: Sequence[str]) -> list[str]:
+    """AC-785.41: the handoffs the final stage reads, relative to the repository.
+
+    One ``<plan>-<MEU>-handoff.md`` per ``meus`` entry (``completion_preflight.check_handoffs``);
+    the project handoff ``<plan>-handoff.md`` (``_final_paths``) only when ``meus`` is empty.
+    """
+    if not meus:
+        return [_final_paths(plan)["handoff"]]
+    return [f".agent/context/handoffs/{plan}-{meu}-handoff.md" for meu in meus]
+
+
 def _plan_grouping(repo: Repo, plan: str) -> str | None:
     """The grouping slug of the plan's authorization scope, or None (none, manual, legacy)."""
     try:
@@ -3541,9 +3837,10 @@ def _plan_grouping(repo: Repo, plan: str) -> str | None:
 def final_read_set(repo: Path | Repo, plan: str) -> list[dict[str, Any]]:
     """AC-D.4: every file the final receipt binds, as ``{path, shared, kind}``, sorted by path.
 
-    Run-owned: every file of the plan folder, the handoff, the execution review, the
-    reflection, and the plan's rows of the metrics table (``kind: projection``). Shared:
-    the context files of ``FINAL_SHARED`` and the grouping file, when present. A missing
+    Run-owned: every file of the plan folder, the handoffs (one per ``task.md`` ``meus``
+    entry, else the project handoff; AC-785.41), the execution review, the reflection,
+    and the plan's rows of the metrics table (``kind: projection``). Shared: the
+    context files of ``FINAL_SHARED`` and the grouping file, when present. A missing
     run-owned file refuses ``binding``.
     """
     return _read_set(_as_repo(repo), plan, strict=True)
@@ -3562,7 +3859,14 @@ def _read_set(handle: Repo, plan: str, *, strict: bool) -> list[dict[str, Any]]:
         for path in (sorted(folder.rglob("*")) if folder.is_dir() else [])
         if path.is_file()
     ]
-    owned.extend(paths[key] for key in ("handoff", "review", "reflection"))
+    try:
+        meus = _plan_meus(handle.top, plan)
+    except Refusal:
+        if strict:
+            raise
+        meus = []
+    owned.extend(_handoff_paths(plan, meus))
+    owned.extend(paths[key] for key in ("review", "reflection"))
     owned.append(FINAL_METRICS)
     entries: list[dict[str, Any]] = []
     for rel in sorted(set(owned)):
@@ -3818,7 +4122,8 @@ def run_stage_validators(
 
     ``snapshot`` holds a copy of the read set at the repository's relative paths. The
     closeout validator first writes the review-state receipt, then runs
-    ``--stage final --for-produce`` (the audit and the receipt checks wait for the receipt);
+    ``--stage final --for-produce`` with one ``--handoff`` per handoff of the read set
+    (AC-785.41; the audit and the receipt checks wait for the receipt);
     the preflight runs ``--stage final`` on the snapshot tree. ``manifest`` is the commit
     packet of the run's last publishing op (a ``commit_exec`` run). Returns
     ``{"closeout": {exit, version, sha256}, "preflight": {...}}``. Both closeout runs take
@@ -3874,10 +4179,11 @@ def run_stage_validators(
             "--expected-target-plan",
             _final_paths(plan)["plan"],
         ]
+        for rel in _handoff_paths(plan, _plan_meus(snapshot, plan)):
+            argv += ["--handoff", str(snapshot / rel)]
         for key in (
             "plan",
             "task",
-            "handoff",
             "handoff_template",
             "review",
             "reflection",
@@ -5626,10 +5932,14 @@ def consumed_acts(repo: Path | Repo, plan: str) -> dict[str, dict[str, Any]]:
     return dict(cast(dict[str, dict[str, Any]], consumed.get(plan, {})))
 
 
-def reserve_act(repo: Path | Repo, plan: str, act: str, op: str) -> dict[str, Any]:
+def reserve_act(
+    repo: Path | Repo, plan: str, act: str, op: str, *, branch: str | None = None
+) -> dict[str, Any]:
     """``reserve <act> --plan <plan> --op <op>`` as a function; the same op is idempotent (V-8).
 
-    A refusal propagates (``Refusal`` or ``NonAuthorizing``), as the verb's would.
+    ``branch`` is the branch the reserved op will publish to: the grant's ``scope.branch``
+    must equal it (``scope_branch_mismatch``). A refusal propagates (``Refusal`` or
+    ``NonAuthorizing``), as the verb's would.
     """
     if act not in ACTS:
         raise Refusal("schema", "act")
@@ -5637,7 +5947,7 @@ def reserve_act(repo: Path | Repo, plan: str, act: str, op: str) -> dict[str, An
         raise Refusal("schema", "op_id")
     handle = _as_repo(repo)
     policy = _gate(handle, act)
-    verified = _verify_plan(handle, plan, act)
+    verified = _verify_plan(handle, plan, act, branch=branch)
     return _reserve(handle, verified, act, op, policy)
 
 

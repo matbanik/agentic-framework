@@ -112,6 +112,8 @@ At every task-row boundary, run `python tools/lanes.py beat --plan <plan dir> --
 
 At closeout, run `python tools/lanes.py release --plan <plan dir> --session <session id>`. Run it after the lane worktree is removed (H2-3c), or, for a lane on the main tree, after the work lands. A lane never edits a junction file: list the changes in the handoff's `Integration requests` section.
 
+A lane worktree (branch `lane/<slug>`) commits through `tools/lanes.py commit` and lands through the governed land instead of `executor_worktree.py land`: `tools/lanes.py land prepare` (rebase onto pinned main, the integration requests, the gate), the reviewer verdict on the ready tree, then `tools/lanes.py land publish` (one main commit through `commit_batch.py`, under a verified grant or the human's typed direction). After `land_closed`, run `tools/lanes.py release --worktree <path> --reset`, then `executor_worktree.py remove`. Run every gate in the lane through `tools/lanes.py gate run` (`commands.md`). The governed land is Windows-only in stage 2; elsewhere it refuses `land_unsupported_platform` and writes nothing.
+
 Key rules during execution:
 
 > ⚠️ **P0 Terminal Pre-Flight** — Before the first shell command (your harness `shell_tool`, e.g. `run_command`/`Bash`) in this phase, invoke

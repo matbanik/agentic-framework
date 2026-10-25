@@ -8,6 +8,10 @@
 Every op journals ``started`` and ``done`` around each phase in
 ``<store>/ops/<plan>/<run>/<op>/op.json``: ``prepared``, ``blobs_stored``, ``candidate_built``,
 ``candidate_verified``, ``published``, ``index_reconciled``, ``cleanup_done`` and ``reconciled``.
+A land op of ``tools/lanes.py`` (MEU-785 AC-785.11) journals in the same op store through the
+same writer: ``open_land_op``, ``land_start`` / ``land_finish`` write the ``LAND_PHASES``
+entries of a ``land-op/1`` record, and ``land_journal`` reads one back (it refuses an unknown key
+``journal_schema:<key>``); ``tools/lanes.py`` never writes an op file itself.
 A rerun of the same op resumes from its last record by the R§4.5 recovery table. Every packet
 refusal and the reservation check happen before the op file and any Git object are written.
 The driver prints one JSON object and exits 0 ``reconciled``, 1 ``refused`` / ``stopped`` /
@@ -22,6 +26,7 @@ import binascii
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -29,8 +34,8 @@ import traceback
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, cast
+from pathlib import Path, PurePosixPath
+from typing import Any, Protocol, cast
 
 from tools import run_parameters as rp
 
@@ -40,6 +45,10 @@ OP_SCHEMA = "commit-op/1"
 BATCH_OP_SCHEMA = "commit-batch-op/1"
 MANIFEST_SCHEMA = "candidate-worktree/1"
 MANIFEST_NAME = "candidate-worktree.json"
+# Every git call carries core.longpaths: a candidate under a deep candidate root can pass
+# MAX_PATH on Windows, and `_git_env` drops the system config that may enable it. Git
+# exports `-c` to its children (GIT_CONFIG_PARAMETERS), so hook git calls inherit it.
+GIT_LONGPATHS = ("-c", "core.longpaths=true")
 PACKET_KEYS = frozenset(
     {
         "schema",
@@ -59,6 +68,11 @@ DELETE_KEYS = frozenset({"path", "delete"})
 MODES = frozenset({"100644", "100755"})
 ACT_FOR_PHASE = {"plan": "plan_commit", "exec": "exec_commit", "finalize": "finalize"}
 HUMAN_ACT = "human_directed"
+# The human route's op is ``human-<message uuid>``; its folder holds the direction claim that
+# spends the sentence once across ``commit_batch.py`` and ``lanes.py land publish`` (EA-58 (3)).
+HUMAN_OP_PREFIX = "human-"
+DIRECTION_CLAIM_NAME = "direction.json"
+DIRECTION_CLAIM_SCHEMA = "direction-claim/1"
 DEFAULT_RUN = "interactive"
 PHASES = (
     "prepared",
@@ -70,6 +84,69 @@ PHASES = (
     "cleanup_done",
     "reconciled",
 )
+# The land journal (MEU-785 AC-785.11, IP boundary row "Land journal entries"): a land op of
+# ``tools/lanes.py`` journals in this op store through ``_append``; there is no second journal.
+LAND_OP_SCHEMA = "land-op/1"
+LAND_ACT = "land"
+LAND_PHASES = (
+    "land:freeze",
+    "land:rebase",
+    "land:conflict",
+    "land:integrate",
+    "land:kept",
+    "land:ready",
+    "land:authorized",
+    "published",
+    "land:sync",
+    "land:closed",
+)
+# ``published`` is written by the publication step (``_step_published``), never by ``land_start``.
+LAND_WRITER_PHASES = tuple(phase for phase in LAND_PHASES if phase != "published")
+LAND_RECORD_KEYS = frozenset({"schema", "identity", "journal"})
+LAND_IDENTITY_KEYS = frozenset(
+    {"op", "run_id", "plan", "act", "lane", "generation", "session"}
+)
+LAND_ENTRY_KEYS = frozenset({"phase", "status", "evidence", "identity", "seq", "ts"})
+LAND_FIELDS = frozenset(
+    {
+        "op",
+        "lane",
+        "generation",
+        "session",
+        "P",
+        "L0",
+        "L1",
+        "T",
+        "request_ids",
+        "carrier",
+        "gate",
+        "verdict",
+    }
+)
+LAND_OBJECT_FIELDS = frozenset({"P", "L0", "L1", "T"})
+# Step 7 (AC-785.19): a land publishes on main with the message kept beside its journal;
+# step 8 (AC-785.21) reads index and tree entries in chunks of this many paths.
+LAND_BRANCH = "main"
+LAND_MESSAGE_NAME = "message.txt"
+SYNC_CHUNK = 200
+# The frontmatter lines run_parameters itself writes into a plan's task.md in the main
+# checkout (``run_parameters._edit_frontmatter``: bind and the stop gate). Steps 7 and 8
+# treat a change confined to them in the land plan's own task.md as live carrier state.
+PLANS_DIR = "docs/execution/plans"
+LIVE_TASK_FIELDS = ("store_seq:", "bound_sessions:", "stop_gate:")
+LAND_NESTED_KEYS = {
+    "carrier": frozenset({"task", "plan", "grouping"}),
+    "gate": frozenset({"tree", "result"}),
+    "verdict": frozenset({"tree", "verdict"}),
+}
+LAND_NESTED_OBJECTS = {
+    "carrier": frozenset({"task", "plan", "grouping"}),
+    "gate": frozenset({"tree"}),
+    "verdict": frozenset({"tree"}),
+}
+# The publication intent and its ``done`` evidence (``_step_published``).
+PUBLISHED_KEYS = frozenset({"repo", "ref", "ref_old", "ref_new", "op", "candidate"})
+OBJECT_ID_RE = re.compile(r"[0-9a-f]{40}")
 STEP_TARGET = {
     "candidate": "candidate_verified",
     "publish": "published",
@@ -101,9 +178,15 @@ ZERO_OID = "0" * 40
 # D-34 commit consent: a sentence that starts with "commit" after an optional lead-in.
 SENTENCE_RE = re.compile(r"[^.!?\n]+[.!?]*")
 DIRECT_RE = re.compile(
-    r"\s*(?:(?:please|ok|okay|yes|now|go\s+ahead\s+and)\b[\s,]*)*commit\b(?P<rest>.*)",
+    r"\s*(?:(?:please|ok|okay|yes|now|let'?s|go\s+ahead\s+and)\b[\s,]*)*commit\b(?P<rest>.*)",
     re.IGNORECASE | re.DOTALL,
 )
+# A request put as a question ("can you commit now?") directs as the plain form does.
+REQUEST_RE = re.compile(
+    r"\s*(?:can|could|would|will)\s+you\s+(?P<ask>.*)", re.IGNORECASE | re.DOTALL
+)
+# The answered turn: how many records the walk up from a direction reads at most.
+MAX_ANSWER_WALK = 2000
 WORD_RE = re.compile(r"[a-z']+")
 NEGATORS = frozenset(
     {"not", "never", "no", "nothing", "if", "when", "once", "after", "unless", "before"}
@@ -116,6 +199,14 @@ PUSH_ONLY_RE = re.compile(
     r"(?:(?:a|any)\s+)?push(?:es|ed|ing)?\b",
     re.IGNORECASE,
 )
+# R4-F1: words of another sentence that withdraw or condition the direction ("No, wait.",
+# "Only if the tests pass."), and the words that make a request question an alternative.
+WITHDRAWERS = frozenset(
+    {"wait", "hold", "stop", "cancel", "nevermind", "if", "unless", "once", "when"}
+    | {"after", "before", "until"}
+)
+WITHDRAW_LEADS = frozenset({"no", "nope", "actually"})
+ALTERNATIVES = frozenset({"or", "whether"})
 BRANCH_SCOPE_RE = re.compile(r"\b(on|to)\s+([A-Za-z0-9._/-]+)", re.IGNORECASE)
 REPO_SCOPE_RE = re.compile(r"\bin\s+([A-Za-z0-9._-]+)", re.IGNORECASE)
 PLAN_THE_RE = re.compile(r"\bthe\s+([a-z0-9-]+)\s+plan\b", re.IGNORECASE)
@@ -291,8 +382,8 @@ def _rank(message: bytes) -> int:
     return 3
 
 
-def _read_input(path: Path, phase: str | None) -> tuple[list[Packet], bool]:
-    """The packet, or the batch's packets (``exec`` only), each validated before any write."""
+def _read_input(path: Path, batch_ok: bool) -> tuple[list[Packet], bool]:
+    """The packet, or the batch's packets (when ``batch_ok``), each validated before any write."""
     data = rp._read_bytes(path)
     _schema(data is not None, "packet_file")
     try:
@@ -303,7 +394,7 @@ def _read_input(path: Path, phase: str | None) -> tuple[list[Packet], bool]:
     top = cast(dict[str, Any], value)
     if top.get("schema") != BATCH_SCHEMA:
         return [_parse_packet(top)], False
-    _schema(phase == "exec", "batch_phase")
+    _schema(batch_ok, "batch_phase")
     _schema(set(top) == BATCH_KEYS, "batch_keys")
     _schema(rp._match(rp.SLUG_RE, top["plan"]), "batch_plan")
     _schema(rp._match(rp.BRANCH_RE, top["branch"]), "batch_branch")
@@ -336,9 +427,9 @@ def _run_git(
     env: Mapping[str, str] | None = None,
     data: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run git with the scrubbed environment; never raises on a non-zero exit."""
+    """Run git with the scrubbed environment and long paths on; never raises on a non-zero exit."""
     return subprocess.run(  # noqa: S603 - fixed argv
-        ["git", *args],
+        ["git", *GIT_LONGPATHS, *args],
         cwd=cwd,
         env=rp._git_env(env),
         input=data,
@@ -523,7 +614,60 @@ class Op:
         return cast(str, self.evidence("candidate_verified")["commit"])
 
 
-def _append(ctx: Op, phase: str, status: str, evidence: Mapping[str, Any]) -> None:
+@dataclass
+class LandOp:
+    """One land op of ``tools/lanes.py``: its folder in this op store and its journal.
+
+    ``raw`` holds the ``op.json`` bytes as read (None for an op not yet written), so a
+    caller can tell whether the journal moved between two reads (AC-785.12).
+    """
+
+    repo: rp.Repo
+    folder: Path
+    record: dict[str, Any]
+    raw: bytes | None = None
+
+    @property
+    def file(self) -> Path:
+        return self.folder / "op.json"
+
+    @property
+    def journal(self) -> list[dict[str, Any]]:
+        return cast(list[dict[str, Any]], self.record["journal"])
+
+    @property
+    def identity(self) -> dict[str, Any]:
+        return cast(dict[str, Any], self.record["identity"])
+
+    @property
+    def op(self) -> str:
+        return cast(str, self.identity["op"])
+
+    @property
+    def lane(self) -> str:
+        return cast(str, self.identity["lane"])
+
+    @property
+    def generation(self) -> str:
+        return cast(str, self.identity["generation"])
+
+    @property
+    def phase(self) -> str | None:
+        """The phase of the last journal entry, or None for an empty journal."""
+        return str(self.journal[-1]["phase"]) if self.journal else None
+
+    def fields(self) -> dict[str, Any]:
+        """The land fields: the identity, then each entry's evidence, merged in order."""
+        merged: dict[str, Any] = dict(self.identity)
+        for item in self.journal:
+            if isinstance(item.get("evidence"), dict):
+                merged.update(cast(dict[str, Any], item["evidence"]))
+        return merged
+
+
+def _append(
+    ctx: Op | LandOp, phase: str, status: str, evidence: Mapping[str, Any]
+) -> None:
     """Append one journal entry (seq = previous + 1) and rewrite ``op.json`` atomically."""
     journal = ctx.journal
     seq = int(journal[-1]["seq"]) + 1 if journal else 1
@@ -613,6 +757,7 @@ def _open_op(
         packet=packet,
         parent=parent,
         folder=folder,
+        # A batch sub-op ``<op>/<n>`` stays a direct child of the root: hooks reach ``../.agent``.
         candidate=Path(rp.display_path(root / op.replace("/", "-"))),
         record={},
         reserved=reserved,
@@ -664,14 +809,268 @@ def _open_op(
     return ctx
 
 
+# -- the land journal (MEU-785 AC-785.11) ---------------------------------------------------
+
+
+def _land_schema(key: str, detail: str) -> rp.Refusal:
+    """The land journal reader's refusal of one key: ``journal_schema:<key>``."""
+    return rp.Refusal(f"journal_schema:{key}", detail)
+
+
+def _check_object_id(key: str, value: object, where: str) -> None:
+    if not isinstance(value, str) or not OBJECT_ID_RE.fullmatch(value):
+        raise _land_schema(key, f"{where}: {key} is not a 40-hex object id")
+
+
+def _check_land_evidence(phase: str, evidence: Mapping[str, Any], where: str) -> None:
+    """Every key is a land field (the publication keys for ``published``); ids are 40-hex.
+
+    Raises:
+        rp.Refusal: ``journal_schema:<key>`` for an unknown key, a nested key outside
+            ``carrier``/``gate``/``verdict``, an object id that is not 40-hex, or a value
+            of the wrong type.
+    """
+    allowed = PUBLISHED_KEYS if phase == "published" else LAND_FIELDS
+    for key, value in evidence.items():
+        if key not in allowed:
+            raise _land_schema(key, f"{where}: unknown key")
+        if phase == "published":
+            continue
+        if key in LAND_OBJECT_FIELDS:
+            _check_object_id(key, value, where)
+        elif key in LAND_NESTED_KEYS:
+            if not isinstance(value, dict):
+                raise _land_schema(key, f"{where}: {key} is not an object")
+            for inner, inner_value in cast(dict[str, Any], value).items():
+                name = f"{key}.{inner}"
+                if inner not in LAND_NESTED_KEYS[key]:
+                    raise _land_schema(name, f"{where}: unknown key")
+                if inner in LAND_NESTED_OBJECTS[key]:
+                    _check_object_id(name, inner_value, where)
+        elif key == "request_ids":
+            items = cast(list[object], value) if isinstance(value, list) else None
+            if items is None or not all(isinstance(item, str) for item in items):
+                raise _land_schema(
+                    key, f"{where}: request_ids is not a list of strings"
+                )
+        elif not isinstance(value, str):
+            raise _land_schema(key, f"{where}: {key} is not a string")
+
+
+def _check_land_identity(value: object, where: str) -> dict[str, Any]:
+    """The identity holds exactly the land identity keys, each a string, and act ``land``."""
+    if not isinstance(value, dict):
+        raise _land_schema("identity", f"{where}: identity is not an object")
+    identity = cast(dict[str, Any], value)
+    for key in identity:
+        if key not in LAND_IDENTITY_KEYS:
+            raise _land_schema(f"identity.{key}", f"{where}: unknown key")
+    for key in sorted(LAND_IDENTITY_KEYS):
+        if not isinstance(identity.get(key), str) or not identity[key]:
+            raise _land_schema(f"identity.{key}", f"{where}: missing or not a string")
+    if identity["act"] != LAND_ACT:
+        raise _land_schema("identity.act", f"{where}: act is {identity['act']!r}")
+    return identity
+
+
+def _parse_land(repo: rp.Repo, path: Path, data: bytes) -> LandOp | None:
+    """The land op in ``op.json`` bytes; None when the file is another op's (a commit op).
+
+    Raises:
+        Stopped: ``op_file`` (not JSON).
+        rp.Refusal: ``journal_schema:<key>`` for a land record with an unknown or
+            malformed key, in the record, its identity or any entry.
+    """
+    try:
+        value = rp._load_json(data)
+    except ValueError as exc:
+        raise Stopped("op_file") from exc
+    if not isinstance(value, dict):
+        return None
+    record = cast(dict[str, Any], value)
+    if record.get("schema") != LAND_OP_SCHEMA:
+        return None
+    where = rp.display_path(path)
+    for key in record:
+        if key not in LAND_RECORD_KEYS:
+            raise _land_schema(key, f"{where}: unknown key")
+    identity = _check_land_identity(record.get("identity"), where)
+    journal = record.get("journal")
+    if not isinstance(journal, list) or not journal:
+        raise _land_schema("journal", f"{where}: the journal is not a non-empty list")
+    for position, raw_entry in enumerate(cast(list[object], journal), start=1):
+        at = f"{where} entry {position}"
+        if not isinstance(raw_entry, dict):
+            raise _land_schema("journal", f"{at}: not an object")
+        entry = cast(dict[str, Any], raw_entry)
+        for key in entry:
+            if key not in LAND_ENTRY_KEYS:
+                raise _land_schema(key, f"{at}: unknown key")
+        for key in ("phase", "status"):
+            if not isinstance(entry.get(key), str):
+                raise _land_schema(key, f"{at}: missing or not a string")
+        if _check_land_identity(entry.get("identity"), at) != identity:
+            raise _land_schema("identity", f"{at}: differs from the record identity")
+        evidence = entry.get("evidence", {})
+        if not isinstance(evidence, dict):
+            raise _land_schema("evidence", f"{at}: not an object")
+        _check_land_evidence(str(entry["phase"]), cast(dict[str, Any], evidence), at)
+    return LandOp(repo=repo, folder=path.parent, record=record, raw=data)
+
+
+def _op_files(repo: rp.Repo, op: str) -> list[Path]:
+    """Every ``op.json`` of op id ``op`` in the store (any plan, any run), read only."""
+    _check_name(op)
+    return sorted(repo.store.glob(f"ops/*/*/{op}/op.json"))
+
+
+def _find_land(repo: rp.Repo, op: str) -> LandOp | None:
+    """The land op ``op``, or None when no land journal carries that id.
+
+    Raises:
+        rp.Refusal: ``containment`` (``op`` is not one safe segment), ``op_ambiguous``
+            (two land journals carry the id), or ``journal_schema:<key>``.
+        Stopped: ``op_file`` (an ``op.json`` that is not JSON).
+    """
+    found: list[LandOp] = []
+    for path in _op_files(repo, op):
+        data = rp._read_bytes(path)
+        if data is None:
+            continue
+        land = _parse_land(repo, path, data)
+        if land is not None:
+            found.append(land)
+    if len(found) > 1:
+        shown = ", ".join(rp.display_path(item.file) for item in found)
+        raise rp.Refusal("op_ambiguous", f"{op}: {shown}")
+    return found[0] if found else None
+
+
+def land_journal(path: Path, op: str) -> LandOp | None:
+    """The land op ``op`` of the repository that holds ``path``; None when it has none.
+
+    Read only: nothing is created, locked or written. The caller compares ``raw`` of two
+    reads to see whether the journal moved (AC-785.12).
+
+    Raises:
+        rp.Refusal: ``disabled`` (``path`` is not in a repository), ``containment``,
+            ``op_ambiguous`` or ``journal_schema:<key>``.
+        Stopped: ``op_file``.
+    """
+    return _find_land(rp._open_repo(path), op)
+
+
+def open_land_op(
+    repo: rp.Repo,
+    *,
+    op: str,
+    plan: str,
+    lane: str,
+    generation: str,
+    session: str,
+    run: str = DEFAULT_RUN,
+) -> LandOp:
+    """The land op ``op``: an existing land journal, or a new one that its first entry writes.
+
+    An existing land journal must name this plan, lane and generation. A new op lives at
+    ``<store>/ops/<plan>/<run>/<op>/op.json``; nothing is written until ``land_start``.
+
+    Raises:
+        rp.Refusal: ``containment`` (``op``, ``plan`` or ``run`` is not one safe segment),
+            ``op_mismatch`` (the id belongs to another lane, generation or plan, or to a
+            commit op), ``op_ambiguous`` or ``journal_schema:<key>``.
+        Stopped: ``op_file``.
+    """
+    for value in (op, plan, run):
+        _check_name(value)
+    existing = _find_land(repo, op)
+    if existing is not None:
+        identity = existing.identity
+        if (identity["plan"], identity["lane"], identity["generation"]) != (
+            plan,
+            lane,
+            generation,
+        ):
+            raise rp.Refusal(
+                "op_mismatch",
+                f"{op} is the land op of lane {identity['lane']} generation "
+                f"{identity['generation']} (plan {identity['plan']})",
+            )
+        return existing
+    if _op_files(repo, op):
+        raise rp.Refusal("op_mismatch", f"{op} names a commit op, not a land op")
+    identity = {
+        "op": op,
+        "run_id": run,
+        "plan": plan,
+        "act": LAND_ACT,
+        "lane": lane,
+        "generation": generation,
+        "session": session,
+    }
+    _check_land_identity(identity, op)
+    return LandOp(
+        repo=repo,
+        folder=repo.store / "ops" / plan / run / op,
+        record={"schema": LAND_OP_SCHEMA, "identity": identity, "journal": []},
+    )
+
+
+def _land_entry(
+    ctx: LandOp, phase: str, status: str, evidence: Mapping[str, Any] | None
+) -> None:
+    """Journal one land entry through ``_append``, then the ``<phase>:<status>`` crash seam."""
+    if phase not in LAND_WRITER_PHASES:
+        raise ValueError(
+            f"commit_batch: {phase!r} is not a land phase of the land writer "
+            f"(one of {', '.join(LAND_WRITER_PHASES)})"
+        )
+    payload = dict(evidence or {})
+    _check_land_evidence(phase, payload, f"{ctx.op} {phase}")
+    _append(ctx, phase, status, payload)
+    ctx.raw = rp._json_bytes(ctx.record)
+    rp._crash(ctx.repo, f"{phase}:{status}")
+
+
+def land_start(
+    ctx: LandOp, phase: str, evidence: Mapping[str, Any] | None = None
+) -> None:
+    """Journal ``<phase>:started`` for a land phase, then the ``started`` crash seam.
+
+    Raises:
+        ValueError: ``phase`` is not a land writer phase (``published`` belongs to the
+            publication step).
+        rp.Refusal: ``journal_schema:<key>`` for evidence the reader would refuse.
+    """
+    _land_entry(ctx, phase, "started", evidence)
+
+
+def land_finish(
+    ctx: LandOp, phase: str, evidence: Mapping[str, Any] | None = None
+) -> None:
+    """Journal ``<phase>:done`` for a land phase, then the ``done`` crash seam.
+
+    Raises:
+        ValueError: ``phase`` is not a land writer phase.
+        rp.Refusal: ``journal_schema:<key>`` for evidence the reader would refuse.
+    """
+    _land_entry(ctx, phase, "done", evidence)
+
+
 # -- authority ------------------------------------------------------------------------------
 
 
-def _reserved(repo: rp.Repo, plan: str, act: str, op: str) -> rp.Verified:
-    """V-A to V-10 for the act, then ``consumed[plan][act]`` names this op: else ``not_reserved``."""
+def _reserved(
+    repo: rp.Repo, plan: str, act: str, op: str, branch: str | None = None
+) -> rp.Verified:
+    """V-A to V-10 for the act, then ``consumed[plan][act]`` names this op: else ``not_reserved``.
+
+    ``branch`` is the packet branch: the grant's ``scope.branch`` must equal it
+    (``scope_branch_mismatch``, MEU-785 AC-785.20).
+    """
     rp._gate(repo, act)
     try:
-        verified = rp._verify_plan(repo, plan, act)
+        verified = rp._verify_plan(repo, plan, act, branch=branch)
     except rp.NonAuthorizing as exc:
         raise rp.Refusal("not_reserved", exc.kind) from exc
     _store, grant = rp._store_checks(
@@ -693,7 +1092,9 @@ def _reverify(ctx: Op) -> None:
     if ctx.reserved is None:
         return
     ctx.repo.refresh()
-    ctx.verified = _reserved(ctx.repo, ctx.packet.plan, ctx.act, ctx.reserved)
+    ctx.verified = _reserved(
+        ctx.repo, ctx.packet.plan, ctx.act, ctx.reserved, ctx.packet.branch
+    )
 
 
 def _store_or_none(repo: rp.Repo) -> rp.Store | None:
@@ -728,8 +1129,7 @@ def _direction_plans(repo: rp.Repo, session: str) -> tuple[list[str], list[str]]
     ]
     manual: list[str] = []
     named_only: list[str] = []
-    plans = repo.top / "docs" / "execution" / "plans"
-    for task in sorted(plans.glob("*/task.md")):
+    for task in rp._carrier_tasks(repo):
         plan = task.parent.name
         if plan in bound or not rp.SLUG_RE.fullmatch(plan):
             continue
@@ -741,12 +1141,97 @@ def _direction_plans(repo: rp.Repo, session: str) -> tuple[list[str], list[str]]
         except rp.Refusal:
             continue
         try:
-            meta = rp._frontmatter(rp._read_text(task) or "")
+            meta = rp._frontmatter(rp._carrier_text(repo, task) or "")
         except rp.Refusal:
             continue
         complete = (meta or {}).get("status") == "complete"
         (manual if kind == "manual" and not complete else named_only).append(plan)
     return bound + manual, bound + manual + named_only
+
+
+def _answered_plans(
+    repo: rp.Repo, session: str, uid: str, plans: list[str]
+) -> list[str] | None:
+    """The plans named by the assistant turn that the direction ``uid`` answers.
+
+    From the direction up its parents, past tool results, hook frames, system and attachment
+    records and assistant records without text, to the nearest assistant text that names any
+    of ``plans`` by its full slug; the walk stops at the previous typed human turn, a compact
+    boundary, a record of another session or a broken chain. None when no text names a plan.
+    """
+    transcript = rp._load_transcript(repo, session)
+    _raw, record = rp._typed_record(transcript, uid, session)
+    cs = rp._credits_state()
+    patterns = {
+        plan: re.compile(
+            rf"(?<![a-z0-9-]){re.escape(plan)}(?![a-z0-9-])", re.IGNORECASE
+        )
+        for plan in plans
+    }
+    visited = {uid}
+    parent = record.get("parentUuid")
+    for _step in range(MAX_ANSWER_WALK):
+        if not isinstance(parent, str) or parent in visited:
+            return None
+        hits = transcript.by_uuid.get(parent, [])
+        if len(hits) != 1:
+            return None
+        visited.add(parent)
+        current = transcript.records[hits[0]]
+        if (
+            current.get("sessionId") != session
+            or current.get("isSidechain") is not False
+        ):
+            return None
+        kind = current.get("type")
+        if kind == "system" and current.get("subtype") == "compact_boundary":
+            return None
+        if (
+            kind == "user"
+            and cs.is_human_entry(current, session) is True
+            and cs.is_typed_turn(current) is True
+        ):
+            return None
+        if kind == "assistant":
+            text = rp._assistant_text(current)
+            named = [plan for plan, rx in patterns.items() if rx.search(text)]
+            if named:
+                return named
+        parent = current.get("parentUuid")
+    return None
+
+
+def _withdrawn(sentences: list[str], position: int, question: bool) -> bool:
+    """R4-F1: whether the rest of the message withdraws, conditions or reports a direction.
+
+    Another sentence withdraws it when it holds a withdrawing word ("wait", "if", "until"),
+    starts with "no" or "actually", or talks of committing in a negated, questioning or
+    conditional form. A request question also needs to open the message, to name no
+    alternative ("or", "whether") and to stand as its only question. A scoping sentence
+    such as "Do not push." withdraws nothing.
+    """
+    if question:
+        if position != 0:
+            return True
+        if set(WORD_RE.findall(sentences[position].lower())) & ALTERNATIVES:
+            return True
+    for index, other in enumerate(sentences):
+        if index == position:
+            continue
+        lowered = PUSH_ONLY_RE.sub("", other).lower()
+        words = WORD_RE.findall(lowered)
+        if not words:
+            continue
+        asks = other.endswith("?")
+        if question and asks:
+            return True
+        if set(words) & WITHDRAWERS or (words and words[0] in WITHDRAW_LEADS):
+            return True
+        if any(word.startswith("commit") for word in words) and (
+            asks or "n't" in lowered or set(words) & NEGATORS
+        ):
+            return True
+    return False
 
 
 def _branch_scope(repo: rp.Repo, rest: str, current: str) -> str:
@@ -762,29 +1247,81 @@ def _branch_scope(repo: rp.Repo, rest: str, current: str) -> str:
     return current
 
 
+class _Scoped(Protocol):
+    """What a direction is checked against: a plan and a branch (a packet, or a land)."""
+
+    @property
+    def plan(self) -> str: ...
+
+    @property
+    def branch(self) -> str: ...
+
+
+@dataclass(frozen=True)
+class DirectionScope:
+    """The plan and branch of a land publication (MEU-785 AC-785.18): no packet exists yet."""
+
+    plan: str
+    branch: str
+
+
+def human_direction(
+    repo: rp.Repo, session: str, uid: str, plan: str, branch: str
+) -> dict[str, Any]:
+    """The ``--human-directed`` check without a packet: the consent for ``plan`` on ``branch``.
+
+    The same rules as the commit route (D-34): ``session`` and ``uid`` are safe names, the
+    record is a typed human record of that session (V-1, V-2) and ``_consent`` resolves one
+    directing sentence to exactly this plan, branch and repository.
+
+    Raises:
+        rp.Refusal: ``containment`` (an unsafe name), the transcript reader's reasons, or
+            ``no_commit_direction``.
+    """
+    _check_name(session)
+    _check_name(uid)
+    _raw, text = rp._human_record(repo, session, uid)
+    return _consent(repo, session, uid, text, DirectionScope(plan=plan, branch=branch))
+
+
 def _consent(
-    repo: rp.Repo, session: str, uid: str, text: str, packet: Packet
+    repo: rp.Repo, session: str, uid: str, text: str, packet: _Scoped
 ) -> dict[str, Any]:
     """D-34: the first directing sentence whose scope is this packet's plan, branch and repo.
 
-    A sentence that names no plan resolves only to the one plan of ``_direction_plans``
-    (R§4.5 "resolves only to ... one ..., never to more").
+    A request put as a question ("can you commit now?") counts as the plain form. A sentence
+    that names no plan resolves to the plan that the answered assistant turn names, when the
+    nearest naming text names exactly one (2026-10-21, the user's direction); else only to the
+    one plan of ``_direction_plans`` (R§4.5 "resolves only to ... one ..., never to more").
+    The direction holds only when no other sentence of the message withdraws it (R4-F1,
+    ``_withdrawn``).
     """
     unnamed, named_plans = _direction_plans(repo, session)
+    answered: list[str] | None | bool = False
     proc = _run_git(repo.top, "symbolic-ref", "-q", "--short", "HEAD")
     current = proc.stdout.decode("utf-8", errors="replace").strip()
     repo_name = Path(repo.main_display).name.lower()
-    for match in SENTENCE_RE.finditer(text):
-        sentence = match.group(0).strip()
-        if not sentence or sentence.endswith("?"):
-            continue
-        clause = sentence.rstrip(".!").strip()
-        stripped = PUSH_ONLY_RE.sub("", clause)
-        direct = DIRECT_RE.fullmatch(stripped)
+    sentences = [
+        sentence
+        for sentence in (match.group(0).strip() for match in SENTENCE_RE.finditer(text))
+        if WORD_RE.search(sentence.lower())
+    ]
+    for position, sentence in enumerate(sentences):
+        clause = sentence.rstrip(".!?").strip()
+        body = clause
+        question = sentence.endswith("?")
+        if question:
+            request = REQUEST_RE.fullmatch(clause)
+            if request is None:
+                continue
+            body = request.group("ask")
+        direct = DIRECT_RE.fullmatch(PUSH_ONLY_RE.sub("", body))
         if direct is None:
             continue
-        lowered = stripped.lower()
+        lowered = PUSH_ONLY_RE.sub("", clause).lower()
         if "n't" in lowered or set(WORD_RE.findall(lowered)) & NEGATORS:
+            continue
+        if _withdrawn(sentences, position, question):
             continue
         rest = direct.group("rest")
         named = PLAN_THE_RE.search(rest) or PLAN_NAMED_RE.search(rest)
@@ -792,7 +1329,9 @@ def _consent(
             name = named.group(1).lower()
             hits = [plan for plan in named_plans if name in (plan, plan[11:])]
         else:
-            hits = list(unnamed)
+            if answered is False:
+                answered = _answered_plans(repo, session, uid, named_plans)
+            hits = list(answered) if answered else list(unnamed)
         if len(hits) != 1 or hits[0] != packet.plan:
             continue
         branch = _branch_scope(repo, rest, current)
@@ -955,8 +1494,10 @@ def _pre_hook_check(ctx: Op) -> str | None:
         return "index_tree"
     if _dirty(ctx.candidate):
         return "unstaged_drift"
-    staged = _git_ok(ctx.candidate, "diff-index", "--cached", "--name-only", ctx.parent)
-    if not set(staged.splitlines()) <= set(ctx.packet.paths):
+    staged = _names(
+        ctx.candidate, "diff-index", "--cached", "-z", "--name-only", ctx.parent
+    )
+    if not staged <= set(ctx.packet.paths):
         return "unlisted_staged"
     return None
 
@@ -1006,10 +1547,9 @@ def _commit_candidate(ctx: Op) -> bool:
         "GIT_COMMITTER_NAME": name,
         "GIT_COMMITTER_EMAIL": email,
     }
-    # Hooks in the candidate run on the repository's environment: a ``uv run`` there would
-    # otherwise build ``<candidate>/.venv`` (``ignored_residue``).
     venv = ctx.repo.top / ".venv"
     if venv.is_dir():
+        # Hooks' ``uv run`` use the repository environment; never sync a candidate ``.venv``.
         env.update({"UV_PROJECT_ENVIRONMENT": str(venv), "UV_NO_SYNC": "1"})
     message = ctx.folder / "message.txt"
     if rp._read_bytes(message) != ctx.packet.message:
@@ -1376,6 +1916,871 @@ def _open_batch(
     )
 
 
+# -- the land publication, sync and blockers (MEU-785 AC-785.19, AC-785.21) ------------------
+
+
+def _claim_direction(
+    repo: rp.Repo, *, plan: str, session: str, uid: str, act: str, op: str
+) -> None:
+    """Spend the human direction ``uid`` on one act: once per message uuid (EA-58 (3)).
+
+    The claim ``ops/<plan>/<session>/human-<uid>/direction.json`` sits in the folder of the
+    commit route's op ``human-<uid>``, so one typed sentence authorizes at most one act across
+    ``commit_batch.py --human-directed`` and ``lanes.py land publish``. The same act and op
+    claim again (a rerun after a crash); any other act or op refuses ``direction_spent``. A
+    land also refuses a direction whose commit op folder holds anything but the claim (a
+    commit op spent before claims existed). The claim has no ``identity``, so the pending-op
+    readers and the ref guard never list it.
+
+    Raises:
+        rp.Refusal: ``direction_spent``, or a store lock refusal.
+    """
+    name = f"{HUMAN_OP_PREFIX}{uid}"
+    claim = {
+        "schema": DIRECTION_CLAIM_SCHEMA,
+        "message_uuid": uid,
+        "act": act,
+        "op": op,
+        "plan": plan,
+        "session": session,
+    }
+    with rp._locked(repo, session):
+        for path in sorted(repo.store.glob(f"ops/*/*/{name}/{DIRECTION_CLAIM_NAME}")):
+            data = rp._read_bytes(path)
+            try:
+                held = rp._load_json(data or b"")
+            except ValueError:
+                held = None
+            spent = cast(dict[str, Any], held) if isinstance(held, dict) else {}
+            if (spent.get("act"), spent.get("op")) != (act, op):
+                raise rp.Refusal(
+                    "direction_spent",
+                    f"{uid} already directed {spent.get('act')} {spent.get('op')} "
+                    f"({rp.display_path(path)})",
+                )
+        if act == LAND_ACT:
+            used = [
+                path
+                for path in sorted(repo.store.glob(f"ops/*/*/{name}/*"))
+                if path.name != DIRECTION_CLAIM_NAME
+            ]
+            if used:
+                raise rp.Refusal(
+                    "direction_spent",
+                    f"{uid} already directed a commit ({rp.display_path(used[0])})",
+                )
+        target = repo.store / "ops" / plan / session / name / DIRECTION_CLAIM_NAME
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            rp._write_atomic(target, rp._json_bytes(claim))
+
+
+def spend_direction(repo: rp.Repo, session: str, uid: str, plan: str, op: str) -> None:
+    """Spend the ``--human-directed`` direction ``uid`` on the land op ``op``, once.
+
+    ``lanes.py land publish`` calls this after ``human_direction`` and its own checks,
+    before the publication: the land and the commit route share one claim per message
+    uuid (``_claim_direction``), so a second use of the sentence refuses on either route.
+
+    Raises:
+        rp.Refusal: ``containment`` (an unsafe name) or ``direction_spent``.
+    """
+    for value in (session, uid, plan, op):
+        _check_name(value)
+    _claim_direction(repo, plan=plan, session=session, uid=uid, act=LAND_ACT, op=op)
+
+
+def store_land_message(ctx: LandOp, text: str) -> None:
+    """Keep the canonical form of the land's commit message beside its journal.
+
+    ``land publish`` commits C with these bytes (``_commit_candidate`` reads the same
+    ``message.txt``). The journal folder exists once the first land entry is written.
+
+    Raises:
+        rp.Refusal: ``message`` (NUL, surrogate or empty text).
+    """
+    data = canonical_message(text)
+    path = ctx.folder / LAND_MESSAGE_NAME
+    if rp._read_bytes(path) != data:
+        ctx.folder.mkdir(parents=True, exist_ok=True)
+        rp._write_atomic(path, data)
+
+
+def _lands(repo: rp.Repo) -> list[LandOp]:
+    """Every land op of the store, read only; a file that is not JSON is not a land."""
+    found: list[LandOp] = []
+    for path in sorted(repo.store.glob("ops/*/*/*/op.json")):
+        data = rp._read_bytes(path)
+        if data is None:
+            continue
+        try:
+            land = _parse_land(repo, path, data)
+        except Stopped:
+            continue
+        if land is not None:
+            found.append(land)
+    return found
+
+
+def _land_has(land: LandOp, phase: str, statuses: Sequence[str]) -> bool:
+    return any(
+        item["phase"] == phase and item["status"] in statuses for item in land.journal
+    )
+
+
+def _land_open(land: LandOp) -> bool:
+    """The land is between publication (``published`` started or done) and close."""
+    return _land_has(land, "published", ("started", "done")) and not _land_has(
+        land, "land:closed", ("done",)
+    )
+
+
+def land_blocker(repo: rp.Repo, op: str) -> rp.Refusal | None:
+    """Why another land blocks the publication of ``op`` (AC-785.19, AC-785.21), or None.
+
+    A land whose last entry is a refused ``land:sync`` blocks every publication
+    (``sync_pending:<op>``); any other land between publication and close is
+    ``land_busy:<op>``. A sync refusal wins over a busy land.
+    """
+    busy: rp.Refusal | None = None
+    for land in _lands(repo):
+        if land.op == op or not _land_open(land):
+            continue
+        last = land.journal[-1]
+        if last["phase"] == "land:sync" and str(last["status"]).startswith("refused:"):
+            return rp.Refusal(
+                f"sync_pending:{land.op}",
+                f"the main checkout sync of land {land.op} refused ({last['status']}); "
+                f"run lanes.py land recover --op {land.op} once the path is explained",
+            )
+        if busy is None:
+            busy = rp.Refusal(
+                f"land_busy:{land.op}",
+                f"land {land.op} is between publication and close; run lanes.py land "
+                f"recover --op {land.op}",
+            )
+    return busy
+
+
+def _check_sync_pending(repo: rp.Repo) -> None:
+    """A published land whose main checkout is not synced blocks this publication.
+
+    Raises:
+        rp.Refusal: ``sync_pending:<op>`` (AC-785.21).
+    """
+    for land in _lands(repo):
+        if _land_open(land) and not _land_has(land, "land:sync", ("done",)):
+            raise rp.Refusal(
+                f"sync_pending:{land.op}",
+                f"land {land.op} is published but the main checkout is not synced; "
+                f"run lanes.py land recover --op {land.op}",
+            )
+
+
+def _git_config(repo: rp.Repo, key: str) -> str | None:
+    """One git config value of the repository, or None when it is not set."""
+    proc = _run_git(repo.top, "config", "--get", key)
+    if proc.returncode != 0:
+        return None
+    value = proc.stdout.decode("utf-8", errors="replace").strip()
+    return value or None
+
+
+def _ssh_fingerprint(repo: rp.Repo, key: str) -> str:
+    """The ``SHA256:`` fingerprint of an ssh ``user.signingkey`` (a file or a literal key).
+
+    Raises:
+        rp.Refusal: ``signing_unconfigured`` when ``ssh-keygen`` gives no fingerprint.
+    """
+    literal = key[len("key::") :] if key.startswith("key::") else None
+    if literal is None and key.startswith("ssh-"):
+        literal = key
+    if literal is not None:
+        argv = ["ssh-keygen", "-l", "-E", "sha256", "-f", "-"]
+        data: bytes | None = literal.encode("utf-8")
+    else:
+        path = Path(key).expanduser()
+        if not path.is_absolute():
+            path = repo.top / path
+        public = path if path.name.endswith(".pub") else Path(f"{path}.pub")
+        argv = [
+            "ssh-keygen",
+            "-l",
+            "-E",
+            "sha256",
+            "-f",
+            str(public if public.is_file() else path),
+        ]
+        data = None
+    try:
+        proc = subprocess.run(  # noqa: S603 - fixed argv
+            argv, input=data, capture_output=True, check=False, timeout=60
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise rp.Refusal("signing_unconfigured", f"ssh-keygen: {exc}") from exc
+    out = proc.stdout.decode("utf-8", errors="replace").split()
+    token = next((part for part in out if part.startswith("SHA256:")), None)
+    if proc.returncode != 0 or token is None:
+        raise rp.Refusal(
+            "signing_unconfigured",
+            "gpg.format is ssh but ssh-keygen gives no fingerprint for user.signingkey",
+        )
+    return token
+
+
+def _signing_identity(repo: rp.Repo) -> tuple[tuple[str, str], str]:
+    """The author (``user.name``, ``user.email``) and signing fingerprint of a land's C.
+
+    The land has no packet, so C carries the main repository's configured identity and
+    key; ``_post_hook_check`` then checks C against them as it checks a packet's.
+
+    Raises:
+        rp.Refusal: ``signing_unconfigured`` naming each missing key.
+    """
+    name = _git_config(repo, "user.name")
+    email = _git_config(repo, "user.email")
+    key = _git_config(repo, "user.signingkey")
+    if name is None or email is None or key is None:
+        missing = [
+            label
+            for label, value in (
+                ("user.name", name),
+                ("user.email", email),
+                ("user.signingkey", key),
+            )
+            if value is None
+        ]
+        raise rp.Refusal("signing_unconfigured", ", ".join(missing))
+    if (_git_config(repo, "gpg.format") or "openpgp").lower() != "ssh":
+        return (name, email), key
+    return (name, email), _ssh_fingerprint(repo, key)
+
+
+@dataclass
+class _LandCandidate(Op):
+    """The commit_batch tree adapter for a land (AC-785.19): an ``Op`` fed by T, not a packet.
+
+    It journals into the land's own record (``record`` is the land journal), so the
+    ``published`` intent the ref guard reads is the land's. ``tree`` is tree(T) and
+    ``commit`` is the verified C; the candidate steps read them through these properties.
+    """
+
+    land_tree: str = ""
+    land_commit: str = ""
+
+    @property
+    def tree(self) -> str:
+        return self.land_tree
+
+    @property
+    def commit(self) -> str:
+        return self.land_commit
+
+
+def _names(cwd: Path, *args: str) -> set[str]:
+    """The NUL-separated path names that one ``git`` name listing prints."""
+    proc = _run_git(cwd, *args)
+    if proc.returncode != 0:
+        raise rp.GitError(
+            f"git {' '.join(args)} failed in {cwd}: "
+            + proc.stderr.decode("utf-8", errors="replace").strip()
+        )
+    return {
+        item.decode("utf-8", errors="surrogateescape")
+        for item in proc.stdout.split(b"\0")
+        if item
+    }
+
+
+def _land_context(
+    repo: rp.Repo, land: LandOp, *, act: str, reserved: str | None
+) -> _LandCandidate:
+    """The tree-adapter ``Op`` of a land: its packet, candidate path and journal record.
+
+    Raises:
+        rp.Refusal: ``message`` (no stored message) or ``signing_unconfigured``.
+    """
+    fields = land.fields()
+    parent = str(fields["P"])
+    integrated = str(fields["T"])
+    message = rp._read_bytes(land.folder / LAND_MESSAGE_NAME)
+    if not message:
+        raise rp.Refusal("message", f"land {land.op} has no stored commit message")
+    author, fingerprint = _signing_identity(repo)
+    tree = _git_ok(repo.top, "rev-parse", f"{integrated}^{{tree}}")
+    paths = _names(
+        repo.top, "diff-tree", "-r", "-z", "--no-renames", "--name-only", parent, tree
+    )
+    packet = Packet(
+        raw={},
+        plan=str(land.identity["plan"]),
+        branch=LAND_BRANCH,
+        parent=parent,
+        message=message,
+        author=author,
+        fingerprint=fingerprint,
+        files={},
+        deletes=(),
+        paths=tuple(sorted(paths)),
+        digest="",
+    )
+    return _LandCandidate(
+        repo=repo,
+        op=land.op,
+        run=str(land.identity["run_id"]),
+        act=act,
+        packet=packet,
+        parent=parent,
+        folder=land.folder,
+        candidate=Path(rp.display_path(_candidate_root(repo) / land.op)),
+        record=land.record,
+        reserved=reserved,
+        land_tree=tree,
+    )
+
+
+def land_publish(repo: rp.Repo, land: LandOp, *, act: str, reserved: str | None) -> str:
+    """Step 7 (AC-785.19): commit tree(T) on P in a candidate and publish it as C on main.
+
+    ``repo`` is the authority handle of the main repository. The steps are the commit
+    route's: ``_build_candidate`` (a detached worktree at P, index and files at T), the
+    pre-hook checks, ``git commit -S`` with the stored message, the post-hook checks
+    (``hook_drift`` when a hook changes the tree), then ``_step_published``: the intent
+    ``{repo, ref, ref_old, ref_new, op, candidate}`` in the land journal and the ref update
+    with expected old value P. ``reserved`` is the op of a reserved grant (re-verified at
+    publication), None for the human route. The candidate is removed afterwards.
+
+    Returns:
+        C, the published commit.
+
+    Raises:
+        rp.Refusal: ``message`` (no stored message), ``signing_unconfigured``,
+            ``candidate_foreign``, a check (``index_tree``, ``unstaged_drift``,
+            ``unlisted_staged``, ``commit``, ``hook_drift``, ``ignored_residue:<path>``,
+            ``parent``, ``identity``, ``signature``) or ``publish_refused``.
+        Stopped: ``ref_holds_candidate``.
+    """
+    ctx = _land_context(repo, land, act=act, reserved=reserved)
+    state = _candidate_state(ctx)
+    if state == "foreign":
+        raise rp.Refusal("candidate_foreign", rp.display_path(ctx.candidate))
+    if state == "owned":
+        _remove_candidate(ctx)
+    _build_candidate(ctx)
+    try:
+        check = _pre_hook_check(ctx)
+        if check is not None:
+            raise rp.Refusal(check, f"the land candidate of {land.op} before the hooks")
+        if not _commit_candidate(ctx):
+            raise rp.Refusal(
+                "commit", f"git commit failed in the land candidate of {land.op}"
+            )
+        head = _git_ok(ctx.candidate, "rev-parse", "HEAD")
+        check, _residue = _post_hook_check(ctx, head)
+        if check is not None:
+            raise rp.Refusal(check, f"the land candidate of {land.op} after the hooks")
+        ctx.land_commit = head
+        _step_published(ctx, resume=False)
+    finally:
+        _remove_candidate(ctx)
+    land.raw = rp._json_bytes(land.record)
+    return head
+
+
+def land_publish_again(repo: rp.Repo, land: LandOp, *, act: str) -> str:
+    """Recovery of step 7 (D:263-264): finish a publication whose record is at ``started``.
+
+    The journal's last entry is ``published:started`` with the intent ``{ref_old, ref_new}``.
+    The commit C of that intent must still be the commit of tree(T) on P; then
+    ``_step_published`` resumes: the reflog and the ref decide. ``main`` at C with ``P -> C``
+    in the reflog only journals ``done``; ``main`` at P with no ``P -> C`` publishes again with
+    expected old value P; any other state, or a reflog that cannot answer, is
+    ``publication_unclear``. The publication was authorized when it started, so no grant is
+    re-verified here. The candidate that the crash left is removed afterwards.
+
+    Returns:
+        C, the published commit.
+
+    Raises:
+        rp.Refusal: ``publication_unclear``, ``message``, ``signing_unconfigured`` or
+            ``publish_refused``.
+    """
+    ctx = _land_context(repo, land, act=act, reserved=None)
+    fields = land.fields()
+    commit = str(fields.get("ref_new", ""))
+    started = land.journal[-1] if land.journal else None
+    if (
+        started is None
+        or (started["phase"], started["status"]) != ("published", "started")
+        or fields.get("ref_old") != ctx.parent
+        or not OBJECT_ID_RE.fullmatch(commit)
+    ):
+        raise rp.Refusal(
+            "publication_unclear",
+            f"land {land.op} has no published:started intent of P to a commit",
+        )
+    proc = _run_git(
+        repo.top, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"
+    )
+    if (
+        proc.returncode != 0
+        or _git_ok(repo.top, "rev-parse", f"{commit}^{{tree}}") != ctx.land_tree
+        or _git_ok(repo.top, "rev-parse", f"{commit}^") != ctx.parent
+    ):
+        raise rp.Refusal(
+            "publication_unclear",
+            f"the commit {commit} of land {land.op} is not tree(T) on P",
+        )
+    ctx.land_commit = commit
+    try:
+        _step_published(ctx, resume=True)
+    except Stopped as exc:
+        raise rp.Refusal(
+            "publication_unclear",
+            f"land {land.op}: {exc}; main and the journal are unchanged",
+        ) from None
+    finally:
+        _remove_candidate(ctx)
+    land.raw = rp._json_bytes(land.record)
+    return commit
+
+
+#: A working file's physical identity: its device and its file index.
+FileId = tuple[int, int]
+
+
+def _file_id(full: Path) -> FileId | None:
+    """The physical identity of the file or symlink at ``full``, or None.
+
+    None when nothing is there, when it is a folder, when it has more than one link, or when
+    the filesystem gives no file index (``st_ino`` 0); an error of the stat is the same
+    answer, because None only ever leaves a name to its exact spelling. Two Git names are
+    one working file only when both have one identity (R5-F1): a filesystem that folds case
+    opens ``Widget.py`` and ``widget.py`` as one file, but ``strasse.py`` and ``straße.py``,
+    or a composed and a decomposed ``Café.py``, are two files although they fold to one
+    string.
+    """
+    try:
+        info = os.stat(full, follow_symlinks=False)
+    except OSError:
+        return None
+    if stat.S_ISDIR(info.st_mode) or info.st_ino == 0 or info.st_nlink != 1:
+        return None
+    return (info.st_dev, info.st_ino)
+
+
+def _work_ids(top: Path, paths: Sequence[str]) -> dict[FileId, list[str]]:
+    """The names of ``paths`` that each existing working file answers to (``_file_id``)."""
+    found: dict[FileId, list[str]] = {}
+    for path in paths:
+        ident = _file_id(top / path)
+        if ident is not None:
+            found.setdefault(ident, []).append(path)
+    return found
+
+
+def _alias_blobs(
+    repo: rp.Repo, parent: str, commit: str, ids: Mapping[FileId, list[str]]
+) -> dict[str, list[str | None]]:
+    """The P and C blob ids of the working file that a path shares with others of ``ids``.
+
+    Names of one physical file are separate index entries but one working file (R4-F1: P
+    has ``Widget.py``, C has ``widget.py``, and the filesystem folds case). That file is at
+    P when it holds the blob of the one name P has (absent when P has none), and at C
+    likewise. A name that shares no file, or a group with two names on one side, is left
+    out and keeps its own blobs; so does every name whose file is absent or distinct
+    (R5-F2: a composed ``Café.py`` and a decomposed ``café.py`` are two files).
+
+    Raises:
+        rp.GitError: a git read failed.
+    """
+    groups = [group for group in ids.values() if len(group) > 1]
+    if not groups:
+        return {}
+    shared = [path for group in groups for path in group]
+    sides = [_tree_entries(repo, side, shared) for side in (parent, commit)]
+    found: dict[str, list[str | None]] = {}
+    for group in groups:
+        present = [
+            [side[path][0]["oid"] for path in group if side[path]] for side in sides
+        ]
+        if any(len(names) > 1 for names in present):
+            continue
+        blobs: list[str | None] = [names[0] if names else None for names in present]
+        found.update((path, blobs) for path in group)
+    return found
+
+
+def _explained(
+    full: Path, rel: str, explained: frozenset[str], ids: Mapping[FileId, list[str]]
+) -> bool:
+    """Whether the working file ``full`` (at ``rel``) is the file of a classified path.
+
+    It is when ``rel`` is one of the ``explained`` paths, or when it is the same physical
+    file as one of them (``ids``); that path's own bytes are then checked at P and at C. A
+    name that only folds to a classified path's name is another file (R5-F1).
+    """
+    return rel in explained or _file_id(full) in ids
+
+
+def _is_dir_link(full: Path) -> bool:
+    """Whether ``full`` is a symlink or an NTFS junction (``Path.is_symlink`` misses one)."""
+    return os.path.islink(full) or os.path.isjunction(full)
+
+
+def _walk_error(top: Path, path: str, error: OSError) -> str:
+    """The folder that the walk of ``path`` could not list, relative to ``top``.
+
+    It is ``error.filename`` when that names a folder under ``top``, else ``path`` itself.
+    """
+    try:
+        return Path(os.fsdecode(error.filename)).relative_to(top).as_posix()
+    except (TypeError, ValueError):
+        return path
+
+
+def _stray_below(
+    top: Path,
+    path: str,
+    explained: frozenset[str],
+    ids: Mapping[FileId, list[str]],
+) -> str | None:
+    """The first entry under the folder ``path`` that is not the file of a classified path
+    (``_explained``), or None.
+
+    A folder whose every file is a classified path holds only tracked content at P or at
+    C, so the sync may replace it with a file or fill it (R3-F1). Any other file in it is
+    nobody's tracked content. A directory link (``_is_dir_link``) is never walked: a file
+    reached through it has the identity of its target, but the sync would remove it
+    through the link, so the link itself is the stray (EA-121). A folder that the walk
+    cannot list may hold anything, so it is the stray too (EA-121).
+    """
+    if _is_dir_link(top / path):
+        return path
+    errors: list[OSError] = []
+    for folder, dirs, names in os.walk(top / path, onerror=errors.append):
+        if errors:
+            break
+        here = Path(folder)
+        links = [name for name in dirs if _is_dir_link(here / name)]
+        dirs[:] = sorted(name for name in dirs if name not in links)
+        for name in sorted(names + links):
+            full = here / name
+            rel = full.relative_to(top).as_posix()
+            if not _explained(full, rel, explained, ids):
+                return rel
+    if errors:
+        return _walk_error(top, path, errors[0])
+    return None
+
+
+def _stdin_path_ok(path: str) -> bool:
+    """Whether ``hash-object --stdin-paths`` reads ``path`` as it is.
+
+    It C-unquotes a line that starts with a double quote and splits the input at line
+    ends, so such a name goes on the command line instead (EA-121).
+    """
+    return not path.startswith('"') and "\n" not in path and "\r" not in path
+
+
+def _link_oid(top: Path, path: str) -> str:
+    """The blob id of the symlink at ``path`` as Git stores it: the blob of its link text.
+
+    Git for Windows writes the text with ``/`` separators. A link that cannot be read
+    gets the empty id, which matches no blob (EA-121).
+
+    Raises:
+        rp.GitError: ``hash-object`` failed.
+    """
+    try:
+        text = os.readlink(top / path)
+    except OSError:
+        return ""
+    if os.name == "nt":
+        text = text.replace("\\", "/")
+    return _git_ok(top, "hash-object", "--stdin", data=os.fsencode(text))
+
+
+def _work_oids(
+    top: Path, paths: Sequence[str], ids: Mapping[FileId, list[str]]
+) -> dict[str, str | None]:
+    """The blob id each path's working file would have (clean filters on); None when absent.
+
+    A folder at a path counts as absent when every file in it is the file of one of
+    ``paths`` (``_stray_below``); any other folder gets the empty id, which matches no blob.
+    A symlink gets the blob of its link text (``_link_oid``), never its target's (EA-121).
+
+    Raises:
+        rp.GitError: ``hash-object`` failed.
+    """
+    explained = frozenset(paths)
+    found: dict[str, str | None] = {}
+    files: list[str] = []
+    for path in paths:
+        full = top / path
+        if full.is_symlink():
+            found[path] = _link_oid(top, path)
+        elif full.is_file() and not _stdin_path_ok(path):
+            found[path] = _git_ok(top, "hash-object", "--", path)
+        elif full.is_file():
+            files.append(path)
+        elif full.is_dir():
+            stray = _stray_below(top, path, explained, ids)
+            found[path] = None if stray is None else ""
+        else:
+            found[path] = "" if full.exists() else None
+    for start in range(0, len(files), SYNC_CHUNK):
+        chunk = files[start : start + SYNC_CHUNK]
+        out = _git_ok(
+            top, "hash-object", "--stdin-paths", data=("\n".join(chunk) + "\n").encode()
+        )
+        found.update(zip(chunk, out.splitlines(), strict=True))
+    return found
+
+
+def _obstruction(
+    top: Path,
+    path: str,
+    explained: frozenset[str],
+    ids: Mapping[FileId, list[str]],
+) -> str | None:
+    """The untracked file or symlink that sits where ``path``'s folders go, or None.
+
+    Only for a path whose working file is absent. An ancestor that is one of the classified
+    ``explained`` paths, or the same physical file as one (``_explained``), is at P or at C
+    already. Any other non-folder ancestor is nobody's tracked content, and ``read-tree
+    -u`` would replace it (R1-F1). A directory link at an ancestor (``_is_dir_link``) is
+    one too: ``read-tree -u`` would write through it (EA-121).
+    """
+    for ancestor in PurePosixPath(path).parents:
+        name = ancestor.as_posix()
+        if name == "." or name in explained:
+            return None
+        full = top / name
+        if _is_dir_link(full) or (full.exists() and not full.is_dir()):
+            return None if _explained(full, name, explained, ids) else name
+        if full.is_dir():
+            return None
+    return None
+
+
+def _sync_unexplained(
+    repo: rp.Repo, parent: str, commit: str, paths: Sequence[str]
+) -> str | None:
+    """The first path whose index entry or working file is at neither P nor C, or None.
+
+    An absent working file also needs its folders free: an untracked file at one of them
+    is returned as that folder's path (``_obstruction``). A folder at a path that holds a
+    file of no classified path is returned as that file (``_stray_below``, R3-F1, R5-F1).
+    A working file that several names share is compared with its blobs at P and at C
+    (``_alias_blobs``, R4-F1); every other name is its own file (R5-F2).
+
+    Raises:
+        rp.GitError: a git read failed.
+    """
+    ids = _work_ids(repo.top, paths)
+    work = _work_oids(repo.top, paths, ids)
+    explained = frozenset(paths)
+    aliases = _alias_blobs(repo, parent, commit, ids)
+    for start in range(0, len(paths), SYNC_CHUNK):
+        chunk = list(paths[start : start + SYNC_CHUNK])
+        index = _index_entries(repo, chunk)
+        at_p = _tree_entries(repo, parent, chunk)
+        at_c = _tree_entries(repo, commit, chunk)
+        for path in chunk:
+            sides = [
+                [(item["mode"], item["oid"]) for item in side[path]]
+                for side in (at_p, at_c)
+            ]
+            staged = [(item["mode"], item["oid"]) for item in index[path]]
+            if any(item["stage"] != 0 for item in index[path]) or staged not in sides:
+                return path
+            blobs = aliases.get(path, [side[0][1] if side else None for side in sides])
+            if work[path] not in blobs:
+                if work[path] == "" and (Path(repo.top) / path).is_dir():
+                    return _stray_below(Path(repo.top), path, explained, ids) or path
+                return path
+            if work[path] is None:
+                blocked = _obstruction(Path(repo.top), path, explained, ids)
+                if blocked is not None:
+                    return blocked
+    return None
+
+
+def _without_live_fields(data: bytes) -> bytes | None:
+    """task.md bytes without the ``LIVE_TASK_FIELDS`` lines, or None without a frontmatter."""
+    try:
+        text = data.decode("utf-8").replace("\r\n", "\n")
+    except UnicodeDecodeError:
+        return None
+    end = text.find("\n---\n", 3)
+    if not text.startswith("---\n") or end < 0:
+        return None
+    kept: list[str] = []
+    listing = False
+    for line in text[4:end].split("\n"):
+        if line.startswith(LIVE_TASK_FIELDS):
+            listing = line.startswith("bound_sessions:")
+            continue
+        if listing and (line.startswith("- ") or line.startswith("  - ")):
+            continue
+        listing = False
+        kept.append(line)
+    return ("\n".join(kept) + text[end:]).encode("utf-8")
+
+
+def live_task_dirt(repo: rp.Repo, land: LandOp, target: str) -> str | None:
+    """The land plan's ``task.md`` when the main checkout's change to it is run_parameters' own.
+
+    That is: P and ``target`` hold the same blob of it, its index entry is P's (stage 0),
+    and its working bytes differ from that blob only in the ``LIVE_TASK_FIELDS`` lines. Any
+    other change stays dirt (``main_dirty:<path>`` at step 7, ``sync_unexplained:<path>``
+    at step 8). None when there is no such change.
+
+    Raises:
+        rp.GitError: a git read failed.
+    """
+    rel = f"{PLANS_DIR}/{land.identity['plan']}/task.md"
+    parent = str(land.fields()["P"])
+    at_p = _tree_entries(repo, parent, [rel])[rel]
+    if not at_p or at_p != _tree_entries(repo, target, [rel])[rel]:
+        return None
+    staged = _index_entries(repo, [rel])[rel]
+    if any(int(item["stage"]) != 0 for item in staged) or [
+        (item["mode"], item["oid"]) for item in staged
+    ] != [(item["mode"], item["oid"]) for item in at_p]:
+        return None
+    blob = _run_git(repo.top, "cat-file", "blob", str(at_p[0]["oid"]))
+    if blob.returncode != 0:
+        raise rp.GitError(blob.stderr.decode("utf-8", errors="replace").strip())
+    work = rp._read_bytes(Path(repo.top) / rel)
+    if work is None or work == blob.stdout:
+        return None
+    base = _without_live_fields(blob.stdout)
+    if base is None or _without_live_fields(work) != base:
+        return None
+    return rel
+
+
+def land_sync(repo: rp.Repo, land: LandOp) -> None:
+    """Step 8 (AC-785.21): the main checkout's index and tracked files from P to C.
+
+    Its own journal phase ``land:sync``. Each path of P..C, of the index against C and of
+    the files against the index is classified: its index entry and its working file are each
+    at P or at C, or the path is unexplained (``sync_unexplained:<path>``, journaled as a
+    refused sync; the land stops and ``land_blocker`` / ``_check_sync_pending`` block every
+    other publication). A path whose working file is absent is unexplained also when an
+    untracked file sits at one of its folders (R1-F1). A folder at a path (a file and a
+    folder swapped between P and C) counts as an absent file when every file in it is a
+    classified path; otherwise its first other file is unexplained (R3-F1), and so is a
+    directory link in it or a folder in it that cannot be listed (EA-121). A file is a
+    classified path's file only by its exact name or by its physical identity, never by a
+    folded name (R5-F1). Names that the filesystem opens as one working file (a case-only
+    rename) are compared as that one file, at P's blob or at C's (R4-F1); every other name
+    is its own file (R5-F2). An index and working files all at
+    P take ``git read-tree -m -u P C``; any other explained state (an index entry or a
+    working file already at C: the step crashed part way, R2-F1) takes ``git read-tree
+    --reset -u C`` (every path and every folder it needs is explained, so nothing else is
+    lost). A failed
+    read-tree is never retried with ``--reset``: it is journaled as a refused sync
+    (``sync_refused``, git's message kept) and the main checkout stays as git left it
+    (R1-F1). The step is done only when ``diff-index --cached C`` and ``diff-files``
+    are both empty. ``_reconcile_index`` is never used for a land. The land plan's own
+    task.md, changed only in run_parameters' live fields (``live_task_dirt``), keeps
+    those bytes and is left out of both checks (EA-60).
+
+    Raises:
+        rp.Refusal: ``sync_unexplained:<path>``, ``sync_refused`` (read-tree failed),
+            ``sync_incomplete:<path>`` or ``sync_unclear`` (no published C in the journal).
+        rp.GitError: a git step failed.
+    """
+    fields = land.fields()
+    parent = str(fields["P"])
+    commit = str(fields.get("ref_new", ""))
+    if not _land_has(land, "published", ("done",)) or not OBJECT_ID_RE.fullmatch(
+        commit
+    ):
+        raise rp.Refusal("sync_unclear", f"land {land.op} has no published C")
+    last = land.journal[-1]
+    if (last["phase"], last["status"]) != ("land:sync", "started"):
+        land_start(land, "land:sync")
+    top = repo.top
+    _run_git(top, "update-index", "-q", "--refresh")
+    changed = (
+        _names(
+            top, "diff-tree", "-r", "-z", "--no-renames", "--name-only", parent, commit
+        )
+        | _names(
+            top, "diff-index", "--cached", "-z", "--no-renames", "--name-only", commit
+        )
+        | _names(top, "diff-files", "-z", "--name-only")
+    )
+    live = live_task_dirt(repo, land, commit)
+    live_bytes = rp._read_bytes(Path(top) / live) if live is not None else None
+    paths = sorted(changed - {live})
+    stray = _sync_unexplained(repo, parent, commit, paths)
+    if stray is not None:
+        _land_entry(land, "land:sync", "refused:sync_unexplained", {})
+        raise rp.Refusal(
+            f"sync_unexplained:{stray}",
+            f"{stray} in the main checkout is at neither P nor C; the land stops and "
+            "every publication waits until it is explained",
+        )
+    index = _index_entries(repo, paths) if paths else {}
+    at_p = _tree_entries(repo, parent, paths) if paths else {}
+    ids = _work_ids(top, paths) if paths else {}
+    work = _work_oids(top, paths, ids) if paths else {}
+    aliases = _alias_blobs(repo, parent, commit, ids) if paths else {}
+    if all(
+        index[path] == at_p[path]
+        and work[path]
+        == (
+            aliases[path][0]
+            if path in aliases
+            else (at_p[path][0]["oid"] if at_p[path] else None)
+        )
+        for path in paths
+    ):
+        proc = _run_git(top, "read-tree", "-m", "-u", parent, commit)
+    else:
+        proc = _run_git(top, "read-tree", "--reset", "-u", commit)
+    if proc.returncode != 0:
+        _land_entry(land, "land:sync", "refused:sync_refused", {})
+        raise rp.Refusal(
+            "sync_refused",
+            "git read-tree refused to move the main checkout to C: "
+            + proc.stderr.decode("utf-8", errors="replace").strip(),
+        )
+    if live is not None and live_bytes is not None:
+        # P and C hold the same blob of it, so a --reset can only have dropped the
+        # live fields: write back the bytes run_parameters left there.
+        if rp._read_bytes(Path(top) / live) != live_bytes:
+            rp._write_durable(Path(top) / live, live_bytes)
+    _run_git(top, "update-index", "-q", "--refresh")
+    left = sorted(
+        (
+            _names(
+                top,
+                "diff-index",
+                "--cached",
+                "-z",
+                "--no-renames",
+                "--name-only",
+                commit,
+            )
+            | _names(top, "diff-files", "-z", "--name-only")
+        )
+        - {live_task_dirt(repo, land, commit)}
+    )
+    if left:
+        _land_entry(land, "land:sync", "refused:sync_incomplete", {})
+        raise rp.Refusal(
+            f"sync_incomplete:{left[0]}",
+            f"after read-tree the main checkout still differs from C at {len(left)} paths",
+        )
+    land_finish(land, "land:sync")
+
+
 def _run_packets(
     repo: rp.Repo,
     *,
@@ -1391,8 +2796,19 @@ def _run_packets(
     """Drive one op, or each sub-op ``<op>/<n>`` of a batch on the previous sub-op's commit.
 
     The batch record is written once the first sub-op opens, before any sub-op is driven.
+    An op id spent as one form (one packet, or a batch) refuses the other: ``packet_mismatch``.
+    A batch is spent from its first sub-op's folder ``<op>/1``, which a crash can leave
+    before ``batch.json`` exists (R4-F2).
     """
     root = _candidate_root(repo)
+    folder = repo.store / "ops" / packets[0].plan / run / op
+    spent = (
+        (folder / "op.json").exists()
+        if batch
+        else (folder / "batch.json").exists() or (folder / "1").exists()
+    )
+    if spent:
+        raise rp.Refusal("packet_mismatch", op)
     if not batch:
         packet = packets[0]
         ctx = _open_op(
@@ -1455,9 +2871,9 @@ def _grant_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
     _check_name(run)
     phase = cast(str, args.phase)
     act = ACT_FOR_PHASE[phase]
-    packets, batch = _read_input(Path(cast(str, args.packet)), phase)
+    packets, batch = _read_input(Path(cast(str, args.packet)), phase == "exec")
     _candidate_root(repo)
-    verified = _reserved(repo, packets[0].plan, act, op)
+    verified = _reserved(repo, packets[0].plan, act, op, packets[0].branch)
     return _run_packets(
         repo,
         op=op,
@@ -1472,12 +2888,12 @@ def _grant_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
 
 
 def _human_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
-    """``--human-directed``: a typed human message that directs this commit (D-34)."""
+    """``--human-directed``: a typed human message that directs this commit or batch (D-34)."""
     session = cast(str, args.session)
     uid = cast(str, args.message_uuid)
     _check_name(session)
     _check_name(uid)
-    packets, _batch = _read_input(Path(cast(str, args.packet)), None)
+    packets, batch = _read_input(Path(cast(str, args.packet)), True)
     _candidate_root(repo)
     _raw, text = rp._human_record(repo, session, uid)
     consent = _consent(repo, session, uid, text, packets[0])
@@ -1486,13 +2902,21 @@ def _human_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
             if not (repo.store / "store.json").exists():
                 rp._bootstrap(repo)
         repo.refresh()
+    _claim_direction(
+        repo,
+        plan=packets[0].plan,
+        session=session,
+        uid=uid,
+        act=HUMAN_ACT,
+        op=f"{HUMAN_OP_PREFIX}{uid}",
+    )
     return _run_packets(
         repo,
-        op=f"human-{uid}",
+        op=f"{HUMAN_OP_PREFIX}{uid}",
         run=session,
         act=HUMAN_ACT,
         packets=packets,
-        batch=False,
+        batch=batch,
         reserved=None,
         verified=None,
         consent=consent,
@@ -1522,6 +2946,7 @@ def _granted_op(repo: rp.Repo) -> Op:
     packet = _parse_packet(record.get("packet"))
     if packet.digest != identity.get("packet_digest") or packet.plan != plan:
         raise rp.Refusal("packet_mismatch", "op_packet")
+    rp._check_branch(verified.reference.auth, packet.branch)
     ctx = Op(
         repo=repo,
         op=grant,
@@ -1707,6 +3132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     handler = _route(parser, args)
     try:
         repo = rp._open_repo(Path(cast(str, args.repo)))
+        _check_sync_pending(repo)
         code, out = handler(repo, args)
     except rp.Refusal as exc:
         rp._log("commit_refused", reason=exc.reason, detail=exc.detail)

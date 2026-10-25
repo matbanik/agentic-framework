@@ -419,6 +419,8 @@ Platform boundary:
 |---|---|---|
 | Lane cards (`lanes.py`) and the lease (`os_lease.py`) | yes | yes |
 | `main` ref guard (`ref_guard.py`) | yes, where `tools/commit_batch.py` is the publish route | not installed: no governed publish route |
+| Lane commits, `gate run` and `deps` (`lanes.py`, stage 2) | yes | yes |
+| The governed land (`lanes.py land prepare`, `publish`, `recover`, stage 2) | yes | refuses `land_unsupported_platform` |
 
 On macOS and Linux the publish route is `agent-commit.sh`. It commits on `main` directly and
 cannot name the commit in advance, so `python tools/ref_guard.py install` prints
@@ -432,6 +434,46 @@ To install the guard on Windows (git 2.46 or later, the `files` ref backend), ru
 `maintenance.pack-refs.enabled` to `false`. `python tools/ref_guard.py uninstall` restores the
 hook and both values. The one human escape is `{{PROJECT_NAME_UPPER}}_REF_GUARD=off` in the
 environment of one git command; an agent never sets it.
+
+### Lane branches and the governed land (stage 2)
+
+Stage 2 gives each lane its own branch and one governed route to `main`:
+
+- `python tools/executor_worktree.py create <slug>` makes the lane worktree at
+  `{{PROJECT_ROOT}}-wt/<slug>` on its own branch `lane/<slug>`.
+- The lane commits only through `python tools/lanes.py commit --worktree <path> --message-file <file>`
+  (D-1, `git-workflow/SKILL.md` §Lane Commits). The session comes from
+  `{{PROJECT_NAME_UPPER}}_SESSION`.
+- The lane reaches `main` through `tools/lanes.py land prepare` (rebase onto pinned `main` in a
+  disposable candidate, the handoff's `Integration requests`, the gate), the reviewer verdict
+  (`land prepare --op <id> --verdict <file>`), then `tools/lanes.py land publish` (one `main`
+  commit through `tools/commit_batch.py`, under a verified grant or the human's typed
+  direction; it never pushes). After `land_closed`, `tools/lanes.py release --worktree <path> --reset`
+  moves the lane branch to the landed commit, then `executor_worktree.py remove` removes the
+  worktree (`execution-session.md` §4, `TASK-TEMPLATE.md` H2-3c).
+- Every gate in a lane runs through `python tools/lanes.py gate run --worktree <path> -- <argv...>`,
+  your PROFILE D6 gate included (`commands.md`). The adapter registers the gate in the lane card
+  and exits with the child's code. Before a dependency change, `tools/lanes.py deps begin` drains
+  every registered gate and then holds the lanes exclusive until `deps end`; a gate started
+  meanwhile refuses `deps_pending`. On Windows a kill-on-close Job Object takes the gate's
+  child down with the adapter; on POSIX an orphaned child keeps its entry, so `deps begin`
+  waits for it.
+
+What you supply:
+
+- `tools/validate_codebase.py`, the land gate. Step 5 of `land prepare` runs
+  `python tools/validate_codebase.py --scope meu --files <paths>` in the candidate and shows the
+  result to the reviewer (`pass` or `fail:<exit code>`). The package does not ship it; without
+  it every land reports a failed gate. Wrap your D6 gate in it.
+- The `junction_files` list in `.agent/credits/worktree.json` (above): the integrator applies
+  the `Integration requests` to those files only.
+
+Platform boundary: the governed land (`tools/lanes.py land prepare`, `land publish` and
+`land recover`) is Windows-only in stage 2, because the main-tree lease is an `msvcrt`
+byte-range lock. On macOS and Linux every `land` command refuses
+`land_unsupported_platform` ("the governed land is Windows-only in stage 2 …; this platform
+is <platform>. Nothing was written.") and exits 1. `commit`, `gate run` and `deps` run on
+every platform. A POSIX land comes with a POSIX main-tree lease and publish route.
 
 ---
 

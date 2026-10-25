@@ -1,0 +1,55 @@
+# Known Issues SSOT — managed by tools/issue_triage.py
+version: 1
+issues:
+- id: LANE-FX-ALPHA
+  title: Fixture issue alpha (open)
+  severity: medium
+  component: core
+  status: open
+  discovered: '2026-10-01'
+  root_cause: A fixture root cause.
+  blast_radius: The lane fixture only.
+- id: LANE-FX-BRAVO
+  title: Fixture issue bravo (resolved)
+  severity: low
+  component: infrastructure
+  status: resolved
+  discovered: '2026-10-02'
+  root_cause: A fixture root cause.
+  blast_radius: The lane fixture only.
+  resolution: Fixed in the fixture.
+  resolved: '2026-10-03'
+- id: LANE-FX-CHARLIE
+  title: Fixture issue charlie (open)
+  severity: high
+  component: api
+  status: open
+  discovered: '2026-10-04'
+  root_cause: A fixture root cause.
+  blast_radius: The lane fixture only.
+- id: LANE-FX-DELTA
+  title: Fixture issue delta (mitigated)
+  severity: low
+  component: ui
+  status: mitigated
+  discovered: '2026-10-05'
+  root_cause: A fixture root cause.
+  blast_radius: The lane fixture only.
+- id: LANE-FX-ECHO
+  title: Fixture issue echo (open)
+  severity: low
+  component: mcp-server
+  status: open
+  discovered: '2026-10-06'
+  root_cause: A fixture root cause.
+  blast_radius: The lane fixture only.
+- id: LANE-FX-FOXTROT
+  title: Fixture issue foxtrot (resolved)
+  severity: medium
+  component: core
+  status: resolved
+  discovered: '2026-10-07'
+  root_cause: A fixture root cause.
+  blast_radius: The lane fixture only.
+  resolution: Fixed in the fixture.
+  resolved: '2026-10-08'

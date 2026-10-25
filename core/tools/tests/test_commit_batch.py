@@ -670,7 +670,7 @@ def test_candidate_hooks_run_on_the_repository_environment(tmp_path: Path) -> No
     """AC-C.2: hooks in the candidate use the repository's ``.venv`` and never sync one there.
 
     A hook's ``uv run`` in the candidate otherwise builds ``<candidate>/.venv``, which fails
-    ``ignored_residue:.venv/.gitignore``.
+    ``ignored_residue:.venv/.gitignore`` (2026-10-21 first batch).
     """
     rig = _rig(tmp_path)
     (rig.repo / ".venv").mkdir()
@@ -1066,7 +1066,11 @@ def test_vec_v3_018_directing_messages_commit_without_a_grant(tmp_path: Path) ->
 def test_vec_v3_019_non_directing_messages_refuse_before_any_mutation(
     tmp_path: Path,
 ) -> None:
-    """AC-C.6: negation, question, condition, unrelated, other scope → ``no_commit_direction``."""
+    """AC-C.6: negation, question, condition, unrelated, other scope → ``no_commit_direction``.
+
+    A request put as a question ("can you commit?") directs a commit since 2026-10-21
+    (Human-approved: the user's direction); a question that is not a request still refuses.
+    """
     rig = _rig(tmp_path)
     rig.bind()
     packet = rig.packet()
@@ -1074,7 +1078,11 @@ def test_vec_v3_019_non_directing_messages_refuse_before_any_mutation(
     for text in (
         "Do not commit anything",
         "please don't commit",
-        "can you commit?",
+        "should I commit?",
+        "do you want me to commit?",
+        "can you not commit?",
+        "can you commit if tests pass?",
+        "why did you commit?",
         "if tests pass, commit",
         "looks good",
         "commit it on feature-x",
@@ -1089,10 +1097,34 @@ def test_vec_v3_019_non_directing_messages_refuse_before_any_mutation(
     assert _snapshot(rig) == before
 
 
+def test_request_questions_direct_a_commit(tmp_path: Path) -> None:
+    """AC-C.6 (Human-approved 2026-10-21): "can/could/would/will you commit ...?" and
+    "let's commit" direct a commit, in the same scope as the plain form."""
+    rig = _rig(tmp_path)
+    rig.bind()
+    texts = [
+        "can you commit now ?>",
+        "Could you please commit it?",
+        "would you go ahead and commit the fixture-plan plan on main?",
+        "let's commit",
+    ]
+    for n, text in enumerate(texts, 1):
+        parent = rig.ref()
+        uid = rig.fx.add_human(text)
+        out = _reconciled(rig.human(uid, rig.packet(files={f"ask-{n}.txt": b"ask\n"})))
+        assert rig.parents(out["commit"]) == [parent] and rig.ref() == out["commit"]
+        consent = _evidence(rig, f"human-{uid}", "prepared", run=rig.fx.session)[
+            "consent"
+        ]
+        assert consent["message_uuid"] == uid
+        assert consent["scope"]["plan"] == rig.plan
+        assert str(consent["clause"]).lower() in text.lower() and consent["clause"]
+
+
 def test_push_qualifiers_and_to_phrases_keep_the_direction(tmp_path: Path) -> None:
-    """AC-C.6: a phrase that only rules out a push negates nothing ("commit to land the five
-    ... commits on main, with no push"), and "to <word>" scopes a branch only when the word
-    names an existing branch."""
+    """AC-C.6 (Human-approved 2026-10-22, the user's direction "commit to land the five ...
+    commits on main, with no push"): a phrase that only rules out a push negates nothing, and
+    "to <word>" scopes a branch only when the word names an existing branch."""
     rig = _rig(tmp_path)
     rig.bind()
     texts = [
@@ -1100,6 +1132,7 @@ def test_push_qualifiers_and_to_phrases_keep_the_direction(tmp_path: Path) -> No
         "commit it but do not push",
         "commit it without pushing",
         "commit it to main, don't push",
+        "commit it. No push.",
     ]
     for n, text in enumerate(texts, 1):
         parent = rig.ref()
@@ -1124,6 +1157,200 @@ def test_push_qualifiers_and_to_phrases_keep_the_direction(tmp_path: Path) -> No
         uid = rig.fx.add_human(text)
         _refused(rig.human(uid, packet), "no_commit_direction")
         assert _snapshot(rig) == before, text
+
+
+def test_one_direction_commits_a_whole_batch(tmp_path: Path) -> None:
+    """AC-C.6 (Human-approved 2026-10-21): one directing message commits every packet of a
+    ``commit-batch/1``, each sub-op ``human-<uuid>/<n>`` chained on the previous commit."""
+    rig = _rig(tmp_path)
+    rig.bind()
+    parent = rig.ref()
+    subjects = [
+        "test: specify the change",
+        "feat: add the change",
+        "docs(handoff): record the change",
+    ]
+    packets = [
+        rig.packet(
+            files={f"hb-{n}.txt": f"{n}\n".encode()},
+            message=f"{subject}\n",
+            parent=parent,
+        )
+        for n, subject in enumerate(subjects, 1)
+    ]
+    uid = rig.fx.add_human("commit")
+    out = _reconciled(rig.human(uid, rig.batch(packets)))
+    commits = out["commits"]
+    assert out["op"] == f"human-{uid}"
+    assert len(commits) == 3 and out["commit"] == commits[-1] == rig.ref()
+    for n, (base, commit) in enumerate(zip([parent, *commits], commits), 1):
+        assert rig.parents(commit) == [base]
+        assert rig.message_bytes(commit) == f"{subjects[n - 1]}\n".encode()
+        sub = f"human-{uid}/{n}"
+        assert rig.journal(sub, run=rig.fx.session)[-1] == ("reconciled", "done")
+        consent = _evidence(rig, sub, "prepared", run=rig.fx.session)["consent"]
+        assert consent["message_uuid"] == uid
+    _reconciled(rig.human(uid, rig.batch(packets)))
+    assert rig.ref() == commits[-1]
+
+
+def test_each_batch_candidate_sits_directly_under_the_candidate_root(
+    tmp_path: Path,
+) -> None:
+    """AC-C.6: a batch sub-op's candidate is a child of the candidate root, as one packet's is.
+
+    The repository hooks reach the framework as ``../.agent`` from the candidate, so a sub-op
+    candidate nested at ``<root>/<op>/<n>`` fails the model slug hook (2026-10-21 first batch).
+    """
+    rig = _rig(tmp_path)
+    rig.bind()
+    parent = rig.ref()
+    packets = [
+        rig.packet(
+            files={f"cd-{n}.txt": f"{n}\n".encode()},
+            message=f"test: {n}\n",
+            parent=parent,
+        )
+        for n in (1, 2)
+    ]
+    uid = rig.fx.add_human("commit")
+    _reconciled(rig.human(uid, rig.batch(packets)))
+    root = rig.candidate_root.resolve()
+    for n in (1, 2):
+        candidate = rig.candidate_path(f"human-{uid}/{n}", run=rig.fx.session)
+        assert candidate.resolve().parent == root, candidate
+
+
+def test_a_spent_direction_never_switches_between_one_packet_and_a_batch(
+    tmp_path: Path,
+) -> None:
+    """AC-C.6: a message uuid spent on a batch refuses one packet, and the reverse."""
+    rig = _rig(tmp_path)
+    rig.bind()
+    parent = rig.ref()
+    packets = [
+        rig.packet(files={"sw-1.txt": b"1\n"}, message="test: one\n", parent=parent),
+        rig.packet(files={"sw-2.txt": b"2\n"}, message="feat: two\n", parent=parent),
+    ]
+    uid = rig.fx.add_human("commit it")
+    _reconciled(rig.human(uid, rig.batch(packets)))
+    tip = rig.ref()
+    _refused(rig.human(uid, rig.packet(files={"sw-3.txt": b"3\n"})), "packet_mismatch")
+    assert rig.ref() == tip
+    single = rig.fx.add_human("commit it")
+    _reconciled(rig.human(single, rig.packet(files={"sw-4.txt": b"4\n"})))
+    tip = rig.ref()
+    again = [
+        rig.packet(files={"sw-5.txt": b"5\n"}, message="test: five\n", parent=tip),
+        rig.packet(files={"sw-6.txt": b"6\n"}, message="feat: six\n", parent=tip),
+    ]
+    _refused(rig.human(single, rig.batch(again)), "packet_mismatch")
+    assert rig.ref() == tip
+
+
+def test_a_request_question_the_message_withdraws_or_qualifies_refuses(
+    tmp_path: Path,
+) -> None:
+    """AC-C.6 (R4-F1): a request question directs only when the message as a whole does.
+
+    A withdrawal, a condition, an alternative, another question or a lead-in that reports the
+    question refuses before any mutation; a scoping sentence such as "Do not push." keeps it.
+    """
+    rig = _rig(tmp_path)
+    rig.bind()
+    packet = rig.packet()
+    before = _snapshot(rig)
+    for text in (
+        "Can you commit? Please do not commit yet; I am only asking whether it is possible.",
+        "The question I asked earlier was:\ncan you commit?\nPlease explain why you refused it.",
+        "Can you commit or should I review the changes first?",
+        "Can you commit? Only if the tests pass.",
+        "Can you commit? No, wait.",
+        "Can you commit? Why did the last one fail?",
+        '"can you commit?"',
+        "Commit. No, wait.",
+        "Commit it. Hold on until the tests pass.",
+    ):
+        uid = rig.fx.add_human(text)
+        _refused(rig.human(uid, packet), "no_commit_direction")
+        assert _snapshot(rig) == before, text
+    parent = rig.ref()
+    uid = rig.fx.add_human("Can you commit? Do not push.")
+    out = _reconciled(rig.human(uid, rig.packet(files={"kept.txt": b"kept\n"})))
+    assert rig.parents(out["commit"]) == [parent] and rig.ref() == out["commit"]
+
+
+def test_a_batch_that_crashed_at_its_first_write_never_becomes_one_packet(
+    tmp_path: Path,
+) -> None:
+    """AC-C.1, AC-C.6 (R4-F2): a batch stopped at its first journal write keeps its form.
+
+    The same message refuses a single packet without mutation, and the original batch then
+    resumes to its full parent chain.
+    """
+    rig = _rig(tmp_path)
+    rig.bind()
+    parent = rig.ref()
+    packets = [
+        rig.packet(files={"cr-1.txt": b"1\n"}, message="test: one\n", parent=parent),
+        rig.packet(files={"cr-2.txt": b"2\n"}, message="feat: two\n", parent=parent),
+    ]
+    uid = rig.fx.add_human("commit")
+    res = rig.drive(
+        "--human-directed",
+        "--session",
+        rig.fx.session,
+        "--message-uuid",
+        uid,
+        "--packet",
+        str(rig.write_packet(rig.batch(packets))),
+        env={b3.CRASH: "commit:prepared:started"},
+    )
+    assert res[0] == b3.CRASH_EXIT, res
+    assert rig.ref() == parent
+    _refused(rig.human(uid, rig.packet(files={"cr-3.txt": b"3\n"})), "packet_mismatch")
+    assert rig.ref() == parent
+    out = _reconciled(rig.human(uid, rig.batch(packets)))
+    commits = out["commits"]
+    assert len(commits) == 2 and rig.ref() == commits[-1]
+    assert rig.parents(commits[0]) == [parent]
+    assert rig.parents(commits[1]) == [commits[0]]
+
+
+def test_an_op_spent_as_one_packet_refuses_a_batch(tmp_path: Path) -> None:
+    """AC-C.6, AC-785.34 (R4 closure): an op spent as one packet keeps its form.
+
+    The reverse of the R4-F2 batch crash: one packet stopped at its first journal write leaves
+    ``op.json``, so the same message refuses a batch without mutation, and the original packet
+    then resumes onto its parent.
+    """
+    rig = _rig(tmp_path)
+    rig.bind()
+    parent = rig.ref()
+    packet = rig.packet(
+        files={"sp-1.txt": b"1\n"}, message="test: one\n", parent=parent
+    )
+    uid = rig.fx.add_human("commit")
+    res = rig.drive(
+        "--human-directed",
+        "--session",
+        rig.fx.session,
+        "--message-uuid",
+        uid,
+        "--packet",
+        str(rig.write_packet(packet)),
+        env={b3.CRASH: "commit:prepared:started"},
+    )
+    assert res[0] == b3.CRASH_EXIT, res
+    assert rig.ref() == parent
+    packets = [
+        rig.packet(files={"sp-2.txt": b"2\n"}, message="test: two\n", parent=parent),
+        rig.packet(files={"sp-3.txt": b"3\n"}, message="feat: three\n", parent=parent),
+    ]
+    _refused(rig.human(uid, rig.batch(packets)), "packet_mismatch")
+    assert rig.ref() == parent
+    out = _reconciled(rig.human(uid, packet))
+    assert rig.parents(out["commit"]) == [parent] and rig.ref() == out["commit"]
 
 
 def _sdk_human(rig: b3.Rig, text: str, **over: Any) -> str:
@@ -1271,32 +1498,6 @@ def test_batch_commits_in_commit_rule_order_under_one_reservation(
         assert rig.message_bytes(commit) == f"{subjects[n - 1]}\n".encode()
         assert rig.journal(f"{OP}/{n}")[-1] == ("reconciled", "done")
     assert {f"batch-{n}.txt" for n in range(1, 6)} <= set(rig.tree_entries(commits[-1]))
-
-
-def test_each_batch_candidate_sits_directly_under_the_candidate_root(
-    tmp_path: Path,
-) -> None:
-    """AC-C.2: a batch sub-op's candidate is a child of the candidate root, as one packet's is.
-
-    The repository hooks reach the framework as ``../.agent`` from the candidate, so a sub-op
-    candidate nested at ``<root>/<op>/<n>`` cannot run them.
-    """
-    rig = _rig(tmp_path)
-    parent = rig.ref()
-    rig.reserve(OP)
-    packets = [
-        rig.packet(
-            files={f"cd-{n}.txt": f"{n}\n".encode()},
-            message=f"test: {n}\n",
-            parent=parent,
-        )
-        for n in (1, 2)
-    ]
-    _reconciled(rig.commit(OP, rig.batch(packets)))
-    root = rig.candidate_root.resolve()
-    for n in (1, 2):
-        candidate = rig.candidate_path(f"{OP}/{n}")
-        assert candidate.resolve().parent == root, candidate
 
 
 def test_batch_is_validated_whole_before_any_git_mutation(tmp_path: Path) -> None:

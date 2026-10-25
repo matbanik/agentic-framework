@@ -209,8 +209,10 @@ def lane_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LaneRepo:
     base = _git(main, "rev-parse", "HEAD").strip()
     wt1 = tmp_path / "wt1"
     wt2 = tmp_path / "wt2"
-    _git(main, "worktree", "add", "-q", "--detach", str(wt1))
-    _git(main, "worktree", "add", "-q", "--detach", str(wt2))
+    # D:170 (MEU-785): a lane never uses a detached HEAD; each worktree is on
+    # its own lane branch.
+    _git(main, "worktree", "add", "-q", "-b", "lane/wt1", str(wt1))
+    _git(main, "worktree", "add", "-q", "-b", "lane/wt2", str(wt2))
     common = Path(
         _git(main, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
     ).resolve()
@@ -598,7 +600,7 @@ def test_ac784_3_claim_writes_an_active_card(lane_repo: LaneRepo) -> None:
     assert card["state"] == "active"
     assert card["op"] is None
     assert card["worktree"] == lane_repo.wt1.as_posix()
-    assert card["branch"] is None
+    assert card["branch"] == "lane/wt1"  # D:170, AC-785.7
     assert card["plan"] == f"{PLANS}/2026-10-20-lane-a/"
     assert card["owns"] == ["src/"]
     assert card["claims"] == [] and card["gates"] == []
@@ -654,6 +656,9 @@ def test_ac784_3_no_session_is_refused(lane_repo: LaneRepo) -> None:
 
 def test_ac784_3_same_canonical_worktree_is_reserved(lane_repo: LaneRepo) -> None:
     _ok(_claim(lane_repo, lane_repo.wt1, "2026-10-20-lane-a", "s-one"))
+    # D:170 (MEU-785): a new branch on wt1, so the branch check passes and the
+    # worktree check is the one that refuses.
+    _git(lane_repo.wt1, "checkout", "-q", "-b", "lane/wt1-d")
     other_spelling = lane_repo.wt2 / ".." / "wt1"
     proc = _run(
         lane_repo.wt2,
@@ -740,8 +745,11 @@ def test_ac784_3_unwritable_common_dir_is_refused(lane_repo: LaneRepo) -> None:
 
 
 def test_ac784_3_a_released_card_reserves_nothing(lane_repo: LaneRepo) -> None:
-    _ok(_claim(lane_repo, lane_repo.main, "2026-10-20-lane-b", "s-one"))
+    # D:274 (MEU-785): the main tree is no workspace, so the lane claims wt1 and
+    # removes it before the release; the second claim takes wt2.
+    _ok(_claim(lane_repo, lane_repo.wt1, "2026-10-20-lane-b", "s-one"))
     first = lane_repo.card("2026-10-20-lane-b")["generation"]
+    _git(lane_repo.main, "worktree", "remove", str(lane_repo.wt1))
     _ok(
         _run(
             lane_repo.main,
@@ -752,7 +760,7 @@ def test_ac784_3_a_released_card_reserves_nothing(lane_repo: LaneRepo) -> None:
             "s-one",
         )
     )
-    _ok(_claim(lane_repo, lane_repo.main, "2026-10-20-lane-b", "s-two"))
+    _ok(_claim(lane_repo, lane_repo.wt2, "2026-10-20-lane-b", "s-two"))
     card = lane_repo.card("2026-10-20-lane-b")
     assert card["state"] == "active" and card["session"] == "s-two"
     assert card["generation"] != first
@@ -955,8 +963,10 @@ def test_ac784_4_a_delayed_beat_never_revives_a_released_card(
 ) -> None:
     # R2-F1: the beat reads the card, then a release and an overlapping claim
     # land before its write. The write must not bring the released card back.
+    # D:274 (MEU-785): the main tree is no workspace; lane-a claims wt1 and
+    # removes it before its release, and lane-c claims wt2.
     lanes = _lanes()
-    monkeypatch.chdir(lane_repo.main)
+    monkeypatch.chdir(lane_repo.wt2)
     plan_a = f"{PLANS}/2026-10-20-lane-a"
     plan_c = f"{PLANS}/2026-10-20-lane-c"
     assert (
@@ -966,7 +976,7 @@ def test_ac784_4_a_delayed_beat_never_revives_a_released_card(
                 "--plan",
                 plan_a,
                 "--worktree",
-                str(lane_repo.main),
+                str(lane_repo.wt1),
                 "--session",
                 "s-one",
             ]
@@ -981,6 +991,7 @@ def test_ac784_4_a_delayed_beat_never_revives_a_released_card(
         # Only the beat's own write parks; the writes it schedules pass through.
         if not parked and card["lane"] == "2026-10-20-lane-a":
             parked.append(True)
+            _git(lane_repo.main, "worktree", "remove", str(lane_repo.wt1))
             between.append(
                 lanes.main(["release", "--plan", plan_a, "--session", "s-one"])
             )
@@ -991,7 +1002,7 @@ def test_ac784_4_a_delayed_beat_never_revives_a_released_card(
                         "--plan",
                         plan_c,
                         "--worktree",
-                        str(lane_repo.main),
+                        str(lane_repo.wt2),
                         "--session",
                         "s-two",
                     ]
@@ -1050,7 +1061,17 @@ def test_ac784_5_release_waits_for_the_linked_worktree_to_go(
 
 
 def test_ac784_5_a_main_tree_card_releases(lane_repo: LaneRepo) -> None:
-    _ok(_claim(lane_repo, lane_repo.main, "2026-10-20-lane-b", "s-one"))
+    # D:274 (MEU-785): a claim no longer admits the main tree, so the card is a
+    # stage-1 main-tree card written as it stands (AC-785.10 keeps it working).
+    _put_card(
+        lane_repo.lanes_dir,
+        _card_dict(
+            lane_repo.main,
+            lane="2026-10-20-lane-b",
+            plan=f"{PLANS}/2026-10-20-lane-b/",
+            owns=["docs/new.md"],
+        ),
+    )
     _ok(
         _run(
             lane_repo.main,
@@ -1065,7 +1086,8 @@ def test_ac784_5_a_main_tree_card_releases(lane_repo: LaneRepo) -> None:
 
 
 def test_ac784_5_release_by_another_session_is_superseded(lane_repo: LaneRepo) -> None:
-    _ok(_claim(lane_repo, lane_repo.main, "2026-10-20-lane-b", "s-one"))
+    # D:274 (MEU-785): the claim takes a lane worktree, not the main tree.
+    _ok(_claim(lane_repo, lane_repo.wt1, "2026-10-20-lane-b", "s-one"))
     _refused(
         _run(
             lane_repo.main,
@@ -1298,7 +1320,7 @@ def test_ac784_7_claim_refuses_a_contradiction(lane_repo: LaneRepo) -> None:
 
 
 def _plan_in(wt: Path, slug: str, owns: list[str], mnt: list[str]) -> str:
-    """Commit a plan in ``wt`` (detached HEAD) so it is not part of the change set."""
+    """Commit a plan in ``wt`` (its lane branch) so it is not part of the change set."""
     rel = f"{PLANS}/{slug}"
     _write(wt / rel / "task.md", _task_text((owns, mnt)))
     _git(wt, "add", "-A")

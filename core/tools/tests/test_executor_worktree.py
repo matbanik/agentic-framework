@@ -356,9 +356,9 @@ def test_create_carries_planning_inputs(
     assert wt == rig.parent / "gt6-a" and wt.is_dir(), f"{CREATE}: {wt}"
     assert _listed(src, wt), f"{CREATE}: git does not list {wt}"
     assert _git(wt, "rev-parse", "HEAD").strip() == head, f"{CREATE}: not at HEAD"
-    assert _git_proc(wt, "symbolic-ref", "-q", "HEAD").returncode == 1, (
-        f"{CREATE}: the worktree is on a branch, want a detached HEAD"
-    )
+    # AC-785.1 (D:170): the worktree is on its lane branch, never detached.
+    on = _git_proc(wt, "symbolic-ref", "-q", "HEAD").stdout.decode("utf-8").strip()
+    assert on == "refs/heads/lane/gt6-a", f"{CREATE}: the worktree is on {on!r}"
 
     assert (wt / OVERLAY).read_bytes() == SEED_TRACKED[OVERLAY], (
         f"{CREATE}: the overlay file is not the committed LF bytes"
@@ -381,7 +381,9 @@ def test_create_carries_planning_inputs(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert set(manifest) == MANIFEST_FIELDS, f"{CREATE}: fields {sorted(manifest)}"
     assert manifest["slug"] == "gt6-a", f"{CREATE}: slug {manifest['slug']!r}"
-    assert manifest["branch"] is None, f"{CREATE}: branch {manifest['branch']!r}"
+    assert manifest["branch"] == "lane/gt6-a", (  # AC-785.1 (D:170)
+        f"{CREATE}: branch {manifest['branch']!r}"
+    )
     assert sorted(manifest["carry"]) == sorted(CARRIED), (
         f"{CREATE}: carry {manifest['carry']}"
     )
@@ -451,14 +453,14 @@ def test_create_carries_planning_inputs(
         f"{CREATE}: check refused a worktree for holding executor edits"
     )
 
-    branched = rig.create(CREATE, "gt6-c", "--branch", "gt6/a")
-    assert _git(branched, "symbolic-ref", "--short", "HEAD").strip() == "gt6/a", (
-        f"{CREATE}: --branch did not put the worktree on gt6/a"
+    branched = rig.create(CREATE, "gt6-c", "--branch", "lane/gt6-c")
+    assert _git(branched, "symbolic-ref", "--short", "HEAD").strip() == "lane/gt6-c", (
+        f"{CREATE}: --branch did not put the worktree on lane/gt6-c"
     )
     branched_manifest = json.loads(
         (_git_dir(branched) / MANIFEST_NAME).read_text(encoding="utf-8")
     )
-    assert branched_manifest["branch"] == "gt6/a", f"{CREATE}: {branched_manifest}"
+    assert branched_manifest["branch"] == "lane/gt6-c", f"{CREATE}: {branched_manifest}"
     assert branched_manifest["carry"] == [], f"{CREATE}: {branched_manifest}"
     assert _tree_map(src, f"{REF_PREFIX}gt6-c") == head_map, (
         f"{CREATE}: a worktree with no carry has a baseline other than HEAD"
@@ -966,7 +968,7 @@ def test_create_refuses_and_leaves_nothing(
         "create",
         "gt6-m",
         "--branch",
-        "gt6/m",
+        "lane/gt6-m",
         "--carry",
         STATUS,
         "--carry",
@@ -983,7 +985,9 @@ def test_create_refuses_and_leaves_nothing(
     ), f"{CREATE}: two missing carries, argument order: {several}"
     _torn_down(rig, CREATE, "gt6-m", "two missing carries")
     assert (
-        _git_proc(src, "rev-parse", "--verify", "-q", "refs/heads/gt6/m").returncode
+        _git_proc(
+            src, "rev-parse", "--verify", "-q", "refs/heads/lane/gt6-m"
+        ).returncode
         == 1
     ), f"{CREATE}: the refused create left its branch behind"
 
@@ -1017,7 +1021,7 @@ def test_create_refuses_and_leaves_nothing(
     assert refs == [f"{REF_PREFIX}gt6-a"], f"{CREATE}: refs after refusals: {refs}"
 
     retried = rig.create(
-        CREATE, "gt6-m", "--branch", "gt6/m", "--carry", PLAN_DIR, "--carry", PLAN
+        CREATE, "gt6-m", "--branch", "lane/gt6-m", "--carry", PLAN_DIR, "--carry", PLAN
     )
     manifest = json.loads(
         (_git_dir(retried) / MANIFEST_NAME).read_text(encoding="utf-8")
