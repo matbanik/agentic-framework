@@ -489,15 +489,28 @@ provider-neutral and falls back down its own ladder without any edit.
 
 If you do **not** use Pomera:
 
-1. **Edit the skill before first use.** §1's failure message hard-codes
-   `C:/ProgramData/miniconda3/python.exe` as the Pomera server interpreter path in
-   `.mcp.json` registration guidance. Retarget §1–§2 to your MCP search provider (or document
-   your human-waiver + native-search provenance stamp).
-2. **Edit the workflow** (`.agent/workflows/inspiration-research.md`) if step order or tool
-   names differ from Pomera's surface.
-3. Record the substitution in `PROJECT-PROFILE.md` — treat this as a **manual adopter edit**,
-   not something `instantiate.py` fills in. The package ships the originating repo's Pomera
-   contract verbatim so adopters know exactly what to replace.
+1. **Record the provider in `PROJECT-PROFILE.md`** — your MCP search provider, or a human
+   waiver for native search. The skill's §1 "Search provider" paragraph reads that record and
+   stops when it is missing. This is a **manual adopter edit**, not something `instantiate.py`
+   fills in.
+2. **Edit the skill before first use.** Retarget §1 (the diagnose check and live probe) and §2
+   (engine routing) to your provider's tool names. The package ships the originating repo's
+   Pomera contract verbatim so you know exactly what to replace.
+
+### What ships, and the two knobs
+
+The skill's export closure is `SKILL.md`, everything under its `templates/` directory (the
+per-provider lens templates, `skeleton.md`, `snapshot.md` and the domain overlays) and
+`.agent/skills/deep-research-prompting/scripts/strip_embedded_images.py`, which decodes the base64 images a portal export embeds before
+synthesis reads it. The dated `capabilities/` snapshots do **not** ship: they are machine-local
+evidence, and the first run writes your own (a missing snapshot counts as expired, so §4 runs
+full recon).
+
+The workflow (`.agent/workflows/inspiration-research.md`) is a stub. Its `## Project Setting`
+table holds the knobs: `project_output_root` (default `_inspiration/`, the folder that receives
+each topic) and, optionally, a domain overlay from
+`.agent/skills/deep-research-prompting/templates/domain-overlays/` (for example `content-seo`
+for blog or newsletter niche discovery). Change those values, not the skill.
 
 ---
 

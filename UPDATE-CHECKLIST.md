@@ -117,7 +117,7 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 | `.agent/skills/subagent-delegation/SKILL.md` | **required for subagent flows** |
 | `.agent/skills/issue-triage/SKILL.md` | **required for issue→MEU loop** |
 | `.agent/skills/meu-status/SKILL.md` | **required for issue→MEU loop** |
-| `.agent/skills/deep-research-prompting/SKILL.md` | **required for `/inspiration-research`** (Pomera MCP — manual adopter edit if substituting) |
+| `.agent/skills/deep-research-prompting/{SKILL.md,templates/**,scripts/**}` | **required for `/inspiration-research`** (Pomera MCP — manual adopter edit if substituting). **Do not** copy `capabilities/` (machine-local dated snapshots; an adopter's first run writes its own). Source is the machine-global `P:/.agent/skills/deep-research-prompting/`; `tools/_fw_sync.py --file <dest>` per closure file, never `--scope all`. The workflow stub's `## Project Setting` table (`project_output_root`, optional domain overlay) is the adopter knob |
 | `.agent/skills/agent-notify/SKILL.md` | **hand-merge, never recopy** — the package copy drops the source's stop-gate wiring, plan paths and `uv run`, and writes receipts under `{{RECEIPTS_DIR}}` |
 
 **After copy:** replace `subagent-delegation/verification-log.md` with the **portable stub**
