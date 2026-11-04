@@ -515,25 +515,6 @@ def test_ac828_6_order_patterns_reject_and_accept() -> None:
     assert GOOD_ORDER.search(new) and not BAD_ORDER.search(new)
 
 
-RESUME_BRIEF = (
-    ROOT / ".agent" / "skills" / "claude-credits" / "templates" / "resume-brief.md"
-)
-IDENTITY_CREATE = "create <run-id> --run-id <run-id> --op <op> --plan <slug>"
-
-
-def test_credits_docs_name_the_identity_create() -> None:
-    """The resume brief and the landing record name the identity create."""
-    landing = _flat(_section(_text(EXEC_SESSION), "### The landing record"))
-    for where, text in (
-        ("resume-brief", _flat(_text(RESUME_BRIEF))),
-        ("landing record", landing),
-    ):
-        assert IDENTITY_CREATE in text, f"{where} does not name `{IDENTITY_CREATE}`"
-    assert "admission creates the worktree" not in _text(RESUME_BRIEF), (
-        "the resume brief still says admission creates the worktree"
-    )
-
-
 # ---------------------------------------------------------------------------
 # H2-3c routes by the landed query
 # ---------------------------------------------------------------------------

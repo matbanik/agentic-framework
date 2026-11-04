@@ -224,6 +224,23 @@ RUN_PARAMETERS_WINDOWS_ONLY = (
     "tools/tests/test_validate_agent_files_policy.py",
     "tools/tests/test_validate_closeout_stages.py",
     "tools/tests/test_worktree_layout.py",
+    "tools/tests/test_lane_route_tooling.py",
+    "tools/tests/test_lanes_acceptance.py",
+    "tools/tests/test_lanes_docs.py",
+    "tools/tests/test_lanes_gates.py",
+    "tools/tests/test_lanes_integrate.py",
+    "tools/tests/test_lanes_land.py",
+    "tools/tests/test_lanes_r2_corrections.py",
+    "tools/tests/test_lanes_r3_corrections.py",
+    "tools/tests/test_lanes_r4_corrections.py",
+    "tools/tests/test_lanes_r5_corrections.py",
+    "tools/tests/test_lanes_r5b_corrections.py",
+    "tools/tests/test_lanes_recovery.py",
+    "tools/tests/test_lanes_recovery_abandon.py",
+    "tools/tests/test_run_parameters_carrier.py",
+    "tools/tests/test_run_parameters_final_meu_handoffs.py",
+    "tools/tests/test_run_parameters_transcript_lanes.py",
+    "tools/tests/test_stop_gate_lanes.py",
 )
 #: The skill folder is removed except these children (the probes are portable Python).
 WINDOWS_ONLY_DIR = ".agent/skills/claude-credits"
