@@ -154,6 +154,8 @@ ADOPTER_CREATED = frozenset(
         # Run parameters: the adopter copies the shipped ``.json.template`` and computes
         # its digests (PROFILE §G); an unedited copy keeps ``status`` at ``disabled``.
         ".agent/run-parameters.policy.json",
+        # The lane route: the adopter copies the shipped ``.json.template``; absent = the old route.
+        ".agent/lane-route.json",
     }
 )
 

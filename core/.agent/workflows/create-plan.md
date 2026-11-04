@@ -312,7 +312,8 @@ The plan must include:
 - Exact validation commands
 - Explicit stop conditions
 - Research URLs or document paths for any behavior resolved outside the target build-plan section
-- **If the plan will run as a lane next to other sessions:** a `## Lane Ownership` section in `task.md` (optional; `TASK-TEMPLATE.md`). The executing session claims it with `lanes.py claim` and runs `lanes.py beat` at every task-row boundary (`execution-session.md` §4, Lanes). A plan without the section is unchanged.
+- **A `## Lane Ownership` section in `task.md`, by default** (`TASK-TEMPLATE.md` v2.5): every plan that runs in an executor worktree has it. A main-tree plan may omit it, but only with a recorded basis in the plan. The executing session starts with `executor_worktree.py create <slug> --lane-plan <plan dir>`, which runs `lanes.py claim`, and runs `lanes.py beat` at every task-row boundary (`execution-session.md` §4, Lanes).
+- **The ownership check blocks Step 5.** After you write `task.md`, run `rtk proxy uv run python tools/lanes.py ownership-check --task <task.md> *> {{RECEIPTS_DIR}}/ownership-check.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/ownership-check.txt; exit $code`. It must print `ownership_ok`. An `ownership_bad:<reason>` line blocks the Step 5 review dispatch: fix the section, then run the check again. A main-tree plan that omits the section with a recorded basis records that basis instead of the check.
 - A **Handoff Set** that names one canonical path per product MEU:
   `.agent/context/handoffs/{YYYY-MM-DD}-{project-slug}-{MEU-ID}-handoff.md`.
   A non-product plan with `meus: []` instead names exactly one project handoff:

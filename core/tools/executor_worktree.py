@@ -8,7 +8,7 @@ gives a session its own tree beside the repository and moves its work back
 without a commit::
 
     uv run python tools/executor_worktree.py create <slug> [--branch lane/<slug>] [--base REV] [--carry PATH]...
-        [--run-id ID --op OP --plan PLAN]
+        [--run-id ID --op OP --plan PLAN] [--lane-plan DIR [--session ID]]
     uv run python tools/executor_worktree.py check <path>
     uv run python tools/executor_worktree.py land <path>
     uv run python tools/executor_worktree.py sync <path> <rel>...
@@ -65,6 +65,20 @@ A commit candidate (``<git dir>/candidate-worktree.json`` of schema
 executor worktree: ``check``, ``land`` and ``sync`` refuse it with
 ``worktree_bad:candidate`` and ``remove`` deletes it as it stands.
 
+The lane route. ``_lane_route`` reads the main
+tree's ``.agent/lane-route.json`` through ``tools/commit_batch.py``
+(``lane_route``, the owner of its shape); a missing file is not required and a bad
+one refuses ``lane_route_bad:<reason>`` before anything is made. ``create <slug>
+--lane-plan <dir> [--session <id>]`` runs ``tools/lanes.py claim --plan <dir>
+--worktree <path> [--session <id>]`` from the main tree after the build, prints its
+``claimed <lane> generation=<hex>`` line before ``worktree_ready``, and on a refusal
+prints ``worktree_bad:claim:<reason>`` and tears the build down. Under ``required:
+true`` a slug outside ``exempt`` needs ``--lane-plan`` (``worktree_bad:no_plan``)
+and ``land`` refuses it (``land_fail:lane_route:<slug>``: such a lane lands with
+``tools/lanes.py land prepare``). ``remove`` also accepts a lane-route land: a
+worktree whose files are the lane tip's tree and whose tip ``tools/lanes.py landed
+--worktree <path>`` reports as ``landed:<tip>:<C>``.
+
 The base is ``--base``, else ``CREDITS_BASE_COMMIT`` (the commit B that a
 credits run's admission recorded, R§5.4), else ``HEAD``. A base that does not
 name a commit is refused with ``worktree_bad:base_unknown`` before anything is
@@ -110,6 +124,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from types import ModuleType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tools.commit_batch import LaneRoute
 
 if sys.platform == "win32":
     import msvcrt
@@ -156,6 +174,11 @@ GRANDFATHERED: frozenset[str] = frozenset()
 IDENTITY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 REMOVAL_BY = "executor_worktree.py remove"
 REMOVAL_ROW = "H2-3c"
+# The lane-route policy file (``commit_batch.LANE_ROUTE_FILE`` owns its shape) and the
+# lanes tool of this repository, which ``create --lane-plan`` and ``remove`` run as a child.
+LANE_ROUTE_FILE = ".agent/lane-route.json"
+LANES_TOOL = _REPO_ROOT / "tools" / "lanes.py"
+LANES_TIMEOUT_S = 300
 
 _LF_CHECKOUT = ("-c", "core.autocrlf=false")
 # Every git call here that hashes working-tree bytes runs with this pin: the
@@ -1446,6 +1469,98 @@ def slug_taken(root: Path, slug: str) -> bool:
     )
 
 
+def _commit_batch() -> ModuleType:
+    """``tools/commit_batch.py``, imported on first use (it owns the lane-route reader).
+
+    The repository root goes on ``sys.path`` when this file runs as a script.
+    """
+    root = str(_REPO_ROOT)
+    if not __package__ and root not in sys.path:
+        sys.path.insert(0, root)
+    return importlib.import_module("tools.commit_batch")
+
+
+def _lane_route(root: Path) -> LaneRoute:
+    """The lane-route policy of the main tree ``root`` (``commit_batch.lane_route``).
+
+    Raises:
+        _Refusal: ``lane_route_bad:<reason>``; the detail goes to stderr.
+    """
+    batch = _commit_batch()
+    try:
+        return batch.lane_route(root)
+    except batch.rp.Refusal as refusal:
+        sys.stderr.write(f"{refusal.detail}\n")
+        raise _Refusal([refusal.reason]) from None
+
+
+def _route_required(policy: LaneRoute, slug: str) -> bool:
+    """True when ``policy`` requires the lane route of ``slug`` (not exempt)."""
+    return policy["required"] and slug not in policy["exempt"]
+
+
+def _run_lanes(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run this repository's ``tools/lanes.py`` with ``args`` in ``cwd``.
+
+    The inherited ``GIT_DIR``, ``GIT_WORK_TREE`` and ``GIT_INDEX_FILE`` are dropped.
+
+    Raises:
+        OSError: the interpreter cannot start.
+        subprocess.TimeoutExpired: the child ran past ``LANES_TIMEOUT_S``.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_DROPPED}
+    return subprocess.run(  # noqa: S603 - fixed argv
+        [sys.executable, str(LANES_TOOL), *args],
+        cwd=str(cwd),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=LANES_TIMEOUT_S,
+        check=False,
+    )
+
+
+def _claim(root: Path, path: Path, plan: str, session: str | None) -> str:
+    """``tools/lanes.py claim`` of the new worktree; return its ``claimed`` line.
+
+    Raises:
+        _Refusal: ``worktree_bad:claim:<reason>``, where ``<reason>`` is the text
+            after ``refused: ``, ``not_run``, ``no_claim_line`` or ``exit_<code>``.
+            The child's other output goes to stderr.
+    """
+    args = ["claim", "--plan", plan, "--worktree", str(path)]
+    if session is not None:
+        args += ["--session", session]
+    try:
+        proc = _run_lanes(root, *args)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        sys.stderr.write(f"tools/lanes.py claim did not finish: {error}\n")
+        raise _Refusal(["worktree_bad:claim:not_run"]) from None
+    lines = proc.stdout.splitlines()
+    claimed = [line for line in lines if line.startswith("claimed ")]
+    if proc.returncode == 0 and len(claimed) == 1:
+        return claimed[0]
+    first = lines[0] if lines else ""
+    if proc.returncode == 0:
+        reason = "no_claim_line"
+        sys.stderr.write(
+            "tools/lanes.py claim exited 0 without one claimed line; a lane card "
+            f"may name {path.as_posix()}: release it with tools/lanes.py release\n"
+        )
+    elif first.startswith("refused: "):
+        reason = first.removeprefix("refused: ").strip() or "unknown"
+        lines = lines[1:]
+    else:
+        reason = f"exit_{proc.returncode}"
+    detail = "\n".join([*lines, proc.stderr.strip()]).strip()
+    if detail:
+        sys.stderr.write(f"{detail}\n")
+    raise _Refusal([f"worktree_bad:claim:{reason}"])
+
+
 def _identity(ns: argparse.Namespace) -> dict[str, str]:
     """The run identity of ``create`` (all three flags or none), as manifest fields.
 
@@ -1471,15 +1586,26 @@ def _cmd_create(
 
     ``--branch`` other than ``lane/<slug>`` is ``worktree_bad:branch`` and an existing
     ``lane/<slug>`` is ``worktree_bad:branch_exists``, both before anything is made
-    (AC-785.1).
+    (AC-785.1). A bad lane-route policy is ``lane_route_bad:<reason>`` and, under
+    ``required``, a slug outside ``exempt`` without ``--lane-plan`` is
+    ``worktree_bad:no_plan``, both before anything is made.
+    A create with the run identity (a credits worktree) keeps the old route and
+    needs no ``--lane-plan``.
+    With ``--lane-plan`` the lane is claimed after the build.
     """
     slug: str = ns.slug
+    lane_plan: str | None = ns.lane_plan
+    session: str | None = ns.session
+    if session is not None and lane_plan is None:
+        parser.error("--session needs --lane-plan")
     if not WORKTREE_SLUG_RE.fullmatch(slug):
         raise _Refusal(["worktree_bad:slug"])
+    identity = _identity(ns)
+    if _route_required(_lane_route(root), slug) and lane_plan is None and not identity:
+        raise _Refusal(["worktree_bad:no_plan"])
     branch = _lane_branch(slug)
     if ns.branch is not None and ns.branch != branch:
         raise _Refusal(["worktree_bad:branch"])
-    identity = _identity(ns)
     carries = [_rel_arg(parser, "--carry", value) for value in ns.carry]
     path = worktree_path(root, slug)
     if slug_taken(root, slug):
@@ -1522,6 +1648,15 @@ def _cmd_create(
             f"the branch {branch} if git made it\n"
         )
         raise
+    if lane_plan is not None:
+        try:
+            claimed = _claim(root, path, lane_plan, session)
+        except _Refusal as refusal:
+            for line in refusal.lines:
+                _say(line)
+            _teardown(build)
+            return 1
+        _say(claimed)
     _say(f"worktree_ready:{path.as_posix()}")
     return 0
 
@@ -1632,9 +1767,21 @@ def _land_locked(wt: _Worktree) -> int:
 def _cmd_land(
     root: Path, ns: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> int:
-    """``land <path>``: write the worktree's changes onto the main tree."""
+    """``land <path>``: write the worktree's changes onto the main tree.
+
+    Under a ``required`` lane-route policy a slug outside ``exempt`` is
+    ``land_fail:lane_route:<slug>`` before the lease, unless the worktree has the
+    run identity (a credits worktree keeps the old route).
+    """
     path = Path(os.path.abspath(ns.path))
     wt = _open_worktree(root, path)
+    if _route_required(_lane_route(wt.main), wt.slug) and _removal_run(wt) is None:
+        _say(f"land_fail:lane_route:{wt.slug}")
+        sys.stderr.write(
+            f"{LANE_ROUTE_FILE} requires the lane route for {wt.slug}: commit with "
+            "tools/lanes.py commit and land with tools/lanes.py land prepare\n"
+        )
+        return 1
     lease_file = _lease_path(wt.main)
     try:
         lease = _acquire_lease(
@@ -1876,6 +2023,14 @@ def _cmd_remove(
     Its lane branch is deleted when the tip is an ancestor of ``main``; an unlanded tip
     is ``worktree_bad:unlanded`` unless ``--discard``, which deletes it (AC-785.9). A
     stage-1 manifest without a lane branch deletes no branch (AC-785.10).
+
+    Work counts as landed in one of two states: (a) the files are the
+    baseline tree and the tip is an ancestor of ``main`` (the old route); (b) the
+    files are the tip's tree and ``tools/lanes.py landed`` reports the tip as the
+    L0 of a published lane land (the lane route). Both states read the files, not
+    the real index, so a path whose staged content differs from both HEAD and the
+    file is ``worktree_bad:staged:<rel>`` before either state is checked
+    (``_staged_only``); ``--discard`` skips that check too.
     """
     path = Path(os.path.abspath(ns.path))
     if _listed(root, path) and _read_candidate(path) is not None:
@@ -1894,19 +2049,17 @@ def _cmd_remove(
     for name, link in zip(wt.links, links, strict=True):
         if os.path.lexists(link) and not _is_link(link):
             raise _Refusal([f"worktree_bad:link:{name}"])
-    if not ns.discard:
-        try:
-            now = _tree_of(path, wt.git_dir, wt.baseline, wt.links)
-        except _CaseRefusal as refusal:
-            raise _Refusal(
-                [f"worktree_bad:case:{rel}" for rel in refusal.paths]
-            ) from None
-        if now != wt.baseline:
-            raise _Refusal(["worktree_bad:unlanded"])
     lane_ref = None if wt.branch is None else f"refs/heads/{wt.branch}"
     tip = None if lane_ref is None else _ref_commit(wt.main, lane_ref)
-    if tip is not None and not ns.discard and not _is_landed(wt.main, tip):
-        raise _Refusal(["worktree_bad:unlanded"])
+    if not ns.discard:
+        staged = _staged_only(wt)
+        if staged:
+            raise _Refusal([f"worktree_bad:staged:{rel}" for rel in staged])
+        old_route = _captured(wt, wt.baseline) == wt.baseline and (
+            tip is None or _is_landed(wt.main, tip)
+        )
+        if not old_route and not _lane_route_landed(wt, tip):
+            raise _Refusal(["worktree_bad:unlanded"])
     run = _removal_run(wt)
     if run is not None:
         _record_removal(wt, run, "worktree_removal_started")
@@ -1920,6 +2073,73 @@ def _cmd_remove(
         _record_removal(wt, run, "worktree_removed")
     _say(f"worktree_removed:{path.as_posix()}")
     return 0
+
+
+def _captured(wt: _Worktree, base: str) -> str:
+    """The tree of ``wt``'s files seeded from ``base`` (``_tree_of``).
+
+    Raises:
+        _Refusal: ``worktree_bad:case:<rel>`` for each misspelled path.
+        _GitFailure: a git call failed.
+    """
+    try:
+        return _tree_of(wt.path, wt.git_dir, base, wt.links)
+    except _CaseRefusal as refusal:
+        raise _Refusal([f"worktree_bad:case:{rel}" for rel in refusal.paths]) from None
+
+
+def _staged_only(wt: _Worktree) -> list[str]:
+    """The paths of ``wt`` whose staged content is neither HEAD's nor the file's.
+
+    ``_captured`` builds its tree through a temporary index, so it never sees the
+    real one. A path that is staged against HEAD and changed again in the file
+    holds content that only the index has, and ``remove`` would delete it.
+
+    Raises:
+        _GitFailure: a git call failed.
+    """
+    staged = set(
+        _z(
+            _git(
+                [*EOL_PIN, "diff", "--cached", "--name-only", "-z", "HEAD"], cwd=wt.path
+            )
+        )
+    )
+    if not staged:
+        return []
+    unstaged = set(_z(_git([*EOL_PIN, "diff", "--name-only", "-z"], cwd=wt.path)))
+    return sorted(staged & unstaged)
+
+
+def _lane_route_landed(wt: _Worktree, tip: str | None) -> bool:
+    """State (b) of ``remove``: the files are the tip's tree and
+    ``tools/lanes.py landed --worktree <path>``, run in the main tree, prints
+    ``landed:<tip>:<C>``.
+
+    Raises:
+        _Refusal: ``worktree_bad:case:<rel>``, or ``worktree_bad:landed_query``
+            when the query cannot run.
+        _GitFailure: a git call failed.
+    """
+    if tip is None:
+        return False
+    tip_tree = _git_text(["rev-parse", f"{tip}^{{tree}}"], cwd=wt.main)
+    if _captured(wt, tip) != tip_tree:
+        return False
+    try:
+        proc = _run_lanes(wt.main, "landed", "--worktree", str(wt.path))
+    except (OSError, subprocess.TimeoutExpired) as error:
+        sys.stderr.write(f"tools/lanes.py landed did not finish: {error}\n")
+        raise _Refusal(["worktree_bad:landed_query"]) from None
+    shown = proc.stdout.splitlines()
+    landed = proc.returncode == 0 and any(
+        re.fullmatch(rf"landed:{re.escape(tip)}:[0-9a-f]{{40}}", line) for line in shown
+    )
+    if not landed:
+        detail = "\n".join([*shown, proc.stderr.strip()]).strip()
+        if detail:
+            sys.stderr.write(f"{detail}\n")
+    return landed
 
 
 # -------------------------------------------------------------------- main
@@ -1965,6 +2185,12 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--run-id", help="the credits run (with --op and --plan)")
     create.add_argument("--op", help="the admission op of the run")
     create.add_argument("--plan", help="the plan folder slug of the run")
+    create.add_argument(
+        "--lane-plan",
+        metavar="DIR",
+        help="the lane plan folder: claim the lane with tools/lanes.py claim",
+    )
+    create.add_argument("--session", help="the claim's session (with --lane-plan)")
 
     check = commands.add_parser("check", help="validate the worktree's environment")
     check.add_argument("path")

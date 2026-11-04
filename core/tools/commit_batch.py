@@ -16,6 +16,13 @@ A rerun of the same op resumes from its last record by the R§4.5 recovery table
 refusal and the reservation check happen before the op file and any Git object are written.
 The driver prints one JSON object and exits 0 ``reconciled``, 1 ``refused`` / ``stopped`` /
 ``failed``, 2 on a usage error and 97 at the crash seam.
+
+The lane route: ``lane_route`` reads ``.agent/lane-route.json`` of the main tree
+(``LANE_ROUTE_FILE``, schema ``lane-route/1``) and is the one owner of its shape;
+``tools/executor_worktree.py`` reads it through this module. When the file says ``required``,
+the command line refuses ``lane_worktree`` in a linked worktree on ``lane/<slug>`` whose slug
+is not ``exempt``: that lane commits with ``tools/lanes.py commit``. The tree adapter that
+``tools/lanes.py land publish`` calls does not read the policy.
 """
 
 from __future__ import annotations
@@ -35,7 +42,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypedDict, cast
 
 from tools import run_parameters as rp
 
@@ -68,6 +75,12 @@ DELETE_KEYS = frozenset({"path", "delete"})
 MODES = frozenset({"100644", "100755"})
 ACT_FOR_PHASE = {"plan": "plan_commit", "exec": "exec_commit", "finalize": "finalize"}
 HUMAN_ACT = "human_directed"
+# The lane-route policy: absent, or ``required: false``, keeps the old route.
+LANE_ROUTE_FILE = ".agent/lane-route.json"
+LANE_ROUTE_SCHEMA = "lane-route/1"
+LANE_ROUTE_KEYS = ("schema", "required", "exempt")
+LANE_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,40}")
+LANE_BRANCH_PREFIX = "refs/heads/lane/"
 # The human route's op is ``human-<message uuid>``; its folder holds the direction claim that
 # spends the sentence once across ``commit_batch.py`` and ``lanes.py land publish`` (EA-58 (3)).
 HUMAN_OP_PREFIX = "human-"
@@ -121,6 +134,7 @@ LAND_FIELDS = frozenset(
         "carrier",
         "gate",
         "verdict",
+        "secrets",
     }
 )
 LAND_OBJECT_FIELDS = frozenset({"P", "L0", "L1", "T"})
@@ -3046,6 +3060,117 @@ def _step_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
     return rp.EXIT_OK, out
 
 
+# -- the lane-route policy --------------------------------------------------------
+
+
+class LaneRoute(TypedDict):
+    """The lane-route policy: ``required`` turns the refusals on; ``exempt`` slugs keep the old route."""
+
+    required: bool
+    exempt: tuple[str, ...]
+
+
+def _route_bad(why: str, detail: str) -> rp.Refusal:
+    return rp.Refusal(f"lane_route_bad:{why}", detail)
+
+
+def lane_route(main: Path) -> LaneRoute:
+    """The policy in ``main``/``LANE_ROUTE_FILE``; a missing file is not required, no exempt slug.
+
+    The file is one JSON object with exactly the keys ``schema`` (``lane-route/1``),
+    ``required`` (a JSON bool: ``1`` and ``"true"`` are refused) and ``exempt`` (a list of
+    unique slugs that match ``LANE_SLUG_RE``). A key may occur once: JSON keeps the
+    last of repeated keys, so ``"required": true, "required": false`` would turn the
+    refusals off without a word.
+
+    Raises:
+        rp.Refusal: ``lane_route_bad:<why>``, with ``<why>`` one of ``unreadable``,
+            ``json``, ``key_repeated:<key>``, ``extra_key:<key>``, ``schema``,
+            ``required``, ``exempt``, ``exempt_slug`` and ``exempt_repeated``.
+    """
+    path = main / LANE_ROUTE_FILE
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {"required": False, "exempt": ()}
+    except OSError as exc:
+        raise _route_bad("unreadable", f"cannot read {path}: {exc}") from None
+
+    def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        seen: dict[str, object] = {}
+        for key, value in pairs:
+            if key in seen:
+                raise _route_bad(
+                    f"key_repeated:{key}", f"{path}: key {key!r} is repeated"
+                )
+            seen[key] = value
+        return seen
+
+    try:
+        data: object = json.loads(raw.decode("utf-8"), object_pairs_hook=unique)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _route_bad("json", f"{path}: {exc}") from None
+    if not isinstance(data, dict):
+        raise _route_bad("json", f"{path} is not one JSON object")
+    policy = cast(dict[str, object], data)
+    extra = sorted(key for key in policy if key not in LANE_ROUTE_KEYS)
+    if extra:
+        raise _route_bad(f"extra_key:{extra[0]}", f"{path}: unknown key {extra[0]!r}")
+    if policy.get("schema") != LANE_ROUTE_SCHEMA:
+        raise _route_bad("schema", f"{path}: schema is not {LANE_ROUTE_SCHEMA!r}")
+    required = policy.get("required")
+    if not isinstance(required, bool):
+        raise _route_bad("required", f"{path}: required is not a JSON bool")
+    exempt = policy.get("exempt")
+    if not isinstance(exempt, list):
+        raise _route_bad("exempt", f"{path}: exempt is not a list")
+    slugs: list[str] = []
+    for item in cast(list[object], exempt):
+        if not isinstance(item, str) or not LANE_SLUG_RE.fullmatch(item):
+            raise _route_bad("exempt_slug", f"{path}: {item!r} is not a worktree slug")
+        if item in slugs:
+            raise _route_bad("exempt_repeated", f"{path}: {item!r} is listed twice")
+        slugs.append(item)
+    return {"required": required, "exempt": tuple(slugs)}
+
+
+def _refuse_lane_worktree(repo: rp.Repo) -> None:
+    """The command line in a non-exempt lane worktree under ``required``: ``lane_worktree``.
+
+    A lane worktree is a linked worktree (``top`` is not ``main``) whose HEAD is
+    ``lane/<slug>``. The main tree, a detached candidate and an exempt slug pass.
+
+    Raises:
+        rp.Refusal: ``lane_worktree``, a ``lane_route_bad:<why>`` of ``lane_route``, or
+            ``disabled`` when git cannot name the worktree's branch.
+    """
+    policy = lane_route(repo.main)
+    if not policy["required"]:
+        return
+    try:
+        if os.path.samefile(repo.top, repo.main):
+            return
+    except OSError as exc:
+        raise rp.Refusal(
+            "disabled", f"cannot compare {repo.top} with {repo.main}: {exc}"
+        ) from exc
+    try:
+        head = rp._git(repo.top, "symbolic-ref", "--quiet", "HEAD", check=False)
+    except (rp.GitError, OSError, UnicodeDecodeError) as exc:
+        raise rp.Refusal("disabled", f"symbolic-ref HEAD in {repo.top}: {exc}") from exc
+    if not head.startswith(LANE_BRANCH_PREFIX):
+        return
+    slug = head[len(LANE_BRANCH_PREFIX) :]
+    if slug in policy["exempt"]:
+        return
+    raise rp.Refusal(
+        "lane_worktree",
+        f"{repo.display} is the lane worktree of {slug} and {LANE_ROUTE_FILE} requires "
+        "the lane route: commit there with tools/lanes.py commit, and land with "
+        "tools/lanes.py land prepare",
+    )
+
+
 # -- the command line -----------------------------------------------------------------------
 
 
@@ -3132,6 +3257,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     handler = _route(parser, args)
     try:
         repo = rp._open_repo(Path(cast(str, args.repo)))
+        _refuse_lane_worktree(repo)
         _check_sync_pending(repo)
         code, out = handler(repo, args)
     except rp.Refusal as exc:

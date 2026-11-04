@@ -109,6 +109,8 @@ A lane never edits a junction file (the `junction_files` list in `.agent/credits
 | `<lane>/<generation>/<n>` | `ki-close <KI-ID> -> fixed in the lane` |
 | `<lane>/<generation>/<n>` | `metrics-row \| 2026-10-24 \| <MEU-ID> \| 1 \| 1 min \| 1 \| 0 \| 7/7 \| 100% \| 1 \| lane request example \|` |
 
+The `docs/BUILD_PLAN.md` mark comes from the `meu-status` request: the integrator renders it, so the lane writes no separate request for it.
+
 ---
 
 ## Codex Validation Report

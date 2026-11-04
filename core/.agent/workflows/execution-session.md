@@ -104,15 +104,17 @@ permission to spawn. Do not reload completed independent rows wholesale after re
 
 #### Lanes (tasks with a `## Lane Ownership` section)
 
-These steps apply only to a task that has a `## Lane Ownership` section (`TASK-TEMPLATE.md`). A task without the section runs unchanged: skip this subsection.
+These steps apply to a task that has a `## Lane Ownership` section, which is the default for a plan that runs in an executor worktree (`TASK-TEMPLATE.md` v2.6). A main-tree plan that omits the section with a recorded basis runs unchanged: skip this subsection.
 
-At session start, run `python tools/lanes.py list`. It shows the lane cards, any stale card and any `HALT`. If it shows `HALT`, stop and tell the human. Before the claim, choose one session id and keep it for the whole session: the harness session id when the harness shows one, else `<plan folder name>-<UTC start time>` (for example `2026-10-20-multi-agent-lanes-20261021T0930Z`). Pass it as `--session <session id>` on every claim, beat and release; a command without it refuses `no_session`. Then claim the lane with `python tools/lanes.py claim --plan <plan dir> --worktree <path> --session <session id>`. Claim only for a task that has the `## Lane Ownership` section; the claim refuses `no_ownership` without it. A refusal prints `refused: <reason>`: stop and tell the human.
+At session start, run `python tools/lanes.py list`. It shows the lane cards, any stale card and any `HALT`. If it shows `HALT`, stop and tell the human. Before the claim, choose one session id and keep it for the whole session: the harness session id when the harness shows one, else `<plan folder name>-<UTC start time>` (for example `2026-10-20-multi-agent-lanes-20261021T0930Z`). Pass it as `--session <session id>` on every claim, beat and release; a command without it refuses `no_session`. Then claim the lane with `python tools/lanes.py claim --plan <plan dir> --worktree <path> --session <session id>`. Claim only for a task that has the `## Lane Ownership` section; the claim refuses `no_ownership` without it. `executor_worktree.py create <slug> --lane-plan <plan dir> --session <session id>` runs this claim for you after it builds the worktree, so run the claim by hand only for a worktree that has no card yet. A refusal prints `refused: <reason>` (from `create`: `worktree_bad:claim:<reason>`, and nothing is left): stop and tell the human.
+
+Give the project its own tree of record before the first MEU row. A lane plan (the default) runs `executor_worktree.py create <slug> --lane-plan <plan dir> --session <session id> --carry {plan folder} --carry .agent/context/meu-status.yaml --carry .agent/context/meu-registry.md --carry .agent/context/current-focus.md` (the registered receipt form is in `commands.md` §Quick Commands). An `EXEMPT` slug in `.agent/lane-route.json` may leave out `--lane-plan` and `--session`, and so may a credits run's worktree made with its run identity (§The landing record).
 
 At every task-row boundary, run `python tools/lanes.py beat --plan <plan dir> --session <session id>` before you start the next row. If it ends with exit 3 (`HALT`) or refuses with `card_superseded`, stop before the next row and tell the human. Do not continue, do not remove `HALT`, and do not claim again: only the human frees a lane or removes `HALT`.
 
-At closeout, run `python tools/lanes.py release --plan <plan dir> --session <session id>`. Run it after the lane worktree is removed (H2-3c), or, for a lane on the main tree, after the work lands. A lane never edits a junction file: list the changes in the handoff's `Integration requests` section.
+At closeout, run `python tools/lanes.py release --plan <plan dir> --session <session id>`. Run it after the lane worktree is removed (H2-3c), or, for a lane on the main tree, after the work lands. A lane never edits a junction file. The junction rows (H1-3, H2-3, H2-3a, H2-3b) write their changes as requests in the handoff's `Integration requests` section (`meu-status`, `metrics-row`, `grouping-cursor`, `ki-close`, `ki-file`), and the integrator applies them in `tools/lanes.py land prepare`.
 
-A lane worktree (branch `lane/<slug>`) commits through `tools/lanes.py commit` and lands through the governed land instead of `executor_worktree.py land`: `tools/lanes.py land prepare` (rebase onto pinned main, the integration requests, the gate), the reviewer verdict on the ready tree, then `tools/lanes.py land publish` (one main commit through `commit_batch.py`, under a verified grant or the human's typed direction). After `land_closed`, run `tools/lanes.py release --worktree <path> --reset`, then `executor_worktree.py remove`. Run every gate in the lane through `tools/lanes.py gate run` (`commands.md`). The governed land is Windows-only in stage 2; elsewhere it refuses `land_unsupported_platform` and writes nothing.
+A lane worktree (branch `lane/<slug>`) commits through `tools/lanes.py commit`; `commit_batch.py` refuses in a lane worktree (`commit_refused:lane_worktree`). It lands through the governed land instead of `executor_worktree.py land` (`land` refuses `land_fail:lane_route:<slug>`): `tools/lanes.py land prepare` (rebase onto pinned main, the integration requests, the secrets scan, the gate), the reviewer verdict on the ready tree, then `tools/lanes.py land publish` (one main commit through `commit_batch.py`, under a verified grant or the human's typed direction). After `land_closed`, run `executor_worktree.py remove <path>` from the main tree, then `tools/lanes.py release --worktree <path> --reset`. Run every gate in the lane through `tools/lanes.py gate run` (`commands.md`). The governed land is Windows-only in stage 2; elsewhere it refuses `land_unsupported_platform` and writes nothing.
 
 Key rules during execution:
 
@@ -435,7 +437,9 @@ Next: <one line>
 
 An exec run records what it landed, so the monitor can verify DONE. Keep this order:
 
-1. At the start: `credits_msg.py tree <path>` (above).
+1. At the start: `credits_msg.py tree <path>` (above). The run's worktree is made with its run
+   identity, `executor_worktree.py create <run-id> --run-id <run-id> --op <op> --plan <slug>`, and
+   no `--lane-plan`: `.agent/lane-route.json` does not route it, so H2-3c keeps `land`.
 2. At H2-3c: `executor_worktree.py land <worktree>`, then `credits_msg.py landing --part product
    --changed-files <list> --closeout <path> ...`, then `executor_worktree.py remove <worktree>`
    only after the product part is in the store. A crash between `land` and the capture leaves the

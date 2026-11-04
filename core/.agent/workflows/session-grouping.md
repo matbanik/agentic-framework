@@ -83,6 +83,26 @@ Confirm the drift check passes.
 
 **B2. Bundle into sessions.** Apply the Design Principles above. Group MEUs into sequential sessions: foundational/shared-file MEUs together, dependents downstream, GUI/docs after the engine they consume. Size each session against named past sessions (B-prereq read #5). Flag any session likely to exceed ~50% context as a split candidate.
 
+**B2a. Session Ownership.** Give each proposed session a parallel tier from B1. Tier 1 runs first, and the sessions of one tier may run at the same time. Write a `## Session Ownership` section in the grouping file. Its one `yaml` block names the tier and the `owns` set of each session, with the path rules of the `## Lane Ownership` section in `TASK-TEMPLATE.md`:
+
+```yaml
+sessions:
+  CS1:
+    tier: 1
+    owns:
+      - src/services/example/
+  CS2:
+    tier: 1
+    owns:
+      - ui/src/renderer/src/features/example/
+  CS3:
+    tier: 2
+    owns:
+      - src/services/example/
+```
+
+Before you write the proposal (B4), run `rtk proxy uv run python tools/lanes.py ownership-check --grouping <grouping file> *> {{RECEIPTS_DIR}}/grouping-ownership.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/grouping-ownership.txt; exit $code`. It prints `ownership_ok`, or one `overlap:<tier>:<a>:<b>:<entry>` line for each pair of sessions in one tier whose `owns` sets overlap. Fix each overlap: move one session to a later tier, or split the `owns` entries, then run the check again. Sessions in different tiers run in series, so they may own the same path. Each session's plan copies its `owns` set into its `## Lane Ownership` section (`create-plan.md` Step 4).
+
 **B3. Token calibration.** Estimate per-session in/out, each anchored to a **named** prior session of similar type — express as "calibrate vs {named session}", do not hardcode token constants.
 
 **B4. Write the proposal.** Write to the canonical path (see §Naming) using the **required core** below. Optional sections may be added when the phase warrants.
@@ -94,6 +114,7 @@ Confirm the drift check passes.
 | H | Header block: Source · Generated · Method · Origin · `Status: Active` · "reversible draft — not a gate" note | ✅ |
 | 1 | **MEU / scope summary** — table: MEU · slug · covers (findings) · layer · depends-on | ✅ |
 | 2 | **Dependency graph + critical path** — fenced graph + explicit critical-path line + parallel-tier notes | ✅ |
+| O | **Session Ownership** — the `## Session Ownership` block of B2a, with a clean `tools/lanes.py ownership-check --grouping` result | ✅ |
 | 3 | **Recommended grouping — N sessions** — per session: MEUs, layer/files, why-grouped rationale, token est, split flag | ✅ |
 | 4 | **Plan-creation pathway** — the `/create-plan` handoff: default single-plan-per-phase, or the ordered list of session slugs if fanning out | ✅ |
 | 5 | Prerequisite gate (blocked-on / can-begin-now) | optional |

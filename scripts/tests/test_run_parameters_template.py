@@ -334,7 +334,7 @@ def _status(adopter: Adopter) -> dict[str, Any]:
 
 
 def test_task_template_frontmatter_carries_the_block() -> None:
-    """AC-I.1: ``run_parameters`` (eight keys), ``bound_sessions: []``; version 2.5 (review limits)."""
+    """AC-I.1: ``run_parameters`` (eight keys), ``bound_sessions: []``; version 2.6 (review limits in 2.5, the lane route in 2.6)."""
     meta = _frontmatter(TASK_TEMPLATE)
     block = meta.get("run_parameters")
     assert isinstance(block, dict), meta
@@ -343,7 +343,7 @@ def test_task_template_frontmatter_carries_the_block() -> None:
     assert block["schema"] == "run-parameters/1"
     assert block["push"] == "never"
     assert meta.get("bound_sessions") == []
-    assert meta.get("template_version") == "2.5"
+    assert meta.get("template_version") == "2.6"
 
 
 def test_task_template_row_order() -> None:

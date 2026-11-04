@@ -94,7 +94,12 @@ resumes in its `suspended` state): `<state from tools/credits_msg.py tree>`.
    (`STOPPED:decision`). Follow the record: never continue past a `PARKED:*` or `STOPPED:*`.
 3. The executor worktree rule: from `transition:admitted` through `exec:active` the run works in
    the executor worktree that admission registered, never in the main tree. After H2-3c has
-   removed the worktree (its two removal records), the run continues in the main tree. Remove it
+   removed the worktree (its two removal records), the run continues in the main tree. This
+   brief keeps the old route: the run's worktree is made with its run identity
+   (`executor_worktree.py create <run-id> --run-id <run-id> --op <op> --plan <slug>`, no
+   `--lane-plan`), which `.agent/lane-route.json` does not route, so H2-3c runs
+   `land` and then `remove` (the lane route of `execution-session.md` §4, the default for other
+   plans, is not used in a credits run). Remove it
    only with `tools/executor_worktree.py remove <path>` (the absolute path that `create`
    printed); never `rm`/`rmdir` a worktree. The tool writes `worktree_removal_started` before the
    removal and `worktree_removed` after it; `--discard` of work that has not landed needs a

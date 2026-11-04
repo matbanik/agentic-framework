@@ -6,7 +6,7 @@ runtime data — use selective contract merges for divergent files; recopy only 
 
 Source commit: 02eb4e37e513fe10579c9984d62227ae83ba834e + tree dfdaf8e6d3cdc33d8aade62d2a3eea920edf9ea6 (uncommitted at port time)
 
-Last refreshed: **2026-10-21** (parallel lanes stage 1: `tools/lanes.py`, `tools/os_lease.py`, `tools/ref_guard.py`, the `junction_files` worktree key, the ref-guard intent in `commit_batch.py`, the lane template and workflow text). Previous: **2026-10-19** (run parameters: the `run_parameters` block, the M-list, the exact-scope commit route, the commit hook and the activation policy template). Previous: **2026-10-08** (dispatch resume and fork: `-ResumeDispatchId` / `-ForkDispatchId`
+Last refreshed: **2026-11-03** (parallel lanes stage 2b, the lane route: `.agent/lane-route.json.template`, `ownership-check`, `landed`, the land secrets scan, `create --lane-plan`, TASK-TEMPLATE v2.6). Previous: **2026-10-21** (parallel lanes stage 1: `tools/lanes.py`, `tools/os_lease.py`, `tools/ref_guard.py`, the `junction_files` worktree key, the ref-guard intent in `commit_batch.py`, the lane template and workflow text). Previous: **2026-10-19** (run parameters: the `run_parameters` block, the M-list, the exact-scope commit route, the commit hook and the activation policy template). Previous: **2026-10-08** (dispatch resume and fork: `-ResumeDispatchId` / `-ForkDispatchId`
 on both Codex wrappers, the new `Invoke-ClaudeDispatch.ps1`, review classes refused, docs routed
 through the Claude wrapper). Previous: **2026-10-07** (Cursor worker templates and the Gemini review rung
 retired; `scout` and `peer_reviewer` classes and agent templates added, `effort:` pinned in
@@ -254,6 +254,35 @@ adopter supplies and the Windows-only land.
 
 `core/.agent/run-parameters/governance/01-agents.diff` carries the D-1 commit sentence of
 `AGENTS.md`; regenerate it from the approved source text (M-3), never by hand.
+
+### Parallel lanes (stage 2b: the lane route)
+
+The lane route makes a lane worktree the default for a plan that runs in an executor worktree.
+The package ships the policy as a template only: an adopter copies
+`core/.agent/lane-route.json.template` to `.agent/lane-route.json` to opt in (`"required": true`
+refuses `executor_worktree.py create` without `--lane-plan`, `land`, and `commit_batch.py` in a
+lane worktree, except for a slug in `exempt`). The package default is `"required": false` with
+`"exempt": []`, so an adopter who copies nothing keeps the old route. A worktree made with its run
+identity (`create <run-id> --run-id <run-id> --op <op> --plan <slug>`, a credits run) keeps the old
+route even under `required: true`. The package numbers the TASK template change v2.6 (v2.5 is the
+review limits change here); a source that calls it 2.5 is the same change.
+
+| Source | Destination | Notes |
+|---|---|---|
+| `tools/lanes.py` | `core/tools/lanes.py` | **Hand-merge** `ownership-check --task/--grouping`, the `## Session Ownership` parser, `landed --worktree`, and the secrets scan of land step 3 (`secrets_ok`, `secrets_skip:*`, `secrets_lines_moved:<n>`, `land_fail:secrets:*`). `_refuse_junctions` takes the `junction_files(top)` list; the scan-entry variable is `{{PROJECT_NAME_UPPER}}_LANES_SCAN_ENTRY`. The default `SCAN_ENTRY` runs the adopter's `pre-commit` detect-secrets hook; with no `.secrets.baseline` or no pre-commit config the scan is skipped |
+| `tools/executor_worktree.py` | `core/tools/executor_worktree.py` | **Hand-merge** `create --lane-plan/--session` (claims after the build), `worktree_bad:no_plan`, `worktree_bad:claim:<reason>`, `land_fail:lane_route:<slug>`, and `remove` after a lane-route land. `tools.commit_batch` loads lazily (`_commit_batch()`), never at import; `LANE_ROUTE_FILE` is a literal because `commit_batch` owns the shape |
+| `tools/commit_batch.py` | `core/tools/commit_batch.py` | **Hand-merge** `LaneRoute`, `lane_route()` and `_refuse_lane_worktree` (the `lane_worktree` refusal on the command line); keep the token scrubs |
+| `docs/execution/plans/TASK-TEMPLATE.md` | `core/templates/TASK-TEMPLATE.md` | `template_version` 2.6: Lane Ownership is the default, the `--lane-plan` start, the request forms in H1-3, H2-3, H2-3a and H2-3b, and `land prepare` before `executor_worktree.py land` in H2-3c |
+| `.agent/context/handoffs/TEMPLATE.md` | `core/templates/HANDOFF-TEMPLATE.md` | One sentence: the BUILD_PLAN mark comes from the `meu-status` request |
+| `.agent/workflows/{create-plan,session-grouping,execution-session}.md` | same under `core/` | Hand-port the `ownership-check` steps, the `## Session Ownership` block, the lane default and the remove-then-release order into the condensed package text |
+| `.agent/docs/commands.md` | `core/.agent/docs/commands.md` | The `--lane-plan` form, the two `ownership-check` lines and the release order; no `uv run` or `rtk` prefix changes |
+| `.agent/skills/terminal-preflight/SKILL.md`, `.agent/skills/claude-credits/templates/resume-brief.md` | same under `core/` | The lane worktree release order; the old-route paragraph of the resume brief |
+| `.agent/lane-route.json` | `core/.agent/lane-route.json.template` | Same schema (`lane-route/1`); `required` false, `exempt` empty. Never ship the source project's `exempt` list |
+| _(package)_ | `scripts/refcheck.py` `ADOPTER_CREATED`, `scripts/tests/test_run_parameters_template.py` | `.agent/lane-route.json` is adopter-created (like the run-parameters policy); the template test pins `template_version` 2.6 |
+| `tests/tooling/test_lane_route_tooling.py`, `test_lane_route_instructions.py` | `core/tools/tests/` | Imports through `tools.tests`; the junction config comes from `lane_worktree_config`. Dropped: the real-scanner test (needs the source's `.secrets.baseline` and `.pre-commit-config.yaml`) and the source-project plan `ns1` case of the template check |
+
+Not ported because the package copy has no matching paragraph: `.agent/docs/testing-strategy.md`
+(`--snapshot`) and `.agent/skills/cli-dispatch/SKILL.md` (executor worktree sentence).
 
 ### Subagent agent definitions (required for subagent flows)
 

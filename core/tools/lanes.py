@@ -28,8 +28,11 @@ Commands (stdout; a refusal prints ``refused: <reason>`` and exits 1):
     lanes.py land prepare --worktree <path> --l0 <sha> --message-file <file> [--op <id>]
     lanes.py land prepare --op <id> --verdict <file>             # bound to tree(T)
     lanes.py land recover --op <id>                              # exit 3 op_busy
+    lanes.py landed  --worktree <path>                           # read-only; exit 1 not landed
     lanes.py list    [--json]
     lanes.py check   --plan <dir> [--base <rev>]
+    lanes.py ownership-check --task <task.md>                    # read-only; ownership_ok
+    lanes.py ownership-check --grouping <file>                   # overlap:<tier>:<a>:<b>:<entry>
     lanes.py gate run --worktree <path> -- <argv...>             # exits with the child's code
     lanes.py deps begin --worktree <path> [--wait-s N]           # N: 0-3600, default 600
     lanes.py deps end   --worktree <path>
@@ -104,11 +107,45 @@ neither it refuses ``needs_human_publish`` and prints the sentence
 ``Commit the <slug> plan on main.``. A lane worktree carrier that no longer
 hashes to the recorded blob refuses ``carrier_mismatch``. With authority it
 journals ``land:authorized`` and ends ``land_authorized:<op>:<tree>:<route>``.
+
+Lane route: Step 3 ends with the secrets scan
+(``_scan_secrets``): the scanner argv is ``SCAN_ENTRY`` (pre-commit's
+detect-secrets v1.5.0 hook through ``uv run --project <this repository>``). The
+environment variable ``{{PROJECT_NAME_UPPER}}_LANES_SCAN_ENTRY`` (``SCAN_ENTRY_ENV``) replaces it
+with a JSON list of strings that holds ``{paths}``. Each ``{paths}`` element becomes
+the paths that T changes against P (deletions skipped, repo-relative POSIX). The
+scanner runs in a scratch detached worktree at T that holds P's
+``.secrets.baseline`` and is removed after the scan. An entry element
+``{config}`` (``SCAN_CONFIG_ARG``; the default entry's ``--config {config}``)
+becomes the path of a copy of P's ``.pre-commit-config.yaml`` beside the candidate,
+outside the scanned tree, so the scanner configuration is P's while T's own
+config bytes are scanned as T has them (R2-1). Step 3 prints and journals one of
+``secrets_ok``, ``secrets_skip:no_baseline`` (P has no baseline),
+``secrets_skip:no_config`` (the entry holds ``{config}`` and P has no pre-commit
+config) or ``secrets_lines_moved:<n>``. A
+``Location: <path>:<line>`` report or a new ``hashed_secret`` in the scanned baseline
+refuses ``land_fail:secrets:<path>``; a baseline that is not JSON with a ``results``
+object refuses ``land_fail:secrets:baseline_unreadable``; a scanner that fails with
+neither refuses ``land_fail:secrets:scanner_failed``; a bad environment entry refuses
+``land_fail:secrets:scan_entry_bad``. The integrator still never stages a baseline.
+``landed --worktree <path>`` is the read-only query of ``executor_worktree.py
+remove``: run in the main tree, it prints ``landed:<L0>:<C>`` when the card of that
+worktree is ``landing``, its land op is closed with the published commit C on
+``main`` and ``lane/<slug>`` is still L0, else ``not_landed:<reason>`` (exit 1).
+
+``ownership-check`` is read-only and takes no card.
+``--task`` runs the Lane Ownership checks of ``claim`` on one ``task.md``, with the
+contradiction named ``owns_overlap:<owns entry>``. ``--grouping`` reads the
+``## Session Ownership`` block of a grouping file (``sessions:`` -> ``<id>:`` ->
+``tier`` and ``owns``) and prints ``overlap:<tier>:<a>:<b>:<entry>`` for each pair of
+sessions in one tier whose ``owns`` sets overlap. A failed check prints
+``ownership_bad:<reason>`` and exits 1; a clean check prints ``ownership_ok``.
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import ctypes
 import io
@@ -178,6 +215,9 @@ CARD_KEYS = (
 CARD_STATES = ("active", "landing", "released")
 RESERVING_STATES = ("active", "landing")
 OWNERSHIP_KEYS = ("owns", "must_not_touch")
+# The grouping file's per-session ownership block (session-grouping STAGE B).
+SESSION_OWNERSHIP_HEADING = "## Session Ownership"
+SESSION_OWNERSHIP_KEYS = ("tier", "owns")
 EXIT_REFUSED = 1
 EXIT_HALT = 3
 # AC-785.12: a second recovery of one op is an ordering wait, not a refusal.
@@ -307,6 +347,38 @@ GATE_PASS = "pass"
 # R1-F6: the gate runs with the candidate's runtime; a caller's venv variables
 # would point its ``uv run`` at another tree's venv (executor_worktree's list).
 GATE_ENV_DROPPED = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
+# The scan also drops pre-commit's ``SKIP``, which would skip the hook
+# and leave a false ``secrets_ok``.
+SCAN_ENV_DROPPED = (*GATE_ENV_DROPPED, "SKIP")
+# The secrets scan of step 3. ``--project`` is the
+# repository that runs this module, whose ``.venv`` holds pre-commit.
+SCAN_ENTRY: tuple[str, ...] = (
+    "uv",
+    "run",
+    "--project",
+    Path(__file__).resolve().parent.parent.as_posix(),
+    "pre-commit",
+    "run",
+    "--config",
+    "{config}",
+    "detect-secrets",
+    "--files",
+    "{paths}",
+)
+SCAN_ENTRY_ENV = "{{PROJECT_NAME_UPPER}}_LANES_SCAN_ENTRY"
+SCAN_PATHS = "{paths}"
+# R2-1: P's pre-commit config reaches the scanner by this element, never by
+# overwriting T's ``.pre-commit-config.yaml``, which the scan must read as T has it.
+SCAN_CONFIG_ARG = "{config}"
+SCAN_BASELINE = ".secrets.baseline"
+SCAN_CONFIG = ".pre-commit-config.yaml"
+SCAN_TREE_SUFFIX = "-scan"
+SCAN_CONFIG_SUFFIX = "-scan-config.yaml"
+SCAN_TIMEOUT_S = 900
+# One scanner call per this many argv characters of paths: the Windows command line
+# holds 32767 characters.
+SCAN_ARGV_CHARS = 24000
+_SCAN_LOCATION_RE = re.compile(r"\s*Location:\s+(.+):(\d+)\s*")
 # ``land prepare --op ID --verdict FILE`` (IP boundary row "Verdict file").
 VERDICT_SCHEMA = "land-verdict/1"
 VERDICT_KEYS = ("schema", "op", "tree", "verdict", "review")
@@ -340,6 +412,8 @@ _DRIVE_RE = re.compile(r"[A-Za-z]:")
 _GLOB_CHARS = frozenset("*?[]")
 _KEY_LINE_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*):(.*)")
 _ITEM_LINE_RE = re.compile(r"\s+-(\s.*)?")
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_TIER_RE = re.compile(r"[+-]?[0-9]+")
 _REQUEST_SYNTAX = {
     "meu-status": re.compile(
         r"meu-status (?P<meu>\S+) -> (?P<status>\S+)(?: reason=(?P<reason>.+))?"
@@ -885,15 +959,21 @@ def _unquote(value: str, key: str) -> str:
     return value
 
 
-def _ownership_block(text: str, source: Path) -> list[str]:
-    """The lines inside the ```yaml fence of the Lane Ownership section."""
+def _ownership_block(
+    text: str, source: Path, heading: str = OWNERSHIP_HEADING
+) -> list[str]:
+    """The lines inside the ```yaml fence of the ``heading`` section.
+
+    ``heading`` is the plan's Lane Ownership section by default; the grouping
+    check passes the Session Ownership heading.
+    """
     lines = text.splitlines()
-    starts = [i for i, line in enumerate(lines) if line.strip() == OWNERSHIP_HEADING]
+    starts = [i for i, line in enumerate(lines) if line.strip() == heading]
     if not starts:
-        raise Refusal(
-            "no_ownership",
-            f"{source} has no '{OWNERSHIP_HEADING}' section; a lane needs one",
+        need = (
+            "a lane needs one" if heading == OWNERSHIP_HEADING else "STAGE B writes it"
         )
+        raise Refusal("no_ownership", f"{source} has no '{heading}' section; {need}")
     if len(starts) > 1:
         raise Refusal("ownership_bad:section", f"{source} has two ownership sections")
     fence: int | None = None
@@ -957,6 +1037,23 @@ def _load_ownership(
             ``entry_bad:<entry>`` or ``ownership_contradiction:<own>:<mnt>``.
         OSError: ``task_md`` cannot be read.
     """
+    owns, mnt = _read_ownership(task_md)
+    pair = _contradiction(owns, mnt, ignorecase=ignorecase)
+    if pair is not None:
+        raise Refusal(
+            f"ownership_contradiction:{pair[0]}:{pair[1]}",
+            "an owns entry and a must_not_touch entry overlap",
+        )
+    return owns, mnt
+
+
+def _read_ownership(task_md: Path) -> tuple[list[str], list[str]]:
+    """``(owns, must_not_touch)`` of the section, each entry checked by ``_entry_ok``.
+
+    Raises:
+        Refusal: ``no_ownership``, ``ownership_bad:<key>`` or ``entry_bad:<entry>``.
+        OSError: ``task_md`` cannot be read.
+    """
     text = task_md.read_text(encoding="utf-8")
     data = _parse_ownership(_ownership_block(text, task_md))
     owns, mnt = data["owns"], data["must_not_touch"]
@@ -967,14 +1064,226 @@ def _load_ownership(
                 "entries are repository-relative paths or prefixes ending in '/': "
                 "no globs, absolute paths, drive letters, backslashes, '.' or '..'",
             )
+    return owns, mnt
+
+
+def _contradiction(
+    owns: Sequence[str], mnt: Sequence[str], *, ignorecase: bool
+) -> tuple[str, str] | None:
+    """The first ``(owns entry, must_not_touch entry)`` pair that overlaps, if any."""
     for own in owns:
         for avoid in mnt:
             if _overlaps(_normalize(own, ignorecase), _normalize(avoid, ignorecase)):
+                return own, avoid
+    return None
+
+
+def _refuse_junctions(owns: Sequence[str], junctions: Sequence[str]) -> None:
+    """Refuse an ``owns`` entry that is a junction file or a folder above one.
+
+    The lane could create the file there, so whether it exists yet does not count
+    (R1-F3). The compare always folds case: a junction file is one file on every
+    filesystem this repository is checked out on.
+
+    Raises:
+        Refusal: ``owns_junction:<entry>``, the entry as written.
+    """
+    for entry in owns:
+        folded = _normalize(entry, True)
+        for junction in junctions:
+            if _covers(folded, _normalize(junction, True)):
                 raise Refusal(
-                    f"ownership_contradiction:{own}:{avoid}",
-                    "an owns entry and a must_not_touch entry overlap",
+                    f"owns_junction:{entry}",
+                    f"{junction} is a junction file; only the integrator edits it. "
+                    "Write an Integration request in the handoff instead.",
                 )
-    return owns, mnt
+
+
+def _session_block_lines(block: Sequence[str]) -> list[tuple[int, int, str]]:
+    """``(line number, indent, text)`` of the block's content lines.
+
+    Blank lines and ``#`` comment lines drop out. Indentation is spaces only.
+
+    Raises:
+        Refusal: ``ownership_bad:syntax`` for a tab in the indentation.
+    """
+    out: list[tuple[int, int, str]] = []
+    for number, line in enumerate(block, start=1):
+        text = line.rstrip()
+        if not text.strip() or text.lstrip().startswith("#"):
+            continue
+        stripped = text.lstrip(" ")
+        if stripped.startswith("\t"):
+            raise Refusal(
+                "ownership_bad:syntax", f"line {number}: indent with spaces, not tabs"
+            )
+        out.append((number, len(text) - len(stripped), stripped))
+    return out
+
+
+def _parse_session_ownership(block: Sequence[str]) -> list[tuple[str, int, list[str]]]:
+    """``(session, tier, owns)`` of each session of a ``## Session Ownership`` block.
+
+    The block is the block-style mapping ``sessions:`` → ``<id>:`` → ``tier: <int>``
+    and ``owns:`` (a block list of entries, or ``[]``), in file order.
+
+    Raises:
+        Refusal: ``ownership_bad:extra_key:<key>``, ``ownership_bad:sessions``,
+            ``ownership_bad:session_id:<id>``, ``ownership_bad:duplicate:<id>``,
+            ``ownership_bad:tier:<session>``, ``ownership_bad:owns:<session>``,
+            ``ownership_bad:syntax`` or ``entry_bad:<entry>``.
+    """
+    lines = _session_block_lines(block)
+    if not lines:
+        raise Refusal("ownership_bad:sessions", "the block names no sessions")
+    number, indent, text = lines[0]
+    top = _KEY_LINE_RE.fullmatch(text)
+    if indent != 0 or top is None:
+        raise Refusal("ownership_bad:syntax", f"line {number}: want 'sessions:'")
+    if top.group(1) != "sessions":
+        raise Refusal(
+            f"ownership_bad:extra_key:{top.group(1)}",
+            f"line {number}: the only top-level key is 'sessions'",
+        )
+    if top.group(2).strip():
+        raise Refusal(
+            "ownership_bad:sessions", f"line {number}: 'sessions' must be a mapping"
+        )
+    sessions: list[tuple[str, int, list[str]]] = []
+    seen: set[str] = set()
+    session: str | None = None
+    tier: int | None = None
+    owns: list[str] | None = None
+    in_owns = False
+    keys: set[str] = set()
+
+    def close() -> None:
+        if session is None:
+            return
+        if tier is None:
+            raise Refusal(f"ownership_bad:tier:{session}", f"{session} has no tier")
+        if owns is None:
+            raise Refusal(f"ownership_bad:owns:{session}", f"{session} has no owns")
+        sessions.append((session, tier, owns))
+
+    for number, indent, text in lines[1:]:
+        if indent == 0:
+            key = _KEY_LINE_RE.fullmatch(text)
+            name = key.group(1) if key is not None else text
+            raise Refusal(
+                f"ownership_bad:extra_key:{name}",
+                f"line {number}: the only top-level key is 'sessions'",
+            )
+        if indent == 2:
+            close()
+            if not text.endswith(":") or not _SESSION_ID_RE.fullmatch(text[:-1]):
+                raise Refusal(
+                    f"ownership_bad:session_id:{text.rstrip(':')}",
+                    f"line {number}: a session id is letters, digits, '.', '_' "
+                    "or '-', then ':'",
+                )
+            session = text[:-1]
+            if session in seen:
+                raise Refusal(
+                    f"ownership_bad:duplicate:{session}",
+                    f"line {number}: {session} is named twice",
+                )
+            seen.add(session)
+            tier, owns, in_owns, keys = None, None, False, set()
+            continue
+        if session is None:
+            raise Refusal("ownership_bad:syntax", f"line {number}: want '  <id>:'")
+        item = _ITEM_LINE_RE.fullmatch(" " * indent + text)
+        if item is not None:
+            # A block list item of owns, indented under the key or level with it.
+            if not in_owns or owns is None:
+                raise Refusal(
+                    "ownership_bad:syntax", f"line {number}: a list item outside owns"
+                )
+            owns.append(_unquote((item.group(1) or "").strip(), "owns"))
+            continue
+        if indent == 4:
+            key = _KEY_LINE_RE.fullmatch(text)
+            if key is None:
+                raise Refusal("ownership_bad:syntax", f"line {number}: want 'key:'")
+            name, rest = key.group(1), key.group(2).strip()
+            if name not in SESSION_OWNERSHIP_KEYS:
+                raise Refusal(
+                    f"ownership_bad:extra_key:{name}",
+                    f"line {number}: a session takes only "
+                    f"{', '.join(SESSION_OWNERSHIP_KEYS)}",
+                )
+            if name in keys:
+                raise Refusal(
+                    f"ownership_bad:{name}:{session}",
+                    f"line {number}: {session} names {name} twice",
+                )
+            keys.add(name)
+            in_owns = False
+            if name == "tier":
+                if not _TIER_RE.fullmatch(rest) or int(rest) < 1:
+                    raise Refusal(
+                        f"ownership_bad:tier:{session}",
+                        f"line {number}: tier is a whole number of 1 or more, "
+                        f"got {rest!r}",
+                    )
+                tier = int(rest)
+            elif rest == "":
+                owns, in_owns = [], True
+            elif rest == "[]":
+                owns = []
+            else:
+                raise Refusal(
+                    f"ownership_bad:owns:{session}",
+                    f"line {number}: owns must be a list, got {rest!r}",
+                )
+            continue
+        raise Refusal("ownership_bad:syntax", f"line {number}: unexpected {text!r}")
+    close()
+    if not sessions:
+        raise Refusal("ownership_bad:sessions", "the block names no sessions")
+    for _, _, entries in sessions:
+        for entry in entries:
+            if not _entry_ok(entry):
+                raise Refusal(
+                    f"entry_bad:{entry}",
+                    "entries are repository-relative paths or prefixes ending in "
+                    "'/': no globs, absolute paths, drive letters, backslashes, '.' "
+                    "or '..'",
+                )
+    return sessions
+
+
+def _session_overlaps(
+    sessions: Sequence[tuple[str, int, list[str]]], *, ignorecase: bool
+) -> list[str]:
+    """One ``overlap:<tier>:<a>:<b>:<entry>`` line per same-tier pair that overlaps.
+
+    ``<a>`` comes before ``<b>`` in file order; ``<entry>`` is the first entry of
+    ``<a>``, as written, that overlaps an entry of ``<b>``. Sessions in different
+    tiers never conflict: a later tier starts after the earlier one lands.
+    """
+    found: list[str] = []
+    for index, (first, tier, owns_a) in enumerate(sessions):
+        for second, other_tier, owns_b in sessions[index + 1 :]:
+            if tier != other_tier:
+                continue
+            hit = next(
+                (
+                    entry
+                    for entry in owns_a
+                    if any(
+                        _overlaps(
+                            _normalize(entry, ignorecase), _normalize(other, ignorecase)
+                        )
+                        for other in owns_b
+                    )
+                ),
+                None,
+            )
+            if hit is not None:
+                found.append(f"overlap:{tier}:{first}:{second}:{hit}")
+    return found
 
 
 def _through_link(root: Path, rel: str) -> bool:
@@ -1237,19 +1546,7 @@ def _cmd_claim(
         raise Refusal("no_task", f"{task_md} does not exist")
     ignorecase = _ignorecase(top)
     owns, _ = _load_ownership(task_md, ignorecase=ignorecase)
-    junctions = junction_files(top)
-    for entry in owns:
-        folded = _normalize(entry, True)
-        for junction in junctions:
-            target = _normalize(junction, True)
-            # An entry that is a junction file, or a folder above one: the lane could
-            # create the file there, so whether it exists yet does not count (R1-F3).
-            if _covers(folded, target):
-                raise Refusal(
-                    f"owns_junction:{entry}",
-                    f"{junction} is a junction file; only the integrator edits it. "
-                    "Write an Integration request in the handoff instead.",
-                )
+    _refuse_junctions(owns, junction_files(top))
     worktree = Path(args.worktree).resolve()
     if not worktree.is_dir():
         raise Refusal("worktree_bad", f"{worktree} is not a directory")
@@ -3188,6 +3485,7 @@ def _integrate(
         _regenerate(candidate, derived)
         _land_focus(candidate, land)
         integrated = _commit_t(candidate, land, l1)
+        scanned = _scan_secrets(top, land, candidate, integrated)
     except Refusal:
         _remove_candidate(top, candidate)
         _set_card(
@@ -3201,13 +3499,329 @@ def _integrate(
             argv=argv,
         )
         raise
+    print(scanned, flush=True)
     _journal(
         land,
         LAND_INTEGRATE,
         done=True,
-        evidence={"L1": l1, "T": integrated, "request_ids": applied},
+        evidence={
+            "L1": l1,
+            "T": integrated,
+            "request_ids": applied,
+            "secrets": scanned,
+        },
     )
     return integrated
+
+
+# ---------------------------------------------------------------------------
+# land prepare: the secrets scan at the end of step 3 (lane route)
+# ---------------------------------------------------------------------------
+
+
+def _secrets_refusal(why: str, detail: str) -> Refusal:
+    return Refusal(f"land_fail:secrets:{why}", detail)
+
+
+def _scan_entry() -> list[str]:
+    """The scanner argv: ``SCAN_ENTRY``, or the one ``SCAN_ENTRY_ENV`` holds.
+
+    Raises:
+        Refusal: ``land_fail:secrets:scan_entry_bad`` when ``SCAN_ENTRY_ENV`` is not
+            a JSON list of non-empty strings that holds ``{paths}``.
+    """
+    raw = os.environ.get(SCAN_ENTRY_ENV)
+    if raw is None:
+        return list(SCAN_ENTRY)
+    try:
+        entry: object = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise _secrets_refusal(
+            "scan_entry_bad", f"{SCAN_ENTRY_ENV} is not JSON: {exc}"
+        ) from None
+    items = cast(list[object], entry) if isinstance(entry, list) else []
+    argv = [item for item in items if isinstance(item, str) and item]
+    if not items or len(argv) != len(items) or SCAN_PATHS not in argv:
+        raise _secrets_refusal(
+            "scan_entry_bad",
+            f"{SCAN_ENTRY_ENV} must be a JSON list of non-empty strings with "
+            f"{SCAN_PATHS!r}",
+        )
+    return argv
+
+
+def _tree_blob(top: Path, rev: str, rel: str) -> bytes | None:
+    """The bytes of the regular file ``rel`` in ``rev``; None when ``rev`` has none.
+
+    Raises:
+        Refusal: ``git_failed``.
+    """
+    listing = _git_text(top, "ls-tree", "-z", rev, "--", rel)
+    meta, _, name = listing.split("\0", 1)[0].partition("\t")
+    if name != rel or meta.split(" ")[:2] not in (
+        ["100644", "blob"],
+        ["100755", "blob"],
+    ):
+        return None
+    proc = _git(top, "cat-file", "blob", f"{rev}:{rel}")
+    if proc.returncode != 0:
+        raise Refusal(
+            "git_failed",
+            f"git cat-file blob {rev}:{rel} exited {proc.returncode}: "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}",
+        )
+    return proc.stdout
+
+
+def _baseline_entries(raw: bytes, where: str) -> dict[str, list[tuple[str, object]]]:
+    """``{path: [(hashed_secret, line_number), ...]}`` of a detect-secrets baseline.
+
+    Raises:
+        Refusal: ``land_fail:secrets:baseline_unreadable`` when ``raw`` is not a JSON
+            object whose ``results`` maps each path to a list of objects with a
+            string ``hashed_secret``.
+    """
+    try:
+        data: object = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _secrets_refusal("baseline_unreadable", f"{where}: {exc}") from None
+    top_level = cast(dict[str, object], data) if isinstance(data, dict) else {}
+    results = top_level.get("results")
+    if not isinstance(results, dict):
+        raise _secrets_refusal("baseline_unreadable", f"{where} has no results object")
+    entries: dict[str, list[tuple[str, object]]] = {}
+    for path, items in cast(dict[str, object], results).items():
+        if not isinstance(items, list):
+            raise _secrets_refusal(
+                "baseline_unreadable", f"{where}: results[{path!r}] is not a list"
+            )
+        pairs: list[tuple[str, object]] = []
+        for item in cast(list[object], items):
+            record = cast(dict[str, object], item) if isinstance(item, dict) else {}
+            digest = record.get("hashed_secret")
+            if not isinstance(digest, str):
+                raise _secrets_refusal(
+                    "baseline_unreadable",
+                    f"{where}: an entry of {path!r} has no string hashed_secret",
+                )
+            pairs.append((digest, record.get("line_number")))
+        entries[path.replace("\\", "/")] = pairs
+    return entries
+
+
+def _baseline_change(
+    before: Mapping[str, list[tuple[str, object]]],
+    after: Mapping[str, list[tuple[str, object]]],
+) -> tuple[str | None, int]:
+    """``(the first path with a new hashed_secret, 0)``, else ``(None, moved entries)``.
+
+    A moved entry is a ``(hashed_secret, line_number)`` pair of the scanned
+    baseline that P's baseline does not hold for that path, while it knows the hash.
+    """
+    for path in sorted(after):
+        known = {digest for digest, _ in before.get(path, [])}
+        if any(digest not in known for digest, _ in after[path]):
+            return path, 0
+    moved = 0
+    for path, pairs in after.items():
+        left = collections.Counter(before.get(path, []))
+        for pair in pairs:
+            if left[pair] > 0:
+                left[pair] -= 1
+            else:
+                moved += 1
+    return None, moved
+
+
+def _scan_chunks(paths: Sequence[str]) -> list[list[str]]:
+    """``paths`` in runs of at most ``SCAN_ARGV_CHARS`` argv characters (one if small)."""
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    size = 0
+    for rel in paths:
+        cost = len(rel) + 3
+        if current and size + cost > SCAN_ARGV_CHARS:
+            chunks.append(current)
+            current, size = [], 0
+        current.append(rel)
+        size += cost
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _remove_scan_tree(top: Path, path: Path) -> None:
+    """Remove the scratch scan worktree (``worktree remove --force``, then ``prune``).
+
+    Raises:
+        Refusal: ``candidate_remove`` (the folder stays on disk) or ``git_failed``.
+    """
+    removed = ""
+    if _listed(top, path):
+        proc = _git(
+            top, *GIT_LONGPATHS, "worktree", "remove", "--force", path.as_posix()
+        )
+        removed = proc.stderr.decode("utf-8", "replace").strip()
+    if path.exists():
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            raise Refusal(
+                "candidate_remove",
+                f"cannot remove the scan worktree {path}: {exc} {removed}".strip(),
+            ) from None
+    _git_text(top, *GIT_LONGPATHS, "worktree", "prune")
+
+
+def _remove_scan_config(path: Path) -> None:
+    """Remove the separate copy of P's pre-commit config (R2-1).
+
+    Raises:
+        Refusal: ``candidate_remove`` (the file stays on disk).
+    """
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise Refusal(
+            "candidate_remove", f"cannot remove the scan config {path}: {exc}"
+        ) from None
+
+
+def _run_scanner(
+    scratch: Path, entry: Sequence[str], paths: Sequence[str], baseline: bytes
+) -> tuple[list[str], bytes]:
+    """Run the scanner on ``paths`` in ``scratch``; (paths it reports, final baseline).
+
+    The hook exits 1 for a new secret (``Location:`` lines, baseline
+    untouched) and for a line move (baseline rewritten), so the exit code alone
+    decides nothing. A non-zero exit with neither is a failed scanner.
+
+    Raises:
+        Refusal: ``land_fail:secrets:scanner_failed``.
+    """
+    env = {k: v for k, v in _git_env().items() if k not in SCAN_ENV_DROPPED}
+    named: list[str] = []
+    current = baseline
+    for chunk in _scan_chunks(paths):
+        argv: list[str] = []
+        for item in entry:
+            argv += chunk if item == SCAN_PATHS else [item]
+        try:
+            proc = subprocess.run(  # noqa: S603 - the fixed or the test-supplied entry
+                argv,
+                cwd=str(scratch),
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                env=env,
+                timeout=SCAN_TIMEOUT_S,
+                check=False,
+            )
+            now = (scratch / SCAN_BASELINE).read_bytes()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise _secrets_refusal("scanner_failed", f"{argv[0]}: {exc}") from None
+        text = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+        found = [
+            match.group(1).strip().replace("\\", "/")
+            for match in map(_SCAN_LOCATION_RE.fullmatch, text.splitlines())
+            if match is not None
+        ]
+        if proc.returncode != 0 and not found and now == current:
+            tail = "\n".join(text.strip().splitlines()[-20:])
+            raise _secrets_refusal(
+                "scanner_failed",
+                f"the scanner exited {proc.returncode} with no Location line and no "
+                f"baseline change: {' '.join(entry)}\n{tail}",
+            )
+        named += found
+        current = now
+    return named, current
+
+
+def _scan_secrets(top: Path, land: LandOp, candidate: Path, integrated: str) -> str:
+    """The secrets line of step 3: scan every path that T changes against P.
+
+    Returns:
+        ``secrets_ok``, ``secrets_skip:no_baseline``, ``secrets_skip:no_config`` or
+        ``secrets_lines_moved:<n>``.
+
+    Raises:
+        Refusal: ``land_fail:secrets:<path>``, ``land_fail:secrets:baseline_unreadable``,
+            ``land_fail:secrets:scanner_failed``, ``land_fail:secrets:scan_entry_bad``,
+            ``candidate_remove`` or ``git_failed``.
+    """
+    parent = str(land.fields()["P"])
+    baseline = _tree_blob(top, parent, SCAN_BASELINE)
+    if baseline is None:
+        return "secrets_skip:no_baseline"
+    before = _baseline_entries(baseline, f"{SCAN_BASELINE} of P {parent}")
+    entry = _scan_entry()
+    wants_config = SCAN_CONFIG_ARG in entry
+    config = _tree_blob(top, parent, SCAN_CONFIG) if wants_config else None
+    if wants_config and config is None:
+        return "secrets_skip:no_config"
+    listing = _git_text(
+        top,
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        "--diff-filter=d",
+        parent,
+        integrated,
+    )
+    paths = sorted({rel for rel in listing.split("\0") if rel})
+    if not paths:
+        return "secrets_ok"
+    scratch = candidate.parent / f"{candidate.name}{SCAN_TREE_SUFFIX}"
+    # R2-1: outside the scanned tree, so T's own config bytes stay as T has them.
+    config_file = candidate.parent / f"{candidate.name}{SCAN_CONFIG_SUFFIX}"
+    argv = [
+        config_file.as_posix() if item == SCAN_CONFIG_ARG else item for item in entry
+    ]
+    _remove_scan_tree(top, scratch)
+    _remove_scan_config(config_file)
+    _git_text(
+        top,
+        *GIT_LONGPATHS,
+        "worktree",
+        "add",
+        "--detach",
+        scratch.as_posix(),
+        integrated,
+    )
+    try:
+        try:
+            (scratch / SCAN_BASELINE).write_bytes(baseline)
+            if config is not None:
+                config_file.write_bytes(config)
+        except OSError as exc:
+            raise _secrets_refusal(
+                "scanner_failed", f"cannot seed the scan worktree {scratch}: {exc}"
+            ) from None
+        named, scanned = _run_scanner(scratch, argv, paths, baseline)
+    finally:
+        try:
+            _remove_scan_tree(top, scratch)
+        finally:
+            _remove_scan_config(config_file)
+    if named:
+        shown = sorted(set(named))
+        raise _secrets_refusal(
+            shown[0],
+            "the secrets scanner reports a new secret in "
+            + ", ".join(shown)
+            + "; remove it from the lane, or audit it into the baseline on main",
+        )
+    if scanned == baseline:
+        return "secrets_ok"
+    path, moved = _baseline_change(
+        before, _baseline_entries(scanned, f"the scanned {SCAN_BASELINE}")
+    )
+    if path is not None:
+        raise _secrets_refusal(
+            path, f"the scanned {SCAN_BASELINE} holds a new hashed_secret for {path}"
+        )
+    return f"secrets_lines_moved:{moved}" if moved else "secrets_ok"
 
 
 # ---------------------------------------------------------------------------
@@ -4306,6 +4920,113 @@ def _cmd_land_prepare(
         _ready(top, land, objects, Path(str(card["worktree"])))
     finally:
         os_lease.release(lease)
+    return 0
+
+
+def _cmd_landed(args: argparse.Namespace) -> int:
+    """``landed --worktree <path>``: is that lane worktree's work on main?
+
+    Read-only, run in the main tree. Prints exactly one line: ``landed:<L0>:<C>``
+    (exit 0) when the card naming the worktree is ``landing``, its land op is closed
+    with the published commit C, C is an ancestor of ``main`` and ``lane/<slug>`` is
+    still L0; else ``not_landed:<reason>`` (exit 1) with the detail on stderr.
+    """
+    try:
+        top, common = _repo_dirs(Path.cwd())
+        card = _card_for_worktree(common, Path(args.worktree).resolve().as_posix())
+        if card["state"] != "landing":
+            raise Refusal(
+                f"card_{card['state']}",
+                f"the card of {card['lane']} is {card['state']}, not landing",
+            )
+        land, landed = _closed_land(top, card)
+        l0 = land.fields().get("L0")
+        if not isinstance(l0, str) or not _OBJECT_ID_RE.fullmatch(l0):
+            raise Refusal(
+                "journal_schema:L0",
+                f"the closed land op {land.op} records no 40-hex L0",
+            )
+        on_main = _git(top, "merge-base", "--is-ancestor", landed, "refs/heads/main")
+        if on_main.returncode not in (0, 1):
+            raise Refusal(
+                "git_failed",
+                f"git merge-base --is-ancestor exited {on_main.returncode}: "
+                f"{on_main.stderr.decode('utf-8', 'replace').strip()}",
+            )
+        if on_main.returncode == 1:
+            raise Refusal("not_on_main", f"the landed commit {landed} is not on main")
+        tip = _branch_tip(top, card["branch"])
+        if tip != l0:
+            raise Refusal(
+                "lane_moved",
+                f"{card['branch']} is at {tip}, not at L0 {l0} of land op {land.op}",
+            )
+    except Refusal as exc:
+        print(f"not_landed:{exc.reason}")
+        if exc.detail:
+            sys.stderr.write(f"{exc.detail}\n")
+        return EXIT_REFUSED
+    print(f"landed:{l0}:{landed}")
+    return 0
+
+
+def _cmd_ownership_check(args: argparse.Namespace) -> int:
+    """``ownership-check (--task <task.md> | --grouping <file>)``: read-only checks.
+
+    ``--task`` runs the Lane Ownership checks of ``claim`` (the section, its
+    entries, the owns/must_not_touch overlap and the junction-file cover) without
+    a card. ``--grouping`` reads the grouping file's ``## Session Ownership`` block
+    and prints one ``overlap:<tier>:<a>:<b>:<entry>`` line for each same-tier pair
+    of sessions whose ``owns`` sets overlap. Nothing is written.
+
+    Prints ``ownership_ok`` and returns 0 when every check passes. A failed check
+    prints ``ownership_bad:<reason>`` on stdout (the detail on stderr); overlap
+    lines, or a failed check, return 1.
+    """
+    try:
+        top, _ = _repo_dirs(Path.cwd())
+        ignorecase = _ignorecase(top)
+        if args.task is not None:
+            task_md = Path(args.task)
+            if not task_md.is_file():
+                raise Refusal("no_task", f"{task_md} does not exist")
+            owns, mnt = _read_ownership(task_md)
+            pair = _contradiction(owns, mnt, ignorecase=ignorecase)
+            if pair is not None:
+                # Same refusal as claim's ownership_contradiction owns_overlap.
+                raise Refusal(
+                    f"owns_overlap:{pair[0]}",
+                    f"owns entry {pair[0]} overlaps must_not_touch entry {pair[1]}",
+                )
+            _refuse_junctions(owns, junction_files(top))
+            print("ownership_ok")
+            return 0
+        grouping = Path(args.grouping)
+        if not grouping.is_file():
+            raise Refusal("no_grouping", f"{grouping} does not exist")
+        block = _ownership_block(
+            grouping.read_text(encoding="utf-8"), grouping, SESSION_OWNERSHIP_HEADING
+        )
+        sessions = _parse_session_ownership(block)
+    except Refusal as exc:
+        print(f"ownership_bad:{exc.reason.removeprefix('ownership_bad:')}")
+        if exc.detail:
+            sys.stderr.write(f"{exc.detail}\n")
+        return EXIT_REFUSED
+    except (OSError, UnicodeDecodeError) as exc:
+        print("ownership_bad:io_error")
+        sys.stderr.write(f"{exc}\n")
+        return EXIT_REFUSED
+    overlaps = _session_overlaps(sessions, ignorecase=ignorecase)
+    for line in overlaps:
+        print(line)
+    if overlaps:
+        sys.stderr.write(
+            "same-tier sessions own overlapping paths: move one to another tier "
+            "or split the owns entries\n"
+        )
+        return EXIT_REFUSED
+    print("ownership_ok")
     return 0
 
 
@@ -5453,6 +6174,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     publish.add_argument("--session", help="the session of the typed direction")
     publish.add_argument("--message-uuid", help="the typed direction's message uuid")
+    landed = sub.add_parser(
+        "landed", help="read-only: is the lane worktree's work published on main?"
+    )
+    landed.add_argument("--worktree", required=True)
     listing = sub.add_parser("list", help="show every card without the registry lock")
     listing.add_argument("--json", action="store_true")
     check = sub.add_parser(
@@ -5460,6 +6185,18 @@ def _parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--plan", required=True)
     check.add_argument("--base", default="HEAD")
+    ownership = sub.add_parser(
+        "ownership-check",
+        help="read-only: check a plan's Lane Ownership or a grouping's Session "
+        "Ownership",
+    )
+    source = ownership.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--task", help="a task.md (relative to the working directory, or absolute)"
+    )
+    source.add_argument(
+        "--grouping", help="a session-grouping file with a Session Ownership block"
+    )
     gate = sub.add_parser("gate", help="run a gate registered in the lane card")
     gate_sub = gate.add_subparsers(dest="gate_command", required=True)
     gate_run = gate_sub.add_parser(
@@ -5565,8 +6302,12 @@ def main(
             return _cmd_land_recover(
                 args, wait_s=wait_s, poll_s=poll_s, argv=holder_argv
             )
+        if args.command == "landed":
+            return _cmd_landed(args)
         if args.command == "list":
             return _cmd_list(args)
+        if args.command == "ownership-check":
+            return _cmd_ownership_check(args)
         if args.command == "gate":
             return _cmd_gate_run(args, gate_argv)
         if args.command == "deps":
