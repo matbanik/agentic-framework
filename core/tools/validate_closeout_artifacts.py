@@ -2457,14 +2457,70 @@ def _extract_meu_ids(text: str) -> set[str]:
     return _extract_standalone_matches(r"MEU-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", text)
 
 
-def _validate_metrics_row(metrics: Path, *, date_value: str, meu: str) -> None:
-    rows = _parse_markdown_table(_read(metrics), METRICS_HEADERS, label="metrics")
+METRICS_REQUEST = "metrics-row "
+
+
+def _validate_metrics_row(metrics: Path, *, date_value: str, meu: str, handoff: Path | None = None) -> None:
+    """TASK-TEMPLATE H2-3: the metrics row, or the lane plan's request for it.
+
+    A lane plan never edits ``metrics``: its handoff carries a ``metrics-row``
+    integration request that ``tools/lanes.py land`` applies, so before the land
+    the row exists only in the request. When ``handoff`` has such a request, the
+    request rows are checked by the same rule; else ``metrics`` is.
+
+    Raises:
+        Refuse: the row is missing, repeated or not fully populated.
+    """
+    requests: list[str] = []
+    if handoff is not None:
+        lanes = _module("lanes")  # the parser of the requests that the land applies
+        requests = [
+            request.removeprefix(METRICS_REQUEST)
+            for _rid, request in lanes._request_rows(_read(handoff))
+            if request.startswith(METRICS_REQUEST)
+        ]
+    if not requests:
+        _check_metrics_rows(_read(metrics), date_value=date_value, meu=meu)
+        return
+    header = "| " + " | ".join(METRICS_HEADERS) + " |\n|" + "---|" * len(METRICS_HEADERS)
+    table = "\n".join([header, *requests]) + "\n"
+    _check_metrics_rows(table, date_value=date_value, meu=meu)
+
+
+def _check_metrics_rows(text: str, *, date_value: str, meu: str) -> None:
+    """One fully populated row of ``text``'s metrics table for ``date_value``/``meu``.
+
+    Raises:
+        Refuse: no such row, more than one, or a blank or pending cell.
+    """
+    rows = _parse_markdown_table(text, METRICS_HEADERS, label="metrics")
     matches = [row for row in rows if row[0] == date_value and meu in _extract_meu_ids(row[1])]
     _require(len(matches) == 1, "metrics must contain one exact date/MEU row")
     _require(
         all(cell.strip() and cell.strip().lower() != "pending" for cell in matches[0]),
         "metrics row must be fully populated",
     )
+
+
+def _meu_args(value: list[str] | str | None) -> list[str]:
+    """The MEUs of a closeout run: ``--meu`` repeats, and a caller may pass one ``str``."""
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
+def _validate_metrics_rows(args: argparse.Namespace) -> None:
+    """One metrics row per ``--meu``; with no ``--meu``, the check of a missing row."""
+    for meu in _meu_args(args.meu) or [""]:
+        _validate_metrics_row(Path(args.metrics), date_value=str(args.date), meu=meu)
+
+
+def _focus_meu_tokens(focus_status: str) -> set[str]:
+    """The ids that the ``**MEU:**`` field lists, split on commas, backticks stripped."""
+    tokens: set[str] = set()
+    for field in re.findall(r"^\*\*MEU:\*\*\s*(.*?)\s*$", focus_status, re.MULTILINE):
+        tokens.update(part.strip().strip("`") for part in field.split(","))
+    return tokens
 
 
 def _section(text: str, heading: str) -> str:
@@ -2533,10 +2589,7 @@ def _validate_context_state(
         re.search(r"^\*\*Outcome:\*\*\s*approved\s*$", focus_status, re.MULTILINE | re.IGNORECASE) is not None,
         "current_focus missing affirmative approved Outcome field",
     )
-    _require(
-        re.search(rf"^\*\*MEU:\*\*\s*`?{re.escape(meu)}`?\s*$", focus_status, re.MULTILINE) is not None,
-        "current_focus missing exact MEU field",
-    )
+    _require(meu in _focus_meu_tokens(focus_status), "current_focus missing exact MEU field")
     _require(len(known_text.splitlines()) < 100, "known_issues too long")
     _require(len(focus.splitlines()) < 30, "current_focus too long")
 
@@ -2854,15 +2907,16 @@ def _stage_reflection_decisions(run: _StageRun) -> str | None:
 
 def _stage_metrics_context(run: _StageRun) -> str | None:
     args = run.args
-    _validate_metrics_row(Path(args.metrics), date_value=str(args.date), meu=args.meu)
-    _validate_context_state(
-        Path(args.known_issues),
-        Path(args.known_issues_yaml),
-        Path(args.current_focus),
-        issue=args.issue or None,
-        meu=args.meu,
-        date_value=str(args.date),
-    )
+    _validate_metrics_rows(args)
+    for meu in _meu_args(args.meu):
+        _validate_context_state(
+            Path(args.known_issues),
+            Path(args.known_issues_yaml),
+            Path(args.current_focus),
+            issue=args.issue or None,
+            meu=meu,
+            date_value=str(args.date),
+        )
     return None
 
 
@@ -5082,10 +5136,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--repo",
         "--plan-slug",
         "--date",
-        "--meu",
         "--issue",
     ):
         stage.add_argument(flag)
+    stage.add_argument("--meu", action="append", help="An MEU of the plan; repeat it once per MEU.")
     return p
 
 

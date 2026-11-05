@@ -178,6 +178,8 @@ REQUIRED_COMPONENTS: tuple[str, ...] = (
     "tools/os_lease.py",
     "tools/ref_guard.py",
 )
+#: Opt-in, so not in ``REQUIRED_COMPONENTS``: a repository that has this file must pin it.
+LANE_ROUTE = ".agent/lane-route.json"
 SETTINGS = ".claude/settings.json"
 #: The hook that ``.claude/settings.json`` must wire in ``PreToolUse`` for Bash (EA-34).
 COMMIT_GATE_HOOK = ".claude/hooks/commit_gate.py"
@@ -1951,6 +1953,8 @@ def _activation(repo: Repo) -> dict[str, Any]:
     for rel in REQUIRED_COMPONENTS:
         if rel not in components:
             raise Refusal("disabled", f"component_missing:{rel}")
+    if _read_bytes(repo.top / LANE_ROUTE) is not None and LANE_ROUTE not in components:
+        raise Refusal("disabled", f"component_missing:{LANE_ROUTE}")
     evidence_raw = _read_bytes(repo.top / EVIDENCE)
     try:
         evidence = _load_json(evidence_raw or b"")
