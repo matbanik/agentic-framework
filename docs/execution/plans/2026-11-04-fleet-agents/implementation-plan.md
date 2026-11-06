@@ -4,7 +4,7 @@ date: "2026-11-04"
 source: "docs/proposals/2026-11-04-fleet-agents-outline.md"
 meus: []
 run_parameters: "absent — run parameters are disabled in this repo (run_parameters.py status: policy_missing); Step 0 resolved manual"
-status: "draft"
+status: "complete"
 template_version: "2.4"
 ---
 
@@ -12,7 +12,7 @@ template_version: "2.4"
 
 > **Project**: `2026-11-04-fleet-agents`
 > **Build Plan Section(s)**: none. This framework package has no `docs/BUILD_PLAN.md` hub. The scope source is outline §3, work order A1 to A6.
-> **Status**: `draft`
+> **Status**: `in_progress`
 
 ---
 
@@ -251,8 +251,11 @@ sets a budget cap.
 **Sandbox selection (`Select-CodexSandbox`, D-4, A-8).** A write test passes only if the expected file exists
 with the expected contents, whatever the exit code. If `elevated_tried` is false: set `elevated`, run the
 admin-session `codex exec` once, test under S4U, and keep it if that passes. If it doesn't, run `codex sandbox
-uninstall`, set `unelevated` and test again. If that fails too, exit `1` with `sandbox_no_write`. The report's
-`elevated_tried: true` stops a re-run from trying again.
+uninstall`, set `unelevated` and test again. The report's `elevated_tried: true` stops a re-run from trying again.
+
+**Amended by P-4 (2026-11-05).** The chosen sandbox's result is recorded as `write_tests.codex_sandbox` and no longer
+fails setup, because only a Claude job's Codex call uses it. `write_tests.codex` is a write under `danger-full-access`,
+the way a Codex job runs, and its failure exits `1` with `codex_no_write`.
 
 #### Boundary Inventory
 
@@ -269,7 +272,7 @@ uninstall`, set `unelevated` and test again. If that fails too, exit `1` with `s
 | AC-1 | unit | Source rules, by AST and text. The MVP's AC-4 checker also covers `.agent/fleet/member_kit.py`: stdlib imports only, parses at `feature_version=(3, 11)`, no drive-letter path, no `CLAUDE_CODE_ENTRYPOINT`, `CLAUDECODE` or `cswap`. `CAPABILITY_TOOLS` holds `pwsh`, and a member's `hello` reports it. | Human-approved (handoff billing rule, `SKILL.md:340-343`) | A copy of the source with `import requests` fails the same checker, and so does one naming `CLAUDECODE` |
 | AC-2 | unit | `setup-member.ps1` publishes no host or credential (D-6). Observable: the checker's problem list. | Human-approved (D-6, plan D-13) | Copies with an IPv4 literal, `DUPER`, `SUPER`, a drive-letter path, `setup-token`, or a read of `auth.json` or `.credentials.json` each fail. The clean file passes |
 | AC-3 | integration | Setup is idempotent. Chain: `setup-member.ps1` → `Install-MemberTool` and `Set-CodexConfigLine`, with `Invoke-Installer` mocked. Observable: mock call counts, `changed`, and `config.toml` bytes. Installs only what's missing. | Human-approved (outline §3 A1) | With every tool present, `Invoke-Installer` is called zero times, `changed` is empty and `config.toml` bytes don't change. With `codex` absent, exactly one call. A `config.toml` with other lines keeps them byte-identical |
-| AC-4 | integration | The sandbox is chosen by a real write, never by exit code. Chain: `Select-CodexSandbox` → `Test-CodexWrite` (S4U run mocked; file check real). Observable: chosen sandbox, `elevated_tried`, mock calls. | Human-approved (D-4); Research-backed (openai/codex 34961) | Exit 0 with no file is a fail. Elevated fail then unelevated pass chooses `unelevated` and calls `codex sandbox uninstall` once. Both fail: exit `1` with `sandbox_no_write`. `elevated_tried: true` makes no elevated attempt |
+| AC-4 | integration | The sandbox is chosen by a real write, never by exit code. Chain: `Select-CodexSandbox` → `Test-CodexWrite` (S4U run mocked; file check real). Observable: chosen sandbox, `elevated_tried`, mock calls. | Human-approved (D-4); Research-backed (openai/codex 34961) | Exit 0 with no file is a fail. Elevated fail then unelevated pass chooses `unelevated` and calls `codex sandbox uninstall` once. Both fail: recorded as `codex_sandbox: fail`, and the run exits `0` if the full-access write passes; a failed full-access write exits `1` with `codex_no_write` (P-4 replaced "both fail: exit `1` with `sandbox_no_write`"). `elevated_tried: true` makes no elevated attempt |
 | AC-5 | integration | **Live, human row 3.** On DUPER, `setup-member.ps1` runs twice. Observable: `check_live.py setup` reads both reports and `fleet status`: the second has empty `changed`, both write tests pass under S4U, the sandbox and elevated outcome are recorded, the report's `isolated_worker` slug on `codex-cli` equals SUPER's `independent_reviewer` slug there, SUPER's registry hash is unchanged, and `fleet status` reports `claude`, `codex` and `pwsh` with versions. | Human-approved (outline §3 A1 done-when, P-1) | `check_live.py --selftest` feeds a report with a non-empty `changed`, one with a failed write test, one with no `isolated_worker` slug, and a changed SUPER registry hash, and each must fail |
 
 #### Spec Sufficiency Table
@@ -371,7 +374,7 @@ publish` and `fleet.py run duper kit-install`, so the kit moves by bundle with n
 | AC-13 | integration | Resume on this route. Chain: `Start-CreditsRun.ps1` → `Invoke-ClaudeCredits.ps1 -Subscription -Resume <source>` → `-LaunchHook` → stub `claude`. Observable: the stub's argv and env names. A resumed launch gets the token and the scrub. | Human-approved (D-1, D-3) | With no key file it still launches on this route. Without `-Subscription`, a missing key file still stops with `key file not found` |
 | AC-14 | integration | `member_kit.py install`. Chain: `C-KIT` from `main`, with `FLEET_HOME` and `CLAUDE_CONFIG_DIR` in a temp folder. Observable: the kit's files, `config.json`, `settings.json` and exit code. No placeholder remains, the filled project root is `FLEET_HOME`, the policy is `agent-on-user-chat`, the task path is `\Fleet\Credits\`, and the merge keeps other keys. | Human-approved (D-3, outline §3 A2) | A run's task `Running`, by a `pwsh` shim, gives `run_active` and leaves `kit/` byte-identical. `\Fleet\Credits\Monitor` running doesn't block. A retained stopped run folder doesn't block: the install succeeds and the folder is intact. A failing `--verify` leaves the old `kit/`. A rename failing on a held file restores the old `kit/` and gives `kit_busy`. A second install adds no duplicate hook. The real `~/.claude/settings.json` is untouched, by its hash |
 | AC-15 | integration | `member_kit.py gate`. Chain: `C-KIT` with a stub `run_gate.py` and a fake token. Observable: stub's env names, stdout, exit code, and every file under `receipts/gate/` and `gate-project/`. Present: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. Absent: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, with both set in the parent. A clean stub leaves the receipt and exits 0. | Human-approved (D-1, D-2) | A missing or empty token file exits non-zero with `token_missing`. A stub that writes the fake token into `gate-result.json` exits non-zero with `gate_token_leak`, no receipt is left, and no persisted file holds the value. A stub that echoes the token has it redacted in the output |
-| AC-16 | integration | **Live, human row 8.** On DUPER: install, gate, then a credits run started locally under S4U with the subscription token, finishing with `Status: DONE`, a hook firing under the scrub (an `info` message is acknowledged), and `--max-budget-usd` in the argv. **Mat reads plan usage before and after and sees it move, and sees the Console balance unchanged.** Observable: `check_live.py credits` and Mat's report. | Human-approved (D-2, outline §3 A2 done-when) | `--selftest` feeds a view with no acknowledged message, and one with `auth_mode: api_key_file`, and each must fail. If Mat sees a Console charge or no plan usage movement, stop condition 3 applies |
+| AC-16 | integration | **Live, human row 8.** On DUPER: install, gate, then a credits run started locally under S4U with the subscription token, finishing with `Status: DONE`, a hook firing under the scrub (an `info` message is acknowledged), and `--max-budget-usd` in the argv. P-3 replaces Mat's plan usage and Console readings with Mat's ruling and a stream test of the token. Observable: `check_live.py credits`. | Human-approved (D-2, outline §3 A2 done-when) | `--selftest` feeds a view with no acknowledged message, and one with `auth_mode: api_key_file`, and each must fail. If Mat sees a Console charge, stop condition 3 applies |
 
 #### Spec Sufficiency Table
 
@@ -513,8 +516,9 @@ resume. Nothing in the fleet answers a question by itself (D-3).
 - `CodexStart -Run <run> -Brief <path> -Slot <path> [-ResumeDispatchId <id>]` registers and starts the one-shot S4U
   task `\Fleet\Codex\<run>`, whose action is this script with `-Action CodexRun`.
 - `CodexRun` sets `FLEET_CODEX_LOCK` and runs `tools/Invoke-CodexDispatch.ps1 -NonReviewDispatch -ModelClass
-  isolated_worker -Mode ReviewWorkspace -PromptFile <brief> -DispatchId <run>-<n> -WorkingDirectory <slot>`, with `-ResumeDispatchId` on a resume.
-  `ReviewWorkspace` is the wrapper's name for `workspace-write` with the receipts root. `FullAccess` is never named.
+  isolated_worker -Mode FullAccess -FullAccessJustification <P-4> -PromptFile <brief> -DispatchId <run>-<n> -WorkingDirectory <slot>`,
+  with `-ResumeDispatchId` on a resume. Amended by P-4: this was `-Mode ReviewWorkspace`. The brief's header says to
+  read anything and write only in the working folder and the system temp folder (`CODEX_WRITE_SCOPE`).
 - `CodexState` prints one JSON line: `running`, plus the last `Status:` line of `final.md`.
 - `CodexStop` stops the task. `Remove -Run` unregisters this run's Codex and credits tasks.
 
@@ -556,11 +560,11 @@ without the flag, and `FORBIDDEN_COMMANDS` doesn't change.
 
 | AC | Type | Description | Source | Negative Test |
 |----|------|-------------|--------|---------------|
-| AC-29 | integration | Codex job start and resume. Chain: `C-AGENT-MEMBER` with the shim, and Pester with `Register-ScheduledTask` mocked. Observable: argv, `def` of the task, and the file on disk. | Human-approved (D-4, outline §3 A4) | `S4U`; `-NonReviewDispatch`, `CODEX_MODEL_CLASS` and `-Mode ReviewWorkspace`; no `FullAccess` anywhere in the script, by a text check that fails on a copy naming it. A resume passes `-ResumeDispatchId` with the prior id and the same class. `message` → `codex_no_messages` |
+| AC-29 | integration | Codex job start and resume. Chain: `C-AGENT-MEMBER` with the shim, and Pester with `Register-ScheduledTask` mocked. Observable: argv, `def` of the task, and the file on disk. | Human-approved (D-4, P-4, outline §3 A4) | `S4U`; `-NonReviewDispatch`, `CODEX_MODEL_CLASS` and `-Mode FullAccess` with a justification of at least 20 characters naming P-4 (P-4 replaced "no `FullAccess` anywhere in the script"); the brief carries `CODEX_WRITE_SCOPE` before the job. A resume passes `-ResumeDispatchId` with the prior id and the same class. `message` → `codex_no_messages` |
 | AC-30 | unit | `normalize_codex` is total. Observable: its result. | Human-approved (D-4) | Every case: running; `DONE`; `STOPPED:decision`; no `Status:` line, with an exit code of 0 → `stopped` / `no_status_line`, never `done`; `Status: done` in the wrong case isn't `DONE`; a malformed class → `stopped` / `no_status_line` |
 | AC-31 | integration | The lock and the override refusal. Chain: `C-CODEX` with a stub `codex` on `PATH`. Observable: exit code, stub call count, and the lock file. | Human-approved (D-5); Local Canon (A-6) | A second wrapper while the first holds the lock → exit `11`, `codex_job_busy`, and the stub isn't called. With the lock set, `-CodexExecutable x` → `codex_executable_refused`, and `x` isn't run. A stub job that calls the wrapper gets `11`. With the variable unset: no lock file, and `-CodexExecutable` works as today, by the existing `-CodexExecutable` suites |
 | AC-32 | integration | `allow_codex`. Chain: `C-AGENT-HUB`, then `C-AGENT-MEMBER`. Observable: `manifest.json`'s `allowed_tools`. | Human-approved (D-5) | Without the flag, no rule mentions `codex`. With it, exactly the two rules, and neither contains `FullAccess`. `FORBIDDEN_COMMANDS` is unchanged, by a value check |
-| AC-33 | integration | **Live, human row 15.** On DUPER, with Mat's words: the AC-28 job finishes on Codex under `workspace-write`, judged by the file written and the status line; a stopped Codex run resumes between turns. A remote Claude run with `allow_codex` gets a Codex answer, and its attempt with `-Mode FullAccess` appears in `permission_denials`. Observable: `check_live.py codex`. | Human-approved (outline §3 A4 done-when) | `--selftest` feeds an exit-0 job with no file, and a Claude run with no denial, and each must fail |
+| AC-33 | integration | **Live, human row 15.** On DUPER, with Mat's words: the AC-28 job finishes on Codex under `workspace-write` (under `FullAccess` after P-4), judged by the file written and the status line; a stopped Codex run resumes between turns. A remote Claude run with `allow_codex` gets a Codex answer, and its attempt with `-Mode FullAccess` appears in `permission_denials`. Observable: `check_live.py codex`. | Human-approved (outline §3 A4 done-when) | `--selftest` feeds an exit-0 job with no file, and a Claude run with no denial, and each must fail |
 | AC-40 | integration | The installed kit accepts the member layout. Chain: real `member_kit.py install` into a temp `FLEET_HOME`, then the installed `tools/Invoke-ClaudeDispatch.ps1` and `tools/Invoke-CodexDispatch.ps1`, with stub `claude` and `codex` on `PATH` and a fixture registry holding P-1's binding. Observable: exit code, stub call count and the stub's working directory. Cases: Claude with a brief under `receipts/fleet-briefs/<run>/` and the slot as working directory; a Codex start with `CODEX_MODEL_CLASS`, then a resume of it; D-5's call from a slot with a prompt file in that slot. | Local Canon (A-13, P-1) | A brief outside both roots, and a Codex working directory outside `FLEET_HOME`, are refused and the stub isn't called. A registry without the binding gives `unresolvable_on_harness` and the stub isn't called. A resume on the default class still gives `resume_refused_review_class` |
 
 #### Spec Sufficiency Table
@@ -703,7 +707,7 @@ Execution stops and asks Mat when:
 
 1. The M-1 gate fails on the token (D-2 says A2 stops).
 2. Registering or running a task as S4U from the member's own process fails. This is untested, so it's tested first, in row 8.
-3. Mat sees a Console charge or no plan usage movement, or a run shows `auth_mode: api_key_file`.
+3. Mat sees a Console charge, or a run shows `auth_mode: api_key_file`. P-3 removed "no plan usage movement".
 4. The inbox hook doesn't fire under `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`.
 5. The write test fails under both Codex sandboxes.
 6. A step seems to need `CLAUDE_CODE_ENTRYPOINT`, `CLAUDECODE`, `cswap`, a read of `member.json`, or a printed token.
@@ -1038,9 +1042,20 @@ decision_log:
     research: { engine: none, sources: [] }
     reasoning: "A suffix alone accepts another person's noreply address and any name. Comparing with the global config enforces the rule from where the rule says it lives, with one small check and no address in public code"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'c, P-2 recommended, 2 more rounds'"
+  - id: P-4
+    stage: execution
+    question: "Codex's Windows sandbox can't write under a fleet S4U task. How does a Codex job run?"
+    resolution: human
+    class: governance-value
+    chosen: "Direct Codex jobs run the wrapper's FullAccess mode with a fixed justification, and the brief limits writes to the working folder and the system temp folder. A Claude job's Codex call keeps the two sandboxed modes (D-5, AC-32 unchanged). Setup's Codex test is a full-access write; the sandbox result is recorded only"
+    source_tag: Human-approved
+    precedents: ["core/.agent/skills/cli-dispatch/SKILL.md:61 — FullAccess for a reproduced sandbox capability failure", "stop condition 5"]
+    research: { engine: native, sources: ["https://github.com/openai/codex/issues/38665", "https://github.com/openai/codex/issues/13887"] }
+    reasoning: "Under S4U on DUPER, every sandboxed pwsh exits 0xC0000142 and apply_patch fails; only cmd redirects write, so setup's pass depended on the model's quoting. One full-access write under the same task passed. Amends D-4's 'Codex workspace-write'"
+    human_message_reference: "USER_EXPLICIT 2026-11-05 'i don't mind this since the guardrails and other instructions are very explicit about read actions and write only into temp', then 'I agree and approve, proceed'"
 ```
 
-D-1 to D-6, P-1 and P-2 are ruled. A-1 to A-15 passed the obviousness test. Each is two-way, so Mat can reverse any of them at the
+D-1 to D-6 and P-1 to P-4 are ruled. A-1 to A-15 passed the obviousness test. Each is two-way, so Mat can reverse any of them at the
 plan gate, and the ones a reader might want to change are flagged in User Review Required.
 
 **P-1 is ruled: member-only.** Rejected: editing SUPER's registry, which stops dispatch in 9 projects until each
@@ -1050,6 +1065,21 @@ which narrows outline A4.
 **P-2 is ruled: compare with the global git config.** Rejected: writing the exact identity into tracked config, which
 puts it in the public repo and needs a field in each repo; and the suffix check alone, which accepts another person's
 noreply address. The limit: a global config changed to another noreply address passes.
+
+**P-3 is ruled during execution: no meter proof on the Ultra account.** Row 8's jobs came to about $11.66 at list price,
+and the weekly meter still showed 27%. Mat's words: "1% takes few hours of agentic work so we will drop proving that on the Ultra account. Free accounts do not offer claude code so we will just accept what we have with pretty high degree of certenty that everything works as it should." In place of the
+readings, row 8 rests on a one-turn stream test of DUPER's token: `apiKeySource: none`, a `seven_day` window at `0.27`
+resetting Sunday Nov 8 at 6:00 AM, as on Mat's Usage page, and `isUsingOverage: false`. The limit: nobody saw the meter
+move, and the Console wasn't read again after the runs, so a later Console charge still fires stop condition 3.
+
+**P-4 is ruled during execution: fleet Codex jobs run with full access.** Stop condition 5 fired on row 3's rerun.
+Under the S4U task, every sandboxed `pwsh` exits `0xC0000142` and `apply_patch` reports "Failed to write file", in
+both sandboxes and since the first run. Only a `cmd` redirect writes, so the 13:42 pass came from how the model quoted
+one command, and the reboot changed nothing. One write under `danger-full-access` and the same task passed
+(`fa-codex-fullaccess-probe.txt`). Mat's words: "i don't mind this since the guardrails and other instructions are
+very explicit about read actions and write only into temp", then "I agree and approve, proceed". Rejected: Codex jobs
+on SUPER only, which drops outline A4 on members, and keeping `cmd` as the only writer. The limit: no sandbox enforces
+the write scope. Only the brief does, and a job can read anything the member's user can, including the stored token.
 
 ---
 
