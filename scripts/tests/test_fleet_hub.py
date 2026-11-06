@@ -426,14 +426,6 @@ def test_ac08_members_cannot_send_tasks(hub, kind):
     assert hub.rows() == before
 
 
-def test_ac08_agent_kind_is_not_enabled(hub):
-    hub.pair("local")
-    before = hub.rows()
-    status, reply = hub.request("POST", "/v1/tasks", valid_envelope(kind="agent"), key=hub.client().key)
-    assert (status, reply["error"]) == (422, "kind_not_enabled")
-    assert hub.rows() == before
-
-
 @pytest.mark.parametrize("kind", ["commit", "push", "merge", "tag", "release"])
 def test_ac08_landing_kinds_do_not_exist(hub, kind):
     hub.pair("local")

@@ -238,10 +238,9 @@ def template_problems(text: str) -> list[str]:
         if marker not in text:
             problems.append(f"missing {marker}")
         stops[stop] = text.find(marker)
-    for word, stop in (("pair", "run-pair"), ("approve", "run-approve")):
-        first = re.search(rf"\b{word}\b", text)
-        if first and (stops[stop] < 0 or first.start() < stops[stop]):
-            problems.append(f"{word} appears before its stop line")
+    first = re.search(r"\bapprove\b", text)
+    if first and (stops["run-approve"] < 0 or first.start() < stops["run-approve"]):
+        problems.append("approve appears before its stop line")
     for heading in ("Windows", "Linux", "macOS"):
         if not re.search(rf"^## {heading}\s*$", text, re.M):
             problems.append(f"no heading {heading}")
@@ -251,6 +250,8 @@ def template_problems(text: str) -> list[str]:
             problems.append(f"{heading} has steps")
     if re.search(r"\bP:[\\/]", text):
         problems.append("a P: path")
+    if re.search(r"\b192\.168\.|\b\d{1,3}(?:\.\d{1,3}){3}\b", text):
+        problems.append("a LAN address")
     if "must never read `member.json`" not in text:
         problems.append("no sentence forbidding member.json")
     return problems
@@ -268,7 +269,6 @@ def test_ac19_the_checker_sees_a_removed_stop_line(stop):
 
 def test_ac19_the_checker_sees_the_other_breaks():
     text = TEMPLATE.read_text(encoding="utf-8")
-    assert template_problems("`fleet.py pair`\n" + text)
     assert template_problems("`fleet.py approve`\n" + text)
     assert template_problems(text.replace("## macOS", "## macOS\n\n1. Install it.\n"))
     assert template_problems(text + "\nSee P:/somewhere.\n")

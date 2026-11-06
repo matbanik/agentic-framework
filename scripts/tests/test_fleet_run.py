@@ -21,6 +21,8 @@ MANIFEST_TEMPLATE = ROOT / "core" / ".agent" / "fleet.json.template"
 GOOD = {"v": 1, "project": "demo", "requires": ["python"], "commands": {"test": [["python", "-V"]]}}
 PYTHON = Path(sys.executable).as_posix()
 RESULT_KEYS = {"state", "reason", "exit_code", "log", "tree", "duration_s"}
+FIXTURE_NAME = "fixture"
+FIXTURE_EMAIL = "1+fixture@users.noreply.github.com"
 
 
 # AC-22: manifest validation
@@ -107,8 +109,8 @@ def write_manifest(repo: Path, project: str, commands: dict) -> None:
 def new_repo(path: Path) -> Path:
     path.mkdir(parents=True)
     git(path, "init", "-q")
-    git(path, "config", "user.name", "fixture")
-    git(path, "config", "user.email", "fixture@example.invalid")
+    git(path, "config", "user.name", FIXTURE_NAME)
+    git(path, "config", "user.email", FIXTURE_EMAIL)
     git(path, "config", "commit.gpgsign", "false")
     (path / ".gitignore").write_text("ignored.txt\ndeps/\n", encoding="utf-8")
     (path / "tracked.txt").write_text("committed\n", encoding="utf-8")
@@ -162,6 +164,16 @@ def post_snapshot(hub: Hub, member: str, repo: Path, command: str = "test", proj
 def wait_online(hub: Hub) -> None:
     """A starting member is offline until its first hello, and wait exits 5 for an offline member."""
     wait_until(lambda: hub.request("GET", "/v1/members", key=hub.client().key)[1]["members"][0]["online"], timeout=30)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def global_identity(tmp_path_factory):
+    """The global git identity for this module, in place before the module-scoped rig starts its member."""
+    config = tmp_path_factory.mktemp("gitconfig") / "global"
+    config.write_text(f"[user]\n\tname = {FIXTURE_NAME}\n\temail = {FIXTURE_EMAIL}\n", encoding="utf-8")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("GIT_CONFIG_GLOBAL", str(config))
+        yield
 
 
 @pytest.fixture
@@ -236,7 +248,7 @@ def test_ac23_the_bundle_has_the_working_tree_and_not_the_ignored_file(hub, dirt
     assert "ignored.txt" not in names
     assert git(reader, "show", "snap:tracked.txt") == "unstaged"
     assert git(reader, "show", "snap:untracked.txt") == "untracked"
-    assert git(reader, "log", "-1", "--format=%an", "snap") == "fleet"
+    assert git(reader, "log", "-1", "--format=%an", "snap") == FIXTURE_NAME
 
 
 def test_ac23_an_ignored_manifest_still_travels_and_nothing_else_ignored_does(hub, dirty, tmp_path):
