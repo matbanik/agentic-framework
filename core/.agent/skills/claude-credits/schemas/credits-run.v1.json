@@ -25,7 +25,10 @@
         "model": { "type": "string", "minLength": 1 },
         "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] },
         "segment_cap_usd": { "type": "number", "exclusiveMinimum": 0, "description": "May be omitted only under token_budgets \"off\" in the project_root's .agent/review-limits.json; credits_state.py refuses the omission otherwise." },
-        "timeout_sec": { "type": "integer", "minimum": 1 }
+        "timeout_sec": { "type": "integer", "minimum": 1 },
+        "auth": { "enum": ["key", "subscription"], "description": "How the CLI signs in. Absent means key. subscription is the fleet member route: an S4U task, no key file, and the subscription token in the CLI's environment only." },
+        "allowed_tools": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\([^()\\r\\n]*\\))?$" }, "description": "Tools allowed without a prompt, in the dispatch wrapper's -AllowedTools form." },
+        "gate_project": { "type": "string", "minLength": 1, "description": "The project of the M-1 receipt when it is not the project_root. Only with auth subscription: a member gates once in a fixed empty folder." }
       }
     },
     "budget": {

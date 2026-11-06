@@ -771,7 +771,8 @@ function New-CreditsTaskDefinition {
     .SYNOPSIS
         The expected definition of the run task \{{PROJECT_NAME_TITLE}}\Credits\<run id> (report section 4.2,
         step 3): no trigger, the current user, Interactive, Limited, and the launcher with -RunId
-        only.
+        only. -Subscription is the fleet member route, where nobody logs on: S4U in place of
+        Interactive.
     .DESCRIPTION
         The scheduler adapter registers this object, and its read-back returns an object of the
         same shape, so Get-CreditsTaskDefinitionHash compares the two.
@@ -781,7 +782,8 @@ function New-CreditsTaskDefinition {
         [Parameter(Mandatory = $true)][string]$ProjectRoot,
         [Parameter(Mandatory = $true)][string]$PwshPath,
         [Parameter(Mandatory = $true)][string]$LauncherPath,
-        [Parameter(Mandatory = $true)][ValidateRange(1, 604800)][int]$TimeoutSec
+        [Parameter(Mandatory = $true)][ValidateRange(1, 604800)][int]$TimeoutSec,
+        [switch]$Subscription
     )
     Assert-AbsolutePath $ProjectRoot 'ProjectRoot'
     Assert-AbsolutePath $PwshPath 'PwshPath'
@@ -792,7 +794,7 @@ function New-CreditsTaskDefinition {
         Execute                    = $PwshPath
         Argument                   = Get-CreditsTaskArgument $LauncherPath "-RunId $RunId"
         WorkingDirectory           = $ProjectRoot
-        LogonType                  = 'Interactive'
+        LogonType                  = if ($Subscription) { 'S4U' } else { 'Interactive' }
         RunLevel                   = 'Limited'
         AllowStartIfOnBatteries    = $true
         DontStopIfGoingOnBatteries = $true
@@ -811,32 +813,33 @@ function New-CreditsMonitorTaskDefinition {
     .SYNOPSIS
         The expected definition of \{{PROJECT_NAME_TITLE}}\Credits\Monitor (report section 4.2, step 4): an
         AtLogOn trigger plus a Once trigger that repeats every 5 minutes with no duration.
+        -Subscription is the fleet member route, where nobody logs on: S4U, and the repeat alone.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$PwshPath,
         [Parameter(Mandatory = $true)][string]$MonitorPath,
-        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [switch]$Subscription
     )
     Assert-AbsolutePath $PwshPath 'PwshPath'
     Assert-AbsolutePath $MonitorPath 'MonitorPath'
     Assert-AbsolutePath $WorkingDirectory 'WorkingDirectory'
+    $triggers = @([pscustomobject][ordered]@{ Kind = 'Once'; RepetitionInterval = 'PT5M' })
+    if (-not $Subscription) { $triggers = @([pscustomobject][ordered]@{ Kind = 'AtLogOn'; RepetitionInterval = $null }) + $triggers }
     return [pscustomobject][ordered]@{
         TaskPath                   = '\{{PROJECT_NAME_TITLE}}\Credits\'
         TaskName                   = 'Monitor'
         Execute                    = $PwshPath
         Argument                   = Get-CreditsTaskArgument $MonitorPath ''
         WorkingDirectory           = $WorkingDirectory
-        LogonType                  = 'Interactive'
+        LogonType                  = if ($Subscription) { 'S4U' } else { 'Interactive' }
         RunLevel                   = 'Limited'
         AllowStartIfOnBatteries    = $true
         DontStopIfGoingOnBatteries = $true
         MultipleInstances          = 'IgnoreNew'
         ExecutionTimeLimitSec      = 600
         Priority                   = 7
-        Triggers                   = @(
-            [pscustomobject][ordered]@{ Kind = 'AtLogOn'; RepetitionInterval = $null }
-            [pscustomobject][ordered]@{ Kind = 'Once'; RepetitionInterval = 'PT5M' }
-        )
+        Triggers                   = $triggers
         RestartCount               = 0
         WakeToRun                  = $false
     }

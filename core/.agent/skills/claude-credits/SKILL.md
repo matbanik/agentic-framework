@@ -351,3 +351,28 @@ a workflow such as `/execution-session` on a plan, or a follow-up to an earlier 
 - `Credit balance is too low` from a terminal run means the grant is used up or expired (or
   the key belongs to an org without credits), not a script fault. From a Claude Code launch,
   the wrapper adds a hint to `error_summary`.
+
+## Fleet member route
+
+A fleet member runs scheduled segments on the owner's subscription, not on the API key. The orchestrator
+starts and resumes them through `fleet.py agent`. Nobody starts them at the member's console.
+
+- **`launch.auth`.** `subscription` selects this route, and `key`, the default, is the route above.
+  `Register-CreditsRun.ps1` then registers an S4U task in place of `Interactive`, because nobody logs on
+  at a member. No key file is read. `launch.gate_project` names the project of the M-1 receipt when it isn't
+  the `project_root`, because a member gates once in a fixed empty folder. It's refused without
+  `launch.auth` `subscription`.
+- **The token.** `Invoke-ClaudeCredits.ps1 -Subscription` reads the token file in its launch hook and gives
+  the token to the CLI only, as `CLAUDE_CODE_OAUTH_TOKEN`, with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. It
+  removes `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`. The token is never printed and goes to no other
+  process. A blank file is a launch failure, and the CLI never starts.
+- **Not a billing change.** `CLAUDE_CODE_OAUTH_TOKEN` is a sign-in on the owner's own machines, for the
+  owner's own account. It isn't a way to make a run look like something else, so rule 8 of the hand-over
+  above still holds in full. The token is issued on the orchestrator machine on the owner's browser
+  approval, and it reaches the member in a file only the member's user can read. It never goes through
+  the hub, a message or a brief.
+- **The gate.** `member_kit.py gate` runs the M-1 gate in the environment a scheduled segment gets. A
+  new kit needs the gate again before the next start.
+- **The hooks limit.** A member's kit puts only `credits_inbox.py` at user level, on `PostToolUse` and
+  `Stop`, with absolute kit paths. `stop_gate` and `commit_gate` stay out: a slot has no real plan, and a
+  member has no route to commit. A project that brings its own hooks isn't supported on a member yet.

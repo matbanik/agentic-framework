@@ -158,6 +158,9 @@ function Assert-LocalPath([string]$Value, [string]$Name) {
     if (-not $local -or $segments.Count -gt 0) { Stop-Refused 'path_not_local' "$Name must be an absolute local path with no '..': '$Value'" }
 }
 
+# The fleet member route: an S4U task, no key file, and the subscription token. Key is the default.
+function Test-SubscriptionRoute($Doc) { [string]$Doc['launch']['auth'] -ceq 'subscription' }
+
 function Assert-ManifestPaths($Doc) {
     $paths = [ordered]@{
         project_root             = $Doc['project_root']
@@ -166,8 +169,12 @@ function Assert-ManifestPaths($Doc) {
         'launch.claude_exe'      = $Doc['launch']['claude_exe']
         'launch.python_exe'      = $Doc['launch']['python_exe']
     }
+    if ($Doc['launch'].Contains('gate_project')) {
+        if (-not (Test-SubscriptionRoute $Doc)) { Stop-Refused 'manifest_invalid' "launch.gate_project needs launch.auth 'subscription'" }
+        $paths['launch.gate_project'] = $Doc['launch']['gate_project']
+    }
     foreach ($name in $paths.Keys) { Assert-LocalPath ([string]$paths[$name]) $name }
-    foreach ($name in @('project_root', 'launch.working_directory')) {
+    foreach ($name in @($paths.Keys | Where-Object { $_ -in @('project_root', 'launch.working_directory', 'launch.gate_project') })) {
         if (-not (Test-Path -LiteralPath $paths[$name] -PathType Container)) { Stop-Refused 'path_missing' "$name does not exist: '$($paths[$name])'" }
     }
     foreach ($name in @('brief', 'launch.claude_exe', 'launch.python_exe')) {
@@ -264,6 +271,7 @@ function Assert-Receipt($Doc, [string]$ReceiptPath, [string]$GatePath) {
     $psi = [System.Diagnostics.ProcessStartInfo]::new((Get-CreditsPython))
     foreach ($a in @('-X', 'utf8', $GatePath, '--check-receipt', $ReceiptPath, '--project', $Doc['project_root'],
             '--python', $Doc['launch']['python_exe'], '--claude', $Doc['launch']['claude_exe'])) { $psi.ArgumentList.Add([string]$a) }
+    if ($Doc['launch']['gate_project']) { foreach ($a in @('--gate-project', $Doc['launch']['gate_project'])) { $psi.ArgumentList.Add([string]$a) } }
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true
@@ -323,14 +331,15 @@ try {
     $config = Read-CreditsConfig $ConfigPath
     Assert-MessagingLocked $doc $config
     Assert-CacheTtl $config $ProbeRecord
-    if (-not (Test-Path -LiteralPath $KeyFile -PathType Leaf)) { Stop-Refused 'key_missing' "no credits key file at '$KeyFile'" }
+    $subscription = Test-SubscriptionRoute $doc
+    if (-not $subscription -and -not (Test-Path -LiteralPath $KeyFile -PathType Leaf)) { Stop-Refused 'key_missing' "no credits key file at '$KeyFile'" }
     $receiptInfo = Assert-Receipt $doc $Receipt $RunGate
 
     if ($null -eq $Scheduler) { $Scheduler = New-CreditsSchedulerAdapter }
     $pwshPath = Join-Path $PSHOME 'pwsh.exe'
     $runDef = New-CreditsTaskDefinition -RunId $script:RunId -ProjectRoot $doc['project_root'] -PwshPath $pwshPath `
-        -LauncherPath (Join-Path $PSScriptRoot 'Start-CreditsRun.ps1') -TimeoutSec ([int]$doc['launch']['timeout_sec'])
-    $monitorDef = New-CreditsMonitorTaskDefinition -PwshPath $pwshPath -MonitorPath (Join-Path $PSScriptRoot 'Watch-CreditsRuns.ps1') -WorkingDirectory $repoRoot
+        -LauncherPath (Join-Path $PSScriptRoot 'Start-CreditsRun.ps1') -TimeoutSec ([int]$doc['launch']['timeout_sec']) -Subscription:$subscription
+    $monitorDef = New-CreditsMonitorTaskDefinition -PwshPath $pwshPath -MonitorPath (Join-Path $PSScriptRoot 'Watch-CreditsRuns.ps1') -WorkingDirectory $repoRoot -Subscription:$subscription
     $runHash = Get-CreditsTaskDefinitionHash -Definition $runDef
 
     $status = Invoke-Store 'run_status' @('--run-id', $script:RunId)

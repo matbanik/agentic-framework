@@ -33,8 +33,13 @@
     store is not available, the run goes on with messaging off: no CREDITS_* name
     and no store row.
 
-    Exit codes: 0 ok, 2 bad arguments, brief or key file, 3 launched inside a Claude
-    Code session, otherwise the dispatch wrapper's exit code.
+    -Subscription is the fleet member route of a scheduled segment: no key file. The
+    launch hook reads -TokenFile and gives the CLI the token as CLAUDE_CODE_OAUTH_TOKEN,
+    with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 and no ANTHROPIC_API_KEY or
+    ANTHROPIC_AUTH_TOKEN. The token is never printed and goes to no other process.
+
+    Exit codes: 0 ok, 2 bad arguments, brief, key file or token file, 3 launched inside
+    a Claude Code session, otherwise the dispatch wrapper's exit code.
 
 .EXAMPLE
     pwsh -File .agent/skills/claude-credits/Invoke-ClaudeCredits.ps1 -PromptText "Summarize the open TODOs in packages/core"
@@ -128,6 +133,12 @@ param(
     # from this process's environment; the launcher, not this script, finalizes the segment.
     [switch]$Scheduled,
 
+    # The fleet member route of a scheduled segment: the subscription token in place of a key file.
+    [switch]$Subscription,
+
+    # The token file of -Subscription. Read only by the launch hook.
+    [string]$TokenFile,
+
     # Check the arguments, the brief, the key file (presence and ACL; its contents
     # are not read) and any continuation source, print dispatch_args_ok and exit 0. Starts no process and writes no run
     # directory. Allowed inside a Claude Code session.
@@ -189,6 +200,16 @@ if ($RunId -and -not $SessionId) {
 }
 if ($StateDb -and -not $RunId) { Fail 2 '-StateDb is used only with -RunId.' }
 if ($Scheduled -and $RunId) { Fail 2 '-Scheduled and -RunId are two kinds of run; pass one.' }
+if ($Subscription -and -not $Scheduled) { Fail 2 '-Subscription is a route of a scheduled segment; it needs -Scheduled.' }
+if ($Subscription -and -not $TokenFile) { Fail 2 '-Subscription needs -TokenFile.' }
+if ($Subscription -and $KeyFile) { Fail 2 '-Subscription and -KeyFile are two routes; pass one.' }
+if ($TokenFile -and -not $Subscription) { Fail 2 '-TokenFile is used only with -Subscription.' }
+if ($Subscription) {
+    # The size only: the launch hook is the one reader of the token.
+    $tokenInfo = Get-Item -LiteralPath $TokenFile -ErrorAction SilentlyContinue
+    if ($null -eq $tokenInfo -or $tokenInfo.PSIsContainer -or $tokenInfo.Length -eq 0) { Fail 2 "token_missing: no subscription token at $TokenFile" }
+    $tokenPath = $tokenInfo.FullName
+}
 $scheduledEnv = $null
 if ($Scheduled -and -not $ValidateOnly) {
     $scheduledEnv = [ordered]@{}
@@ -237,19 +258,21 @@ if ($source) {
 }
 if (-not $WorkingDirectory) { $WorkingDirectory = (Get-Location).Path }
 
-if (-not $KeyFile) {
-    $KeyFile = if ($env:CLAUDE_CREDITS_KEY_FILE) { $env:CLAUDE_CREDITS_KEY_FILE }
-               else { Join-Path $HOME '.anthropic/claude-credits.key' }
-}
-if (-not (Test-Path -LiteralPath $KeyFile -PathType Leaf)) {
-    Fail 2 "key file not found: $KeyFile (see .agent/skills/claude-credits/SKILL.md, Setup)."
-}
-# Open for read and close at once: proves the ACL lets this user read the key
-# without reading or printing it.
-try {
-    [System.IO.File]::Open((Resolve-Path -LiteralPath $KeyFile).ProviderPath, 'Open', 'Read', 'ReadWrite').Dispose()
-} catch {
-    Fail 2 "key file not readable: $KeyFile ($($_.Exception.GetType().Name))."
+if (-not $Subscription) {
+    if (-not $KeyFile) {
+        $KeyFile = if ($env:CLAUDE_CREDITS_KEY_FILE) { $env:CLAUDE_CREDITS_KEY_FILE }
+                   else { Join-Path $HOME '.anthropic/claude-credits.key' }
+    }
+    if (-not (Test-Path -LiteralPath $KeyFile -PathType Leaf)) {
+        Fail 2 "key file not found: $KeyFile (see .agent/skills/claude-credits/SKILL.md, Setup)."
+    }
+    # Open for read and close at once: proves the ACL lets this user read the key
+    # without reading or printing it.
+    try {
+        [System.IO.File]::Open((Resolve-Path -LiteralPath $KeyFile).ProviderPath, 'Open', 'Read', 'ReadWrite').Dispose()
+    } catch {
+        Fail 2 "key file not readable: $KeyFile ($($_.Exception.GetType().Name))."
+    }
 }
 
 if (-not $DispatchId) {
@@ -264,9 +287,9 @@ $dispatchArgs = @{
     WorkingDirectory = $WorkingDirectory
     DispatchId       = $DispatchId
     OutputDir        = $OutputDir
-    ApiKeyFile       = $KeyFile
     ClaudeExecutable = $ClaudeExecutable
 }
+if (-not $Subscription) { $dispatchArgs.ApiKeyFile = $KeyFile }
 if ($Model) { $dispatchArgs.Model = $Model }
 if ($PromptFile) { $dispatchArgs.PromptFile = $PromptFile } else { $dispatchArgs.PromptText = $PromptText }
 if ($MaxBudgetUsd -gt 0) { $dispatchArgs.MaxBudgetUsd = $MaxBudgetUsd }
@@ -280,7 +303,7 @@ if ($SessionId) { $dispatchArgs.SessionId = $SessionId }
 if ($ValidateOnly) {
     # AC-A.7: presence and ACL only. The wrapper does not read the key; a launch does.
     $dispatchArgs.ValidateOnly = $true
-    $dispatchArgs.KeyFileMetadataOnly = $true
+    if (-not $Subscription) { $dispatchArgs.KeyFileMetadataOnly = $true }
     & $wrapper @dispatchArgs
     exit $LASTEXITCODE
 }
@@ -344,12 +367,21 @@ if ($RunId) {
 # --- A scheduled segment (report section 4.3 step 7). This process is in the segment's job, so
 # the CLI is too. The dispatch wrapper removes every CREDITS_* name from the CLI environment; the
 # hook puts back the three that turn on the inbox hook (section 4.6), and CREDITS_BASE_COMMIT when
-# the segment has a bound base.
+# the segment has a bound base. On the subscription route it also gives the CLI the token; a throw
+# here is a launch failure of the dispatch wrapper, and the CLI never starts.
 if ($null -ne $scheduledEnv) {
     $scheduledContext = $scheduledEnv
+    $subscriptionTokenPath = if ($Subscription) { $tokenPath } else { $null }
     $dispatchArgs.LaunchHook = {
         param($StartInfo)
         foreach ($name in $scheduledContext.Keys) { $StartInfo.Environment[$name] = $scheduledContext[$name] }
+        if ($subscriptionTokenPath) {
+            $token = [System.IO.File]::ReadAllText($subscriptionTokenPath).Trim()
+            if (-not $token) { throw "token_missing: the token file is blank: $subscriptionTokenPath" }
+            $StartInfo.Environment['CLAUDE_CODE_OAUTH_TOKEN'] = $token
+            $StartInfo.Environment['CLAUDE_CODE_SUBPROCESS_ENV_SCRUB'] = '1'
+            foreach ($name in @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')) { $null = $StartInfo.Environment.Remove($name) }
+        }
         [System.Diagnostics.Process]::Start($StartInfo)
     }.GetNewClosure()
     [Console]::Error.WriteLine("claude-credits: scheduled segment $($scheduledEnv['CREDITS_SEGMENT']) of run $($scheduledEnv['CREDITS_RUN_ID'])")

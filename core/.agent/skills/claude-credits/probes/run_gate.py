@@ -23,10 +23,11 @@ run of the full default set in which every case passed. A self-test, a --cases s
 failed case writes false, and so does a run whose `claude --version` did not exit 0 with a
 parsed MAJOR.MINOR.PATCH.
 
---check-receipt FILE --project DIR --python EXE [--claude EXE] validates a receipt for use
-(report.md sections 4.6.6 and 10.2, M-1). It never runs a case. Exit 0 only when: qualifying is
-true; mode is live; every default case is present and passed; cli_version equals the parsed
-version of the installed CLI; identity.project equals DIR; identity.kit_revision equals this
+--check-receipt FILE --project DIR --python EXE [--claude EXE] [--gate-project GATE] validates a
+receipt for use (report.md sections 4.6.6 and 10.2, M-1). It never runs a case. Exit 0 only when:
+qualifying is true; mode is live; every default case is present and passed; cli_version equals the
+parsed version of the installed CLI; identity.project equals GATE when given, else DIR (the launch
+profile below is always the one of DIR); identity.kit_revision equals this
 kit's revision; and the launch profile matches: identity.launch_profile exists, its hook
 interpreter and that interpreter's version equal those of EXE now, and the digest of the hook
 keys of each settings source (user, project, project local, managed) equals the current file.
@@ -205,8 +206,12 @@ def check_profile(ident: dict, project: Path, python: str | None) -> list[str]:
 
 
 def check_receipt(path: Path, project: Path, claude: str | None,
-                  python: str | None = None) -> list[str]:
-    """Return the failed checks of one receipt; an empty list means the receipt may be used."""
+                  python: str | None = None, gate_project: Path | None = None) -> list[str]:
+    """Return the failed checks of one receipt; an empty list means the receipt may be used.
+
+    The receipt's project must be GATE_PROJECT when one is given, else PROJECT. The launch profile
+    is always checked against PROJECT, which is where the run works.
+    """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -229,8 +234,9 @@ def check_receipt(path: Path, project: Path, claude: str | None,
         bad.append("installed CLI version unknown (claude --version failed or did not parse)")
     elif data.get("cli_version") != installed:
         bad.append(f"cli_version {data.get('cli_version')!r} != installed {installed!r}")
-    if ident.get("project") != project.as_posix():
-        bad.append(f"project {ident.get('project')!r} != {project.as_posix()!r}")
+    bound = gate_project or project
+    if ident.get("project") != bound.as_posix():
+        bad.append(f"project {ident.get('project')!r} != {bound.as_posix()!r}")
     if ident.get("kit_revision") != kit.kit_revision():
         bad.append("kit_revision differs from this kit")
     bad.extend(check_profile(ident, project, python))
@@ -246,6 +252,9 @@ def main() -> int:
                         help="offline checks only; never calls claude")
     parser.add_argument("--check-receipt", metavar="FILE",
                         help="validate a gate-result.json for scheduler use; runs no case")
+    parser.add_argument("--gate-project", metavar="DIR",
+                        help="with --check-receipt: the project the receipt was made in, when it is "
+                             "not --project (a fleet member gates once in a fixed folder)")
     args = parser.parse_args()
 
     if args.check_receipt:
@@ -253,8 +262,9 @@ def main() -> int:
         claude = args.claude or os.environ.get("MSG_PROBE_CLAUDE") or shutil.which("claude")
         # No default interpreter here: the caller names the one its production hook uses.
         python = args.python or os.environ.get("MSG_PROBE_PYTHON")
+        gate_project = Path(os.path.abspath(args.gate_project)) if args.gate_project else None
         bad = check_receipt(Path(args.check_receipt), Path(os.path.abspath(proj_raw)), claude,
-                            python)
+                            python, gate_project)
         for line in bad:
             print(f"RECEIPT FAIL: {line}")
         print(f"RECEIPT {'OK' if not bad else 'REJECTED'}: {Path(args.check_receipt).as_posix()}")

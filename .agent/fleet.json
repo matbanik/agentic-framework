@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "project": "agentic-framework",
+  "requires": ["python", "pwsh", "claude"],
+  "commands": {
+    "kit-install": [["python", ".agent/fleet/member_kit.py", "install"]],
+    "kit-gate": [["python", ".agent/fleet/member_kit.py", "gate"]]
+  }
+}

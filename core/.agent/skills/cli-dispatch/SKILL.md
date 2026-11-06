@@ -473,6 +473,30 @@ codex sandbox macos --log-denials -- sh -c "echo ok > \"$RECEIPTS_DIR/sandbox-pr
 > blockers live in [`.agent/docs/macos-setup.md`](../../docs/macos-setup.md). Do not invent
 > a second macOS contract here.
 
+## Codex on a fleet member
+
+A fleet member runs one Codex job at a time, and every Codex run there goes through
+`tools/Invoke-CodexDispatch.ps1`.
+
+- **`FLEET_CODEX_LOCK`.** A fleet Codex job and the member's credits launcher both set it to
+  `<fleet home>/codex.lock`. The wrapper holds the named
+  file open, unshared, until it exits. A job inherits the variable, so a job that calls the wrapper finds the
+  file held. A second wrapper exits `11` with `codex_job_busy`. `fleet.py` names that exit `CODEX_BUSY_EXIT`,
+  and its `status` reports the run as the `codex_job_busy` refusal.
+- **`-CodexExecutable`.** While `FLEET_CODEX_LOCK` is set, the program is always the `codex` on `PATH`. A
+  named one is refused with `codex_executable_refused` before the lock is taken.
+- **`CODEX_MODEL_CLASS`.** `isolated_worker` (`$CodexModelClass` in `.agent/fleet/fleet-tasks.ps1`). Each
+  fleet Codex start and resume passes it as `-ModelClass` with `-NonReviewDispatch`, because the wrapper
+  refuses a resume on a review class. It's bound only in the member's own registry copy.
+- **`-Mode FullAccess`.** A fleet Codex job runs with full access and a fixed `-FullAccessJustification`:
+  under the member's S4U task, the Windows sandbox can't start `pwsh` or apply a patch. The job's brief
+  keeps its writes to the slot and the system temp folder, and no sandbox enforces that. A Claude job's
+  call to Codex keeps `ReviewReadOnly` or `ReviewWorkspace`.
+- **D-5's route: Claude calling Codex.** A Claude job on a member reaches Codex only through this wrapper,
+  with `-NonReviewDispatch`, never bare `codex exec`. The answer reaches the job only as a file that Codex
+  writes in the slot: the wrapper's stdout carries only its ledger lines. The lock doesn't see a bare
+  `codex exec` run inside a job's sandbox.
+
 ---
 
 ## Routing Policy

@@ -34,6 +34,10 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `.agent/tools/ModelRegistry.psm1` — Slug-free copy. Exports `resolve <class> [-Harness x] [-AuthorVendor y]`; prints the bare slug; infers harness when a class binds exactly one; raises `ambiguous_harness` rather than guessing.
 - `.agent/fleet/fleet.py` — The fleet's one stdlib-only file: hub, member and CLI. Installed to `~/.agent/fleet/` on a member. A member polls the hub over pinned TLS and runs named commands from `<project>/.agent/fleet.json`.
 - `.agent/fleet/bootstrap.md` — What a setup agent follows to make a machine a fleet member. The hub serves it with `fleet.py`.
+- `.agent/fleet/member_kit.py` — Installs the credits kit on a member from a slot's `core/`, merges the user-level inbox hook, and runs the M-1 gate on the subscription token. Started by a fleet `run` task.
+- `.agent/fleet/setup-member.ps1` — Sets up a member on the member itself: installs what is missing, sets Codex's config lines, chooses the Codex sandbox by a real write test, and writes `setup-report.json`. Holds no hosts or credentials.
+- `.agent/fleet/fleet-tasks.ps1` — The scheduled tasks behind a member's `agent` jobs: Claude through the credits launcher, Codex through `tools/Invoke-CodexDispatch.ps1` under `FLEET_CODEX_LOCK`. Copied into the member's kit.
+- `.agent/fleet.json` — This repository's own fleet manifest: what a member needs, and the named `kit-install` and `kit-gate` commands.
 
 ---
 
