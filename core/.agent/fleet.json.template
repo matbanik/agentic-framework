@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "project": "{{PROJECT_NAME}}",
+  "requires": ["python", "git"],
+  "commands": {
+    "setup": [["python", "-m", "pip", "install", "-r", "requirements.txt"]],
+    "test": [["python", "-m", "pytest", "-q"]]
+  }
+}

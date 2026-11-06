@@ -1517,3 +1517,22 @@ def test_fork_cannot_reuse_a_consumed_act(tmp_path: Path) -> None:
         )
     _refusal(info.value, "fork_refused")
     assert _ops_file(lone, "transitions.json").read_bytes() == before
+
+
+def test_credits_docs_name_the_identity_create() -> None:
+    """The resume brief and the landing record name the identity create."""
+    from tools.tests.test_lane_route_instructions import EXEC_SESSION, _flat, _section, _text
+
+    resume_brief = (
+        Path(__file__).resolve().parents[2] / ".agent" / "skills" / "claude-credits" / "templates" / "resume-brief.md"
+    )
+    identity_create = "create <run-id> --run-id <run-id> --op <op> --plan <slug>"
+    landing = _flat(_section(_text(EXEC_SESSION), "### The landing record"))
+    for where, text in (
+        ("resume-brief", _flat(_text(resume_brief))),
+        ("landing record", landing),
+    ):
+        assert identity_create in text, f"{where} does not name `{identity_create}`"
+    assert "admission creates the worktree" not in _text(resume_brief), (
+        "the resume brief still says admission creates the worktree"
+    )

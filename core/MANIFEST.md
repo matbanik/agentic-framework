@@ -32,6 +32,12 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `.agent/notify/notify.json` — Stop-notifier defaults (opt-in, `"enabled": false`, no address). Copied to `<home>/notify/`; the adopter adds a gitignored `notify.local.json` beside it (`INSTANTIATE.md` §5).
 - `.agent/schema/notify.v1.schema.json` — Schema for `notify.json` and `notify.local.json` (`additionalProperties: false`).
 - `.agent/tools/ModelRegistry.psm1` — Slug-free copy. Exports `resolve <class> [-Harness x] [-AuthorVendor y]`; prints the bare slug; infers harness when a class binds exactly one; raises `ambiguous_harness` rather than guessing.
+- `.agent/fleet/fleet.py` — The fleet's one stdlib-only file: hub, member and CLI. Installed to `~/.agent/fleet/` on a member. A member polls the hub over pinned TLS and runs named commands from `<project>/.agent/fleet.json`.
+- `.agent/fleet/bootstrap.md` — What a setup agent follows to make a machine a fleet member. The hub serves it with `fleet.py`.
+- `.agent/fleet/member_kit.py` — Installs the credits kit on a member from a slot's `core/`, merges the user-level inbox hook, and runs the M-1 gate on the subscription token. Started by a fleet `run` task.
+- `.agent/fleet/setup-member.ps1` — Sets up a member on the member itself: installs what is missing, sets Codex's config lines, chooses the Codex sandbox by a real write test, and writes `setup-report.json`. Holds no hosts or credentials.
+- `.agent/fleet/fleet-tasks.ps1` — The scheduled tasks behind a member's `agent` jobs: Claude through the credits launcher, Codex through `tools/Invoke-CodexDispatch.ps1` under `FLEET_CODEX_LOCK`. Copied into the member's kit.
+- `.agent/fleet.json` — This repository's own fleet manifest: what a member needs, and the named `kit-install` and `kit-gate` commands.
 
 ---
 
@@ -204,6 +210,7 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 ## 5f. `core/.agent/` — repository settings
 
 - `review-limits.json` — The repository's review limits (`schema: review-limits/1`): `token_budgets` (`on`/`off`; `off` removes the review loops' token stop and lets a scheduled credits manifest omit its USD caps), `rounds` and `tokens` for the five review modes. Shipped equal to the `review_ledger.py` constants; `scripts/instantiate.py --round-caps` / `--token-budgets` (ADOPTION-QUESTIONS B5/B5b) rewrite it at setup, and `--verify` checks it. Read only through `review_ledger.py` `load_repo_limits`.
+- `core/.agent/fleet.json.template` — The per-project fleet manifest a project copies to `<project>/.agent/fleet.json`: `v`, `project`, `requires` and the named `commands` a member may run. Fill `{{PROJECT_NAME}}` and replace the example commands.
 
 ## 6. `core/.agent/schemas/`
 

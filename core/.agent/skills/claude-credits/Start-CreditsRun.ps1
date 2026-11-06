@@ -27,7 +27,7 @@
     The script prints one JSON line with an outcome and exits:
       0  completed, cancelled, start_refused (a store refusal), not_started, rejected or
          admission_refused;
-      1  launch_failed, termination_pending, receipt_rejected or project_mismatch;
+      1  launch_failed, termination_pending, receipt_rejected, project_mismatch or token_missing;
       3  refused (a nested Claude Code session or a bad argument);
       9  an unexpected error.
     Log records go to <store folder>/logs/launcher-<run id>.jsonl.
@@ -45,6 +45,9 @@ $script:ParameterTable = [ordered]@{
     OutputDir       = @{ Kind = 'string'; Default = '{{RECEIPTS_DIR}}/dispatch' }
     # Default: CLAUDE_CREDITS_KEY_FILE, else ~/.anthropic/claude-credits.key (as Register-CreditsRun.ps1).
     KeyFile         = @{ Kind = 'string' }
+    # The subscription token of a launch.auth subscription run. A fleet member's kit has its fleet
+    # home as the project root, and its S4U task gets none of the member's environment.
+    TokenFile       = @{ Kind = 'string'; Default = '{{PROJECT_ROOT}}/credentials/claude-oauth-token' }
     # Default: probes/run_gate.py next to this script.
     RunGate         = @{ Kind = 'string' }
     # Default: <store folder>/receipts/<run id>.gate-result.json, where Register-CreditsRun.ps1 copies it.
@@ -213,6 +216,8 @@ function Test-RunReceipt($Manifest) {
     $psi = [System.Diagnostics.ProcessStartInfo]::new((Get-CreditsPython))
     foreach ($a in @('-X', 'utf8', $RunGate, '--check-receipt', $Receipt, '--project', (Get-Field $Manifest 'project_root'),
             '--python', (Get-Field $launch 'python_exe'), '--claude', (Get-Field $launch 'claude_exe'))) { $psi.ArgumentList.Add([string]$a) }
+    $gateProject = Get-Field $launch 'gate_project'
+    if ($gateProject) { foreach ($a in @('--gate-project', $gateProject)) { $psi.ArgumentList.Add([string]$a) } }
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true
@@ -435,10 +440,20 @@ function Invoke-Launcher {
             $age = if ($null -ne $created) { ($now - $created).TotalSeconds } else { [double]::MaxValue }
             [pscustomobject]@{ RequestId = [string]$_.request_id; Age = $age }
         } | Where-Object { $_.Age -lt $limit })
+    $subscription = [string](Get-Field $launch 'auth') -ceq 'subscription'
     if ($fresh.Count -gt 0) {
         foreach ($request in $fresh) {
             if ($request.Age -ge 0.8 * $limit) {
                 Write-LauncherLog 'DEBUG' 'credits_limit_near' @{ limit_name = 'REQUEST_ACCEPT_TIMEOUT_S'; configured_value = $limit; observed_value = [int][math]::Floor($request.Age); window = 'request_accept'; request_id = $request.RequestId }
+            }
+        }
+        # The size only: the wrapper's hook is the one reader of the token.
+        if ($subscription) {
+            $tokenInfo = Get-Item -LiteralPath $TokenFile -ErrorAction SilentlyContinue
+            if ($null -eq $tokenInfo -or $tokenInfo.PSIsContainer -or $tokenInfo.Length -eq 0) {
+                $message = "no subscription token at '$TokenFile'"
+                Write-LauncherLog 'ERROR' 'credits_token_missing' @{ token_file = $TokenFile; message = $message }
+                return New-Result 'start_refused' 1 @{ reason = 'token_missing'; message = $message }
             }
         }
         $rejection = Test-RunReceipt $manifest
@@ -587,8 +602,9 @@ function Invoke-Launcher {
     }
 
     # --- step 5: the wrapper inside the job
+    $authArgs = if ($subscription) { @('-Subscription', '-TokenFile', $TokenFile) } else { @('-KeyFile', $KeyFile) }
     $wrapperArgs = @('-NoProfile', '-NonInteractive', '-File', $WrapperScript, '-Scheduled',
-        '-PromptFile', $promptFile, '-KeyFile', $KeyFile,
+        '-PromptFile', $promptFile) + $authArgs + @(
         '-ClaudeExecutable', [string](Get-Field $launch 'claude_exe'),
         '-MaxBudgetUsd', $maxBudget.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture),
         '-DispatchId', $dispatchId, '-OutputDir', $OutputDir,
@@ -599,6 +615,10 @@ function Invoke-Launcher {
         '-Effort', [string](Get-Field $launch 'effort'))
     $model = Get-Field $launch 'model'
     if ($model) { $wrapperArgs += @('-Model', [string]$model) }
+    # One comma-joined text: pwsh -File passes each argument as a string, and the dispatch wrapper
+    # splits on commas.
+    $allowedTools = @(Get-Field $launch 'allowed_tools' | Where-Object { $_ })
+    if ($allowedTools.Count -gt 0) { $wrapperArgs += @('-AllowedTools', ($allowedTools -join ',')) }
     $wrapperArgs += $continuation
     $commandLine = ($wrapperArgs | ForEach-Object { ConvertTo-WindowsArgument ([string]$_) }) -join ' '
     try {

@@ -4170,8 +4170,8 @@ def view_run(tx: Tx, run_id: str, output_dir: Path | None) -> dict[str, Any]:
     outbox = [
         dict(e)
         for e in tx.rows(
-            "SELECT event_seq, kind, semantic_key, created_utc FROM outbox_events"
-            " WHERE run_id = ? ORDER BY event_seq DESC LIMIT ?",
+            "SELECT event_seq, kind, semantic_key, created_utc, json_extract(payload_json, '$.text') AS text"
+            " FROM outbox_events WHERE run_id = ? ORDER BY event_seq DESC LIMIT ?",
             (run_id, VIEW_OUTBOX_LIMIT),
         )
     ]

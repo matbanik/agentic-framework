@@ -551,6 +551,22 @@ function Assert-PathArgument {
     }
 }
 
+# A fleet member runs one Codex job at a time. FLEET_CODEX_LOCK names a file this wrapper holds open, unshared, until
+# it exits, and a job inherits the variable, so a job that calls the wrapper finds the file held. On a member the
+# program is always the codex on PATH: a named one is refused before the lock is taken.
+if ($env:FLEET_CODEX_LOCK) {
+    if ($PSBoundParameters.ContainsKey('CodexExecutable')) {
+        [Console]::Error.WriteLine("codex_executable_refused: -CodexExecutable is not taken while FLEET_CODEX_LOCK is set.")
+        exit 1
+    }
+    try {
+        $fleetCodexLock = [System.IO.File]::Open($env:FLEET_CODEX_LOCK, 'OpenOrCreate', 'ReadWrite', 'None')
+    } catch {
+        [Console]::Error.WriteLine("codex_job_busy: another Codex job holds $($env:FLEET_CODEX_LOCK).")
+        exit 11
+    }
+}
+
 # 1. Parameter Validation
 if ([string]::IsNullOrEmpty($PromptText) -and [string]::IsNullOrEmpty($PromptFile)) {
     [Console]::Error.WriteLine("Either -PromptText or -PromptFile must be specified.")
