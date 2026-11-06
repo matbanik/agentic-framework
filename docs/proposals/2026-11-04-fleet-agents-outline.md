@@ -10,26 +10,26 @@ Log, and the credits and dispatch code. `2026-11-01-remote-hosts.md` is referenc
 
 ## 1. The design in one paragraph
 
-SUPER sends a short `agent` task through the hub. The member starts the existing credits run as a
+<hub host> sends a short `agent` task through the hub. The member starts the existing credits run as a
 detached scheduled task and answers at once, so it keeps polling. Later short tasks ask for status,
 pass a message, stop the run or resume it, and each one calls a script that already exists. If the
-agent has a question, its run stops and says so. `fleet watch` on SUPER wakes the orchestrator,
+agent has a question, its run stops and says so. `fleet watch` on <hub host> wakes the orchestrator,
 the orchestrator asks Mat, and Mat's words start the resume. The result comes back as a git bundle
-into a non-branch ref, and it lands on SUPER only on Mat's word.
+into a non-branch ref, and it lands on <hub host> only on Mat's word.
 
-## 2. Tested on DUPER, 2026-11-04
+## 2. Tested on <member host>, 2026-11-04
 
 All of this ran under an S4U task, the way the member runs. None of it ran through a fleet task.
 
 | Check | Result |
 |---|---|
-| Claude and Codex answer real calls with no sign-in on DUPER | Pass, from a WinRM shell and from S4U |
-| SUPER's own logins afterwards | Unchanged |
+| Claude and Codex answer real calls with no sign-in on <member host> | Pass, from a WinRM shell and from S4U |
+| <hub host>'s own logins afterwards | Unchanged |
 | `claude -p --permission-mode acceptEdits` writes a file | Pass |
 | `--max-budget-usd` on the subscription token | Enforced: `error_max_budget_usd`, exit 1. `total_cost_usd` is reported |
 | `pwsh`, `uv`, `git`, `python` on the S4U path | All present |
 | `codex exec --sandbox workspace-write`, default Windows sandbox | **File not written, and exit 0** ("read-only filesystem policy") |
-| The same with `windows.sandbox="elevated"`, SUPER's setting | **File not written, and exit 0** (shell runner timed out twice) |
+| The same with `windows.sandbox="elevated"`, <hub host>'s setting | **File not written, and exit 0** (shell runner timed out twice) |
 | The same with `windows.sandbox="unelevated"` | Pass |
 | `codex doctor`, 0.166.0, default settings | Exit 0, and it reports `sandbox backend disabled` |
 
@@ -37,7 +37,7 @@ Three things follow. Codex's exit code can't be the success signal, so a run is 
 status line and its evidence. `codex doctor` can't be the setup check either, so setup needs a real
 write test. A member also needs a Codex sandbox setting that passes that test.
 
-Not tested: `elevated` after its administrator setup (no setup step was run on DUPER), Codex login
+Not tested: `elevated` after its administrator setup (no setup step was run on <member host>), Codex login
 refresh after about 8 days, a credits run under S4U, an Interactive-logon task on a machine with
 nobody signed in as that user, the M-1 gate on a subscription token, and movement on the plan usage
 meters.
@@ -47,16 +47,16 @@ meters.
 | # | Builds | Done when |
 |---|---|---|
 | A1 | Scripted member setup: both CLIs, `pwsh`, `uv`, Codex's file store and sandbox setting, recorded CLI versions. `fleet status` reports them | A clean re-run changes nothing, reports both CLIs, and passes a real write test on each |
-| A2 | Credits on a member: `launch.auth: subscription`, an S4U task route, the M-1 gate run per member, one install in the member's home, hooks at user level, the subprocess credential scrub | A credits run on DUPER finishes under the subscription token, started locally, and Mat sees plan usage move with no Console charge |
-| A3 | The `agent` task kind: `start`, `status`, `message`, `stop`, `resume`. One slot per run, kept across resume. The hub requires Mat's quote on `start` and `resume`. `fleet watch` on SUPER | From SUPER, a run answers a `query` mid-run, stops on a question, and finishes after a resume |
+| A2 | Credits on a member: `launch.auth: subscription`, an S4U task route, the M-1 gate run per member, one install in the member's home, hooks at user level, the subprocess credential scrub | A credits run on <member host> finishes under the subscription token, started locally, and Mat sees plan usage move with no Console charge |
+| A3 | The `agent` task kind: `start`, `status`, `message`, `stop`, `resume`. One slot per run, kept across resume. The hub requires Mat's quote on `start` and `resume`. `fleet watch` on <hub host> | From <hub host>, a run answers a `query` mid-run, stops on a question, and finishes after a resume |
 | A4 | Codex through `Invoke-CodexDispatch.ps1`, resume between turns, one Codex job at a time per member. Remote Claude may call it (D-5) | The same job finishes on Codex, and a remote Claude run gets a Codex answer |
-| A5 | Results: a temporary-index snapshot, a bundle to the hub, `refs/fleet/result/<run>` on SUPER, then the slot is dropped | One result from each CLI lands on Mat's word |
+| A5 | Results: a temporary-index snapshot, a bundle to the hub, `refs/fleet/result/<run>` on <hub host>, then the slot is dropped | One result from each CLI lands on Mat's word |
 | A6 | Rules and docs: `bootstrap.md` relabelled, the credits and dispatch skills updated, these rulings recorded | The tests and package gates pass |
 
 Left out: Cursor and Antigravity, member-to-member tasks (outline P6), Linux and macOS, autostart
 after a reboot, live rulings during a run, mail from a member, and a separate low-privilege account
 for agent runs. Live rulings stay out because the hook checks a ruling against a transcript that is
-on SUPER (`2026-11-01-remote-hosts.md:89-92`), and mail would put a mail password on the member.
+on <hub host> (`2026-11-01-remote-hosts.md:89-92`), and mail would put a mail password on the member.
 
 Codex has no mid-run messages. The inbox hook is Claude-only, so Codex hears from the orchestrator
 only between turns.
@@ -70,15 +70,15 @@ Pomera search (Tavily and Exa), then the primary pages directly. Sources are lab
 ### D-1: How a member gets its logins   [source-conflict] [planning]   mandatory: [M-2, M-6]
 
 **Recommendation: keep the route just tested, and record it as a ruling for Mat's own account on
-Mat's own machines only.** Mat approves in a browser on SUPER. A script stores the result over WinRM
+Mat's own machines only.** Mat approves in a browser on <hub host>. A script stores the result over WinRM
 in a file only that user can read, and nothing goes through the hub. Claude's token goes to the
 `claude` process through `-LaunchHook`, with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` so Bash commands
-and hooks don't inherit it. Codex gets a new login per machine, never a copy of SUPER's. The
+and hooks don't inherit it. Codex gets a new login per machine, never a copy of <hub host>'s. The
 credential script stays local and out of the public template.
 
 | Option | Pros (vs. recommendation) | Cons (vs. recommendation) | Sources |
 |---|---|---|---|
-| ✅ Issue on SUPER, store on the member | — | — | §2; Claude Code authentication and env-var docs; Codex authentication docs |
+| ✅ Issue on <hub host>, store on the member | — | — | §2; Claude Code authentication and env-var docs; Codex authentication docs |
 | ⚠️ Codex device-code login run on the member | The Codex credential never crosses the LAN, and it's OpenAI's preferred headless route | Beta, needs a ChatGPT security setting turned on, and is untested over WinRM. Claude still needs the token route, so two flows instead of one | Codex authentication docs |
 | ⚠️ Sign in at each member's console, the current rule | Nothing crosses the network, and logins use the OS store | Needs a person at every machine, which Mat ruled out. S4U probably can't read the OS store (untested) | `2026-11-01-remote-hosts.md:330` |
 | ⚠️ API keys on members | Anthropic's terms explicitly allow provisioning keys, and they're easy to reuse and cancel | Billed per token rather than the subscriptions Mat wants used. A stored key silently overrides the token | Anthropic legal page |
@@ -86,7 +86,7 @@ credential script stays local and out of the public template.
 **Precedent:** `2026-11-01-remote-hosts.md:330` says "Set up by you at the console, never copied".
 Mat already accepted one departure from that class of rule: plan D-5 pairs over WinRM
 (`docs/execution/plans/2026-11-03-fleet-mvp/implementation-plan.md:652-659`). Plan D-2 (`:615-622`)
-says "the member's own login", and this route gives each member its own login, issued from SUPER.
+says "the member's own login", and this route gives each member its own login, issued from <hub host>.
 GitHub credentials stay off members (`:84`, `:447`), and this ruling doesn't touch that. The credits
 skill forbids setting billing variables "to make a run look like Agent SDK usage" (`SKILL.md:340-343`).
 `CLAUDE_CODE_OAUTH_TOKEN` doesn't do that, because `claude auth status` reports it as `oauth_token`,
@@ -106,14 +106,14 @@ environment, not the file. Reports say `setup-token` has no list or revoke comma
 [57400](https://github.com/anthropics/claude-code/issues/57400)), and the console route is
 unconfirmed, so a leaked token may be hard to cancel. Both machines share one plan's limits. If
 Anthropic reads its terms more strictly than I do, the consequence falls on Mat's account.
-**If you do not answer:** A1 and A2 stay held, and the test credentials stay on DUPER until
+**If you do not answer:** A1 and A2 stay held, and the test credentials stay on <member host> until
 `fleet_auth.py remove` runs.
 
 ### D-2: What runs a Claude job on a member   [governance-value] [planning]   mandatory: [M-3, M-7]
 
 **Recommendation: the credits engine itself, on the subscription token.** Add `launch.auth`, an S4U
 task route and one home install per member. Mid-run messages, `stop-after-row`, stop classes, caps,
-resume and fork then all carry over. The key route stays the default, so SUPER is unchanged. Budget
+resume and fork then all carry over. The key route stays the default, so <hub host> is unchanged. Budget
 caps still apply, because §2 shows `--max-budget-usd` works on the token. A2's acceptance includes
 Mat checking that plan usage moved and Console balance didn't, which is the only direct billing proof.
 
@@ -147,7 +147,7 @@ being cheap, and the key route is still there.
 ### D-3: Who starts and resumes, and what happens on a question   [governance-value] [planning]   mandatory: [M-14]
 
 **Recommendation: only the orchestrator, only on Mat's chat words, and a question stops the run.**
-Members get `credits_start_policy: agent-on-user-chat` in their own config, and SUPER stays
+Members get `credits_start_policy: agent-on-user-chat` in their own config, and <hub host> stays
 `human-only`. The hub refuses `start` or `resume` with no quote, and the run checks the quote with
 `credits_msg.py authority`. On a question the run ends `STOPPED:decision`, `fleet watch` wakes the
 orchestrator, and it asks Mat. Mat's answer goes in a resume brief, in the same session and slot.
@@ -155,7 +155,7 @@ orchestrator, and it asks Mat. Mat's answer goes in a resume brief, in the same 
 | Option | Pros (vs. recommendation) | Cons (vs. recommendation) | Sources |
 |---|---|---|---|
 | ✅ Orchestrator, Mat's quote, stop and resume | — | — | Plan D-2; open-tag |
-| ⚠️ The run waits at a live gate for a ruling | Keeps the session running, with no restart cost | The ruling check needs a transcript on SUPER, so it needs new machinery. A waiting run also holds a slot | `2026-11-01-remote-hosts.md:89-92`; `create-plan.md:809-816` |
+| ⚠️ The run waits at a live gate for a ruling | Keeps the session running, with no restart cost | The ruling check needs a transcript on <hub host>, so it needs new machinery. A waiting run also holds a slot | `2026-11-01-remote-hosts.md:89-92`; `create-plan.md:809-816` |
 | ❌ `human-only`, typed at a terminal | No agent can start anything | Mat would have to type on the member, or the orchestrator could never start a run | `core/.agent/credits/config.json:5` |
 
 **Precedent:** plan D-2 (`implementation-plan.md:615-622`) and outline
@@ -192,7 +192,7 @@ member's Codex version.
 | ⚠️ Codex `unelevated` only, no `elevated` try | One setting, nothing to attempt | Stays on what OpenAI calls a "legacy fallback", with no denied read paths | Codex Windows docs |
 
 **Precedent:** outline `2026-11-03-fleet-mvp-outline.md:145-151`, accepted, says workspace permissions
-and no full bypass. `SKILL.md:295` recommends `bypassPermissions` for workflow runs on SUPER, which
+and no full bypass. `SKILL.md:295` recommends `bypassPermissions` for workflow runs on <hub host>, which
 already goes against Anthropic's isolation advice. This keeps that out of unattended members. Bounded
 jobs come first, since a full `/execution-session` will stall until its list is built.
 **Research:**
@@ -218,7 +218,7 @@ that Codex improves Claude's work is mixed. `FORBIDDEN_COMMANDS` stays as it is,
 | Option | Pros (vs. recommendation) | Cons (vs. recommendation) | Sources |
 |---|---|---|---|
 | ✅ Yes, wrapper only, review modes, serialized, on request | — | — | `cli-dispatch/SKILL.md:14`; Codex CI/CD docs |
-| ⚠️ No; review on SUPER after the result returns | One less path, no second login in play during a run, and SUPER's sandbox is stronger | Reviews wait for the result, SUPER does the work, and the answer to Mat's original question becomes no | §2 |
+| ⚠️ No; review on <hub host> after the result returns | One less path, no second login in play during a run, and <hub host>'s sandbox is stronger | Reviews wait for the result, <hub host> does the work, and the answer to Mat's original question becomes no | §2 |
 | ❌ Bare `codex exec` from the run | Nothing to build | Breaks the wrapper-only rule, with no evidence or job limit, and reports warn of recursion and token burn | `cli-dispatch/SKILL.md:14`; codex-bridge |
 
 **Precedent:** `2026-11-01-remote-hosts.md:169-170` planned "the independent review on the host
@@ -232,7 +232,7 @@ Codex setting.
 - [codex-bridge](https://github.com/Sateezg/codex-bridge) and a [Reddit report](https://www.reddit.com/r/ClaudeCode/comments/1uasmo8/i_wired_claude_code_and_codex_to_check_each) (practice): Claude shelling out to Codex on a subscription works, but unguarded calls risk recursion and token burn.
 
 **Reversibility / risk:** two-way, by removing one allow rule. Use counts against the same ChatGPT plan
-as SUPER. A Codex job that runs during a Claude run also waits for or blocks orchestrator-started Codex
+as <hub host>. A Codex job that runs during a Claude run also waits for or blocks orchestrator-started Codex
 work on that member.
 **If you do not answer:** A4 builds Codex as a task only, and remote Claude can't call it.
 

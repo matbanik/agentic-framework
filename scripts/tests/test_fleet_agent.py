@@ -463,7 +463,7 @@ def test_ac15_a_gate_with_no_kit_refuses(rig):
     assert r.returncode != 0 and "kit_missing" in r.stderr
 
 
-# AC-41: the SUPER half of commit identity. Each test sets GIT_CONFIG_GLOBAL to its own file, so the test
+# AC-41: the hub machine's half of commit identity. Each test sets GIT_CONFIG_GLOBAL to its own file, so the test
 # machine's config can't decide the result.
 
 

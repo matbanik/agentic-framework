@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fleet MVP: one stdlib-only file that is the hub, the member and the CLI.
 
-SUPER runs ``hub``. Each member runs ``member``, which polls the hub, runs one task at a time and
+The hub machine runs ``hub``. Each member runs ``member``, which polls the hub, runs one task at a time and
 posts the result. Members never accept connections. Plan:
 docs/execution/plans/2026-11-03-fleet-mvp/implementation-plan.md
 """
@@ -2161,7 +2161,7 @@ def parse_pin(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="fleet.py", description="LAN fleet: hub, member and CLI")
     sub = p.add_subparsers(dest="verb", required=True)
-    hub = sub.add_parser("hub", help="Run the hub (SUPER)")
+    hub = sub.add_parser("hub", help="Run the hub (on the hub machine)")
     hub.add_argument("--host", default="127.0.0.1")
     hub.add_argument("--port", type=int, default=DEFAULT_PORT)
     hub.add_argument("--offline-after", type=float, default=OFFLINE_AFTER_S)

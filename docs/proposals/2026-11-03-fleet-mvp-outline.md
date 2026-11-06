@@ -13,7 +13,7 @@ where this outline and they disagree, this outline holds. The HDP receipts are i
 
 ## 1. The MVP in one paragraph
 
-SUPER runs a small **hub**: one Python file with an HTTP endpoint and a SQLite file. Each member
+<hub host> runs a small **hub**: one Python file with an HTTP endpoint and a SQLite file. Each member
 runs the **same file** in member mode, in a terminal at its own console. The member polls the hub
 for tasks, runs them, and posts the result back. Members never accept connections, so they need no
 ssh and no inbound firewall rule. Code moves as **git bundles** attached to tasks and results. An
@@ -38,7 +38,7 @@ These eight points are the long-term design. Each phase adds to them and none re
 4. **A closed list of task kinds, one executor for each:** `ping`, `run` and `agent`. Behind
    `agent`, each CLI has an adapter: a command template plus an output parser.
 5. **Git moves only as bundles plus commit ids.** No member has `origin`, GitHub credentials or a
-   signing key. Landing stays on SUPER, on Mat's word, as in the 2026-11-01 proposal §4.
+   signing key. Landing stays on <hub host>, on Mat's word, as in the 2026-11-01 proposal §4.
 6. **Authority is in the protocol from day 1.** The hub refuses any task kind its sender may not
    send. No message ever authorizes a commit, push, merge, tag or release. No secret goes in a
    message.
@@ -54,17 +54,17 @@ Each phase is useful on its own, and work can stop after any of them. **The MVP 
 | # | Phase | Builds | Done when | Blocked by |
 |---|---|---|---|---|
 | P0 | Decide and scope | `docs/research/fleet/scope.md`. Read the Dobby, Sidefleet and agichan sources as reference implementations (§6) | Mat rules D-1. D-2 and D-3 can wait | — |
-| P1 | Walking skeleton, SUPER only | `fleet.py` with `hub`, `member`, `send`, `status` and `wait`. The envelope, the SQLite store, and the `ping` task | `fleet send local ping` returns the member's tool versions over localhost | D-1 |
-| P2 | Bootstrap template and the first real member | Common template (Windows section filled; Linux and macOS sections only headed). Pairing. Hub TLS. One named firewall rule on SUPER | DUPER's agent sets DUPER up from the template, Mat does the human-only steps, and SUPER's `fleet status` lists DUPER with its capability report | P1 |
-| P3 | `run` tasks on av-kit | av-kit's per-project manifest; one slot per project on the member; a snapshot bundle from SUPER that includes untracked files (2026-11-01 §5); results returned | A SUPER session runs av-kit's checks on its uncommitted tree on DUPER and gets the exit code, the log and the tree id back | P2 |
-| P4 | `agent` tasks: Claude and Codex | Two adapters; the brief goes in, and the final message, usage and a result bundle come back; landing on SUPER through the existing human-gated path | One plan job runs on DUPER through each CLI, and its result lands on Mat's word | P3, D-2 |
+| P1 | Walking skeleton, <hub host> only | `fleet.py` with `hub`, `member`, `send`, `status` and `wait`. The envelope, the SQLite store, and the `ping` task | `fleet send local ping` returns the member's tool versions over localhost | D-1 |
+| P2 | Bootstrap template and the first real member | Common template (Windows section filled; Linux and macOS sections only headed). Pairing. Hub TLS. One named firewall rule on <hub host> | <member host>'s agent sets <member host> up from the template, Mat does the human-only steps, and <hub host>'s `fleet status` lists <member host> with its capability report | P1 |
+| P3 | `run` tasks on av-kit | av-kit's per-project manifest; one slot per project on the member; a snapshot bundle from <hub host> that includes untracked files (2026-11-01 §5); results returned | A <hub host> session runs av-kit's checks on its uncommitted tree on <member host> and gets the exit code, the log and the tree id back | P2 |
+| P4 | `agent` tasks: Claude and Codex | Two adapters; the brief goes in, and the final message, usage and a result bundle come back; landing on <hub host> through the existing human-gated path | One plan job runs on <member host> through each CLI, and its result lands on Mat's word | P3, D-2 |
 | P5 | Cursor and Antigravity adapters, follow-ups, Zorivest | `stop`, plus `query` and `info` delivered as a resume turn; Zorivest's manifest; 2026-11-01 D-2 (H1-2 evidence) decided here | Each of the four CLIs runs a job. A follow-up gets an answer | P4 |
-| P6 | Member-to-member requests | Addressing by capability (for example `to: any{os: macos}`); the hub's allowlist per sender | A member asks for a build on another member and gets the result. SUPER's log shows both | P5, D-3, R-7 |
+| P6 | Member-to-member requests | Addressing by capability (for example `to: any{os: macos}`); the hub's allowlist per sender | A member asks for a build on another member and gets the result. <hub host>'s log shows both | P5, D-3, R-7 |
 | P7 | Autostart, Linux and macOS members | A Task Scheduler task at logon, a systemd user service, a launchd agent | A member restarts and rejoins without help | First non-Windows host, R-5 |
 
 **Why this order.** `run` comes before `agent` because it needs no billing or permission decision
 and it tests slots and bundles with deterministic commands. It also delivers the first real value:
-heavy gates run off SUPER. av-kit comes first because its tests carry no H1-2 evidence question.
+heavy gates run off <hub host>. av-kit comes first because its tests carry no H1-2 evidence question.
 
 **Deliberately left out of the MVP:** discovery (the hub address is in config), message injection
 into a live session, the MCP pull tool, NATS, a capability matcher, autostart, Linux and macOS, and
@@ -90,7 +90,7 @@ below answered the questions that block the MVP. The rest move to the phase that
 | Item | Status |
 |---|---|
 | R-1 protocols | Answered enough. A2A is the agent-to-agent standard, now under the Linux Foundation, and gives us the envelope's names. Zed's ACP is editor-to-agent, and Codex and Claude reach it only through adapters, so it isn't the fleet transport |
-| R-2 CLI headless modes | Checked against the CLIs installed on SUPER (§6). Resume and permission behaviour get tested in P4 and P5 |
+| R-2 CLI headless modes | Checked against the CLIs installed on <hub host> (§6). Resume and permission behaviour get tested in P4 and P5 |
 | R-3 transports | Answered by prior art. Settled by D-1 |
 | R-4 prior art | Found five projects (§6). Read them in P0 under `pre-build-research.md` instead of a deep-research run |
 | R-5 autostart per OS | P7 |
@@ -99,7 +99,7 @@ below answered the questions that block the MVP. The rest move to the phase that
 
 ## 5. Decisions
 
-### D-1: Build a minimal hub on SUPER that members poll   [one-way-door] [planning]
+### D-1: Build a minimal hub on <hub host> that members poll   [one-way-door] [planning]
 
 **Recommendation: build it.** It's one standard-library Python file: an HTTP endpoint over a
 SQLite file, TLS with a self-signed certificate that members pin, and one key per member. It is
@@ -115,7 +115,7 @@ A2A open for later.
 | ✅ Minimal hub, members poll | — | — | Zorivest MCP HTTP plan `:56`; GitHub runner docs; Dobby |
 | ⚠️ Adopt Dobby (MIT, Python, SQLite, polling spokes) | Already has a dashboard, cost accounting and a queue | Claude and Codex only. Version 0.2 from one author, and Windows support isn't stated. Carrying our authority rules (no commit, start quote) means forking it anyway. Better as a reference | pypi.org/project/dobby-orchestrator |
 | ⚠️ NATS JetStream broker plus our own client | Real pub/sub, durable queues, request-reply, one binary on every OS | One more server to install and secure. A client library on every member. We'd still write the client and the envelope. Nothing gained at 2 to 5 machines | docs.nats.io; synadia.com |
-| ❌ ssh from SUPER (the 2026-11-01 design) | No server code | An ssh server and an inbound rule on every member. Windows OpenSSH ends processes when the session closes. SUPER drives the member, the reverse of the 11-03 model | Win32-OpenSSH #1195 |
+| ❌ ssh from <hub host> (the 2026-11-01 design) | No server code | An ssh server and an inbound rule on every member. Windows OpenSSH ends processes when the session closes. <hub host> drives the member, the reverse of the 11-03 model | Win32-OpenSSH #1195 |
 
 **Precedent:** `P:/zorivest/docs/execution/plans/2026-07-28-mcp-http-transport/implementation-plan.md:56`.
 That's `USER_EXPLICIT` 2026-07-28, "port 8766 + configurable · per-request auth": stateless HTTP
@@ -130,10 +130,10 @@ proposal's ssh design was written by an agent and is superseded by the 11-03 bri
 - Hosted AO: pairing with a self-signed certificate pinned by its fingerprint.
 
 **Reversibility and risk:** The transport is a two-way door if the envelope stays neutral. The
-envelope is the part that's hard to change. Plain HTTP would be simpler, but DUPER is on Wi-Fi and
+envelope is the part that's hard to change. Plain HTTP would be simpler, but <member host> is on Wi-Fi and
 the member key would cross the network in clear, so TLS is in from P2. P2 also needs one named,
-reversible inbound rule on SUPER, scoped to the LAN, with records before and after (the
-`the local network notes` practice). DUPER needs no rule.
+reversible inbound rule on <hub host>, scoped to the LAN, with records before and after (the
+`the local network notes` practice). <member host> needs no rule.
 **If you don't answer:** The plan is written on the recommendation. P1 runs on localhost only, so
 nothing irreversible happens before you rule. The firewall rule in P2 waits for your word.
 
@@ -155,7 +155,7 @@ nothing irreversible happens before you rule. The firewall rule in P2 waits for 
 | Option | Pros (vs. recommendation) | Cons (vs. recommendation) | Sources |
 |---|---|---|---|
 | ✅ Orchestrator only, your quote, workspace permissions, the member's own login | — | — | Zorivest `p25-ps3` task.md:186 |
-| ⚠️ `human-only`: you type each start yourself (the framework default) | No agent can start anything | Every job needs you at a SUPER terminal, so dispatching from chat doesn't work | `core/.agent/credits/config.json:5` |
+| ⚠️ `human-only`: you type each start yourself (the framework default) | No agent can start anything | Every job needs you at a <hub host> terminal, so dispatching from chat doesn't work | `core/.agent/credits/config.json:5` |
 | ❌ Any member may start jobs, and full bypass everywhere | Simplest unattended runs, and all four CLIs from P4 | Widens who can run code on a machine, so a prompt injection in one agent's output can travel to another | arXiv 2609.22949; agichan README |
 
 **Precedent:**
@@ -178,13 +178,13 @@ loose).
 ### D-3: What one member may ask another to do   [governance-value] [planning]   mandatory: [M-14]
 
 **Recommendation: only `run` tasks** (tests and builds), sent through the hub, with the result
-returned to the asking member and recorded in SUPER's log. A member never sends an `agent` task.
+returned to the asking member and recorded in <hub host>'s log. A member never sends an `agent` task.
 Until P6, the hub refuses every task a member sends.
 
 | Option | Pros (vs. recommendation) | Cons (vs. recommendation) | Sources |
 |---|---|---|---|
 | ✅ `run` only, through the hub | — | — | handoff §5.3 |
-| ⚠️ `agent` tasks too, relaying your quote | "Plan this on the Mac" works without SUPER | Your words get relayed by an agent, which is hard to audit and carries injection from one agent to the next | arXiv 2609.22949 |
+| ⚠️ `agent` tasks too, relaying your quote | "Plan this on the Mac" works without <hub host> | Your words get relayed by an agent, which is hard to audit and carries injection from one agent to the next | arXiv 2609.22949 |
 | ❌ Peer-to-peer, direct between members | No dependency on the hub | Inbound ports and a trust setup for every pair of machines, the opposite of §2.1 and §2.2 | — |
 
 **Precedent:** none found for this kind of decision.
@@ -219,7 +219,7 @@ decision_log:
     research:
       engine: native
       sources:
-        - "Local --help on SUPER, receipts in fleet-hdp/*-help.txt: claude 2.1.312 has -p, --output-format, --input-format and -r/--resume; codex 0.165.0 has exec --json, -o and exec resume; Cursor agent 2026.10.22 has -p, --output-format, --resume, --force and --trust; agy 1.4.12 has -p, --output-format and --conversation"
+        - "Local --help on <hub host>, receipts in fleet-hdp/*-help.txt: claude 2.1.312 has -p, --output-format, --input-format and -r/--resume; codex 0.165.0 has exec --json, -o and exec resume; Cursor agent 2026.10.22 has -p, --output-format, --resume, --force and --trust; agy 1.4.12 has -p, --output-format and --conversation"
         - "dev.to, 'Headless Mode in 5 Agents' — the same headless, JSON and resume pattern in every major CLI"
         - "Dobby and Sidefleet start the CLIs as child processes"
     reasoning: "It works the same way for all four CLIs without per-CLI injection code"
@@ -229,7 +229,7 @@ decision_log:
     resolution: autonomous
     class: two-way
     mandatory: none
-    chosen: "Git bundles attached to tasks and results; SUPER fetches a result into a non-branch ref; landing as in 2026-11-01 §4"
+    chosen: "Git bundles attached to tasks and results; <hub host> fetches a result into a non-branch ref; landing as in 2026-11-01 §4"
     source_tag: Research-backed
     precedents: ["2026-11-01-remote-hosts.md §4-5 — tested: squash landing, merge-tree check, snapshot with a temporary index"]
     research:
@@ -245,7 +245,7 @@ decision_log:
     resolution: autonomous
     class: two-way
     mandatory: none
-    chosen: "Not in the MVP. Bootstrap runs at the member's console; recovery is at the console, or through DUPER's existing WinRM. Revisit for a member without a console"
+    chosen: "Not in the MVP. Bootstrap runs at the member's console; recovery is at the console, or through <member host>'s existing WinRM. Revisit for a member without a console"
     source_tag: Local Canon
     precedents: ["handoff §2 item 5 — Mat: 'LAN first, possibly without ssh'"]
     research: {engine: none, sources: []}
@@ -256,7 +256,7 @@ decision_log:
     resolution: autonomous
     class: two-way
     mandatory: none
-    chosen: "The common template and fleet.py go in root .agent/fleet/ (the machine-home template; installed to ~/.agent/fleet on members, P:/.agent on SUPER). Each project's manifest lives in that repo at .agent/fleet.yaml, from a template in core/"
+    chosen: "The common template and fleet.py go in root .agent/fleet/ (the machine-home template; installed to ~/.agent/fleet on members, P:/.agent on <hub host>). Each project's manifest lives in that repo at .agent/fleet.yaml, from a template in core/"
     source_tag: Local Canon
     precedents: [".agent/INSTANTIATE.md:1-11 — root .agent/ is the shared-home template; core/.agent/ is the copy each project takes"]
     research: {engine: none, sources: []}
@@ -301,7 +301,7 @@ deferred: ["2026-11-01 D-2, whether a Zorivest gate run on a member counts as H1
 ## 6. Sources and findings
 
 **Corrections to the handoff:**
-- §4 says the Antigravity CLI wasn't found. It's installed on SUPER: `agy` 1.4.12 at
+- §4 says the Antigravity CLI wasn't found. It's installed on <hub host>: `agy` 1.4.12 at
   `%LOCALAPPDATA%/agy/bin/agy`.
 - §5.2 suggests testing the pull tool first. Headless runs are simpler and work the same way for
   every CLI (A-2).

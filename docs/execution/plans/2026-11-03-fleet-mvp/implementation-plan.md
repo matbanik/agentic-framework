@@ -18,16 +18,16 @@ template_version: "2.4"
 
 ## Goal
 
-SUPER should be able to hand work to another machine on the LAN and get the result back, with the
+<hub host> should be able to hand work to another machine on the LAN and get the result back, with the
 least machinery that does not need rebuilding later.
 
-SUPER runs a small hub: one Python file over a SQLite file. Each member runs the same file: in a
-terminal at its console, or on DUPER as a named scheduled task started over WinRM (D-5). The member polls the hub, runs tasks and posts results. Members never
+<hub host> runs a small hub: one Python file over a SQLite file. Each member runs the same file: in a
+terminal at its console, or on <member host> as a named scheduled task started over WinRM (D-5). The member polls the hub, runs tasks and posts results. Members never
 accept connections. Code moves as git bundles. Authority is enforced by the hub from the first
 version: only the orchestrator can start work, and no message can ask for a commit or a push.
 
-The MVP is outline phases P1 to P3, and it is done when a SUPER session can run av-kit's checks on
-its uncommitted tree on DUPER and get back the exit code, the log and the tree id.
+The MVP is outline phases P1 to P3, and it is done when a <hub host> session can run av-kit's checks on
+its uncommitted tree on <member host> and get back the exit code, the log and the tree id.
 
 ## Context Tool Decision
 
@@ -55,8 +55,8 @@ context_tool_decision:
 | ID | Work | depends_on | context_strategy | durable_outputs |
 |---|---|---|---|---|
 | WP-1 | Hub, store, pairing, member and `ping`, proved on localhost by tests | — | `shared` | `.agent/fleet/fleet.py`; `scripts/tests/test_fleet_hub.py` |
-| WP-2 | Bootstrap template, firewall rule and DUPER as the first real member | WP-1 | `compact_continue` | `.agent/fleet/bootstrap.md`; `core/.agent/fleet.json.template`; `scripts/tests/test_fleet_bootstrap.py`; live receipts. After compaction, re-read `task.md` and these outputs |
-| WP-3 | `run` tasks: manifest, snapshot, slot and results, then av-kit on DUPER | WP-2 | `compact_continue` | `scripts/tests/test_fleet_run.py`; live receipts. After compaction, re-read `task.md` and these outputs |
+| WP-2 | Bootstrap template, firewall rule and <member host> as the first real member | WP-1 | `compact_continue` | `.agent/fleet/bootstrap.md`; `core/.agent/fleet.json.template`; `scripts/tests/test_fleet_bootstrap.py`; live receipts. After compaction, re-read `task.md` and these outputs |
+| WP-3 | `run` tasks: manifest, snapshot, slot and results, then av-kit on <member host> | WP-2 | `compact_continue` | `scripts/tests/test_fleet_run.py`; live receipts. After compaction, re-read `task.md` and these outputs |
 
 **Lane ownership: omitted.** This is a main-tree plan. The package repo is not instantiated: it has
 no `.agent/credits/worktree.json`, so `executor_worktree.py` has no lane configuration here, and the
@@ -86,21 +86,21 @@ precedent plan `docs/execution/plans/2026-10-20-review-limits-parameters/` ran o
 >
 > **D-5 changes how the human rows run.** Every human step is a prepared script in
 > `docs/execution/plans/2026-11-03-fleet-mvp/scripts/`. Mat asks and the agent runs it. The one script that
-> needs elevation opens its own elevated window through a UAC prompt, so the IDE stays as it is. DUPER is reached with `the local WinRM helper` over WinRM.
+> needs elevation opens its own elevated window through a UAC prompt, so the IDE stays as it is. <member host> is reached with `the local WinRM helper` over WinRM.
 >
 > **Mat still does three things:**
-> 1. Ask the agent to run `super-firewall.ps1` and accept its UAC prompt (row 7). The agent's shell is
+> 1. Ask the agent to run `<hub host>-firewall.ps1` and accept its UAC prompt (row 7). The agent's shell is
 >    not elevated, and D-1 scoped the rule to the LAN.
-> 2. Ask the agent to run each DUPER script (rows 8, 11 and 13).
-> 3. Run `approve duper <code>` in a real terminal on SUPER (row 8). `approve` requires a TTY
+> 2. Ask the agent to run each <member host> script (rows 8, 11 and 13).
+> 3. Run `approve <member host> <code>` in a real terminal on <hub host> (row 8). `approve` requires a TTY
 >    and the agent's shell has none. This check stays as it is.
 >
 > Execution stops at these rows and resumes when Mat asks or reports them done.
 >
 > **One departure from the handoff rule is flagged.** The handoff says keys are created "by a human at
-> each member's console". Under D-5, `pair` runs over WinRM at Mat's request, so DUPER's key is created
-> by a script and not at the console. The key is still made on DUPER, is never printed, read or copied,
-> and the human approval on SUPER is unchanged. Mat can reverse this by running `pair` at the console.
+> each member's console". Under D-5, `pair` runs over WinRM at Mat's request, so <member host>'s key is created
+> by a script and not at the console. The key is still made on <member host>, is never printed, read or copied,
+> and the human approval on <hub host> is unchanged. Mat can reverse this by running `pair` at the console.
 >
 > **Two files land outside this repo, both untracked and left for Mat to keep or delete:**
 > `P:/av-kit/.agent/fleet.json` (AC-31) and the firewall records in `the local firewall records folder` (AC-20).
@@ -198,11 +198,11 @@ stores only `sha256(key)` and compares with `hmac.compare_digest`.
 
 **Pairing.** On the member, `pair --hub URL --pin FP --name N` generates the key with
 `secrets.token_urlsafe(32)`, writes it to `member.json` without printing it, posts it over the pinned
-connection, and prints an approval code: the first 12 hex digits of `sha256(key)`. On SUPER, a human
+connection, and prints an approval code: the first 12 hex digits of `sha256(key)`. On <hub host>, a human
 runs `approve <name> <code>`. The code must match the stored hash. `approve` and `revoke` require a
 TTY on stdin and write to the database directly, so no HTTP route can approve anything. The TTY check
 stops an agent running the command by accident. It is not a security boundary against a hostile
-process running as Mat on SUPER, which is outside this threat model.
+process running as Mat on <hub host>, which is outside this threat model.
 
 **Member loop.** One task at a time, on one thread. `hello` reports capabilities, gets a new session
 id and fails any `working` task of this member with `member_restarted`. A new hello invalidates the
@@ -285,7 +285,7 @@ and its last line is one JSON object with `task, state, reason, exit_code, tree,
 | `scripts/tests/fleet_harness.py` | new | Starts a hub and members as subprocesses with a temporary `FLEET_HOME`; approves by calling `approve_member` directly, since the CLI needs a TTY |
 | `scripts/tests/test_fleet_hub.py` | new | AC-1 to AC-15, each test named `test_acNN_*` |
 
-### WP-2: Bootstrap template and DUPER
+### WP-2: Bootstrap template and <member host>
 
 **Template.** `.agent/fleet/bootstrap.md` is agent-readable markdown, not an installer. It has a
 common part (Windows filled; Linux and macOS as headings only) and a project part. The setup agent
@@ -298,19 +298,19 @@ The steps, in order:
    `-k` is safe here because the hash does the verifying and the files hold no secret.
 3. The agent installs Python 3.11 or later and git if missing, and writes a report of what it did.
 4. **`STOP FOR HUMAN: confirm-fingerprint`.** Compare the pin on both screens.
-5. **`STOP FOR HUMAN: firewall-rule`.** On SUPER, only if the rule is absent.
+5. **`STOP FOR HUMAN: firewall-rule`.** On <hub host>, only if the rule is absent.
 6. **`STOP FOR HUMAN: run-pair`.** Run `pair` in the human's own terminal. The agent never reads
    `member.json`.
-7. **`STOP FOR HUMAN: run-approve`.** On SUPER.
+7. **`STOP FOR HUMAN: run-approve`.** On <hub host>.
 8. The agent runs `fleet.py check`. For a project, `check --project P` reads the published manifest
    and lists missing tools, and the agent installs them.
-9. **Handshake.** A human starts `fleet.py member`; SUPER sends `ping`; the agent's final report
+9. **Handshake.** A human starts `fleet.py member`; <hub host> sends `ping`; the agent's final report
    lists what it installed, versions, and what still needs a human.
 
 It also has an update section (stop the member, re-fetch, re-check the hash, restart) that WP-3 uses.
 
-**On DUPER (D-5)** the template is followed by SUPER's agent over WinRM, through the prepared scripts,
-and no agent CLI is installed on DUPER, because the MVP has no `agent` tasks: `install-agent-cli` waits
+**On <member host> (D-5)** the template is followed by <hub host>'s agent over WinRM, through the prepared scripts,
+and no agent CLI is installed on <member host>, because the MVP has no `agent` tasks: `install-agent-cli` waits
 for P4. Mat's request to run a script is the stop for `firewall-rule` and `run-pair`, and `pair` itself
 enforces the pin, which covers `confirm-fingerprint`. `run-approve` stays with Mat in a real terminal.
 The template itself keeps all five stops for a member set up at its console.
@@ -324,13 +324,13 @@ are missing, exiting `6` if any are.
 `the local network notes (lines 145-149)` is the practice here. This plan does not touch the router, so no router
 dump is needed. Reading firewall state needs no elevation, so the agent takes both records. Creating
 the rule does, so it is a prepared script (D-5): Mat asks, the agent runs `docs/execution/plans/2026-11-03-fleet-mvp/scripts/elevate-firewall.ps1`, Mat accepts
-the UAC prompt, and `docs/execution/plans/2026-11-03-fleet-mvp/scripts/super-firewall.ps1` runs in that elevated window. Its one command is:
+the UAC prompt, and `docs/execution/plans/2026-11-03-fleet-mvp/scripts/<hub host>-firewall.ps1` runs in that elevated window. Its one command is:
 
 ```powershell
 New-NetFirewallRule -DisplayName 'Fleet hub 8770' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8770 -RemoteAddress the-LAN-subnet -Profile Private
 ```
 
-To reverse it: `scripts/super-firewall.ps1 -Remove`.
+To reverse it: `scripts/<hub host>-firewall.ps1 -Remove`.
 
 Each record holds `Get-NetFirewallProfile`; the rule with its address and port filters; and the state
 of the Plex inbound rule and `FPS-SMB-In-TCP`. `check_live.py firewall-before` writes
@@ -342,22 +342,22 @@ The agent then starts the hub in a background shell:
 in a separate terminal. If Windows offers its own firewall prompt for Python, cancel it, since the
 rule already exists.
 
-#### DUPER scripts (D-5)
+#### <member host> scripts (D-5)
 
-Each runs on DUPER through `docs/execution/plans/2026-11-03-fleet-mvp/scripts/run_duper.py`, which calls `the local WinRM helper` with
+Each runs on <member host> through `docs/execution/plans/2026-11-03-fleet-mvp/scripts/run_duper.py`, which calls `the local WinRM helper` with
 its default login, so no password appears in a script, an argument or a receipt. `pywinrm` is not in
-SUPER's Python, so the call is `uv run --no-project --with pywinrm`, which installs nothing globally.
-The WinRM user is `DUPER\Mat`, whose profile is `C:\Users\mat`, so `pair` and `member` share one
-`FLEET_HOME`. DUPER's console user is a different account and its session is not touched.
+<hub host>'s Python, so the call is `uv run --no-project --with pywinrm`, which installs nothing globally.
+The WinRM user is `<member host>\<member user>`, whose profile is `C:\Users\<member user>`, so `pair` and `member` share one
+`FLEET_HOME`. <member host>'s console user is a different account and its session is not touched.
 
 | Script | Row | Does |
 |---|---|---|
-| `duper-record.ps1` | 8 | Prints log-collector state, firewall profile state and inbound rule count. Runs before and after |
-| `duper-python.ps1` | 8 | If Python 3.11 or later is absent, installs it for this user from python.org with no elevation. `winget` is absent on DUPER |
-| `duper-pair.ps1` | 8 | Fetches both files, checks the hashes, runs `pair`, and prints only the approval code |
-| `duper-member.ps1` | 8, 11, 13 | Creates, starts, restarts, stops or removes the scheduled task `Fleet member`. The task has no trigger, so nothing starts at boot (A-7 stands) and it outlives the WinRM shell that starts it. `ACTION=Remove` reverses it. `run_duper.py` passes values as `KEY=VALUE`, because the remote runner takes a file and no parameters |
-| `duper-update.ps1` | 11 | Re-fetches `fleet.py` and checks the hash |
-| `duper-tools.ps1` | 13 | Installs what `check --project av-kit` reports missing, for this user |
+| `<member host>-record.ps1` | 8 | Prints log-collector state, firewall profile state and inbound rule count. Runs before and after |
+| `<member host>-python.ps1` | 8 | If Python 3.11 or later is absent, installs it for this user from python.org with no elevation. `winget` is absent on <member host> |
+| `<member host>-pair.ps1` | 8 | Fetches both files, checks the hashes, runs `pair`, and prints only the approval code |
+| `<member host>-member.ps1` | 8, 11, 13 | Creates, starts, restarts, stops or removes the scheduled task `Fleet member`. The task has no trigger, so nothing starts at boot (A-7 stands) and it outlives the WinRM shell that starts it. `ACTION=Remove` reverses it. `run_duper.py` passes values as `KEY=VALUE`, because the remote runner takes a file and no parameters |
+| `<member host>-update.ps1` | 11 | Re-fetches `fleet.py` and checks the hash |
+| `<member host>-tools.ps1` | 13 | Installs what `check --project av-kit` reports missing, for this user |
 
 #### Boundary Inventory
 
@@ -374,8 +374,8 @@ The WinRM user is `DUPER\Mat`, whose profile is `C:\Users\mat`, so `pair` and `m
 | AC-17 | integration | Bootstrap files match the pairing line. Observable: the SHA-256 of the bytes served and the hashes printed by `hub`. Chain: `C-HTTP` to `route_bootstrap`. | Local Canon (A-16) | `/bootstrap/../hub/hub.key`, `/bootstrap/hub.db` and `/bootstrap/orchestrator.key` → `404`, and no response contains the key file's bytes |
 | AC-18 | integration | `publish` then `check --project` reports missing tools. Observable: exit code and JSON. Chain: `C-CLI` to `route_put_project`, `route_get_project`. Publishing is a new `project` message; the latest wins. | Human-approved (outline P2) | A manifest requiring a tool absent from the report → exit `6` naming it. An unknown project → `404`. An invalid manifest → `422 bad_manifest:<reason>` with no new row |
 | AC-19 | unit | Template shape. Observable: the parsed file. Every `BOOTSTRAP_STOPS` id appears as `STOP FOR HUMAN: <id>`. The headings Windows, Linux and macOS exist, and the last two have no steps. `pair` and `approve` appear only after their stop lines. The file has no `P:` path. It has the sentence forbidding the agent from reading `member.json`. | Human-approved (outline P2) | A copy with one stop line removed fails the same checker |
-| AC-20 | integration | Live, on SUPER: `FIREWALL_RULE` exists, created by `super-firewall.ps1` when Mat asks (D-5). Observable: the before record (rule absent) and the after record that the checklist names. | Human-approved (D-1, `the local network notes (lines 145-149)`) | `check_live.py firewall` fails if the rule differs from `FIREWALL_RULE`, including remote address `Any` or a profile that includes Public; if more than one rule has that name; if the profile state differs from the before record; or if the Plex inbound rule or `FPS-SMB-In-TCP` is no longer enabled |
-| AC-21 | integration | Live: DUPER (outline P2 done). SUPER's agent follows the template over WinRM with the D-5 scripts when Mat asks, Mat runs `approve`, and SUPER's `status` lists `duper` as approved and online with its capability report, and `send duper ping` then `wait` exits `0`. Observable: the JSON receipts, checked by `check_live.py duper`. | Human-approved (outline P2) | From DUPER, `curl.exe -k https://the-hub-LAN-address:8770/v1/members` returns `401`. DUPER's log-collector service state, firewall profile state and inbound rule count are equal before and after, from `duper-record.ps1`, and the template opened no port |
+| AC-20 | integration | Live, on <hub host>: `FIREWALL_RULE` exists, created by `<hub host>-firewall.ps1` when Mat asks (D-5). Observable: the before record (rule absent) and the after record that the checklist names. | Human-approved (D-1, `the local network notes (lines 145-149)`) | `check_live.py firewall` fails if the rule differs from `FIREWALL_RULE`, including remote address `Any` or a profile that includes Public; if more than one rule has that name; if the profile state differs from the before record; or if the Plex inbound rule or `FPS-SMB-In-TCP` is no longer enabled |
+| AC-21 | integration | Live: <member host> (outline P2 done). <hub host>'s agent follows the template over WinRM with the D-5 scripts when Mat asks, Mat runs `approve`, and <hub host>'s `status` lists `<member host>` as approved and online with its capability report, and `send <member host> ping` then `wait` exits `0`. Observable: the JSON receipts, checked by `check_live.py <member host>`. | Human-approved (outline P2) | From <member host>, `curl.exe -k https://the-hub-LAN-address:8770/v1/members` returns `401`. <member host>'s log-collector service state, firewall profile state and inbound rule count are equal before and after, from `<member host>-record.ps1`, and the template opened no port |
 
 #### Spec Sufficiency Table
 
@@ -384,7 +384,7 @@ The WinRM user is `DUPER\Mat`, whose profile is `C:\Users\mat`, so `pair` and `m
 | Template form and human stops | Human-approved | Outline §3 "What each MVP phase should not grow into" |
 | Fetching before trust exists | Local Canon | A-16: `curl -k` plus a hash from the pairing line |
 | Firewall rule scope | Human-approved | D-1, `the local network notes (lines 145-149)` |
-| Human steps as scripts, DUPER over WinRM | Human-approved | D-5 |
+| Human steps as scripts, <member host> over WinRM | Human-approved | D-5 |
 | Project part of the template | Local Canon | Handoff §5.1: manifest per project; A-5 and A-9 |
 
 #### Files Modified
@@ -396,7 +396,7 @@ The WinRM user is `DUPER\Mat`, whose profile is `C:\Users\mat`, so `pair` and `m
 | `core/.agent/fleet.json.template` | new | The manifest template a project copies. AC-22's first test reads it, so it is written here |
 | `scripts/tests/test_fleet_bootstrap.py` | new | AC-16 to AC-19 |
 | `docs/execution/plans/2026-11-03-fleet-mvp/check_live.py` | new | Plan-local verifier for AC-20, AC-21 and AC-31. It reads, and writes only under `$env:RECEIPTS_DIR`, apart from the two firewall records the Firewall checklist names |
-| `docs/execution/plans/2026-11-03-fleet-mvp/scripts/` | new | D-5: `super-firewall.ps1`, `elevate-firewall.ps1`, `run_duper.py` and the DUPER scripts. Plan-local |
+| `docs/execution/plans/2026-11-03-fleet-mvp/scripts/` | new | D-5: `<hub host>-firewall.ps1`, `elevate-firewall.ps1`, `run_duper.py` and the <member host> scripts. Plan-local |
 | `the local firewall record fleet-hub-rule-before`, `the local firewall record fleet-hub-rule-after` | new, outside this repo | The firewall records |
 
 ### WP-3: `run` tasks
@@ -407,7 +407,7 @@ A command is a list of argv lists that run in order and stop at the first failur
 command, and no free argv crosses the wire (A-12), which also avoids shell quoting across operating
 systems.
 
-**Snapshot on SUPER.** `run <member> --repo PATH <command> [--timeout N]`:
+**Snapshot on <hub host>.** `run <member> --repo PATH <command> [--timeout N]`:
 1. Copy the repo's index to a temporary file, and point `GIT_INDEX_FILE` at it.
 2. `git add -A`, then `git add -f -- .agent/fleet.json`, because the slot reads the manifest from the
    snapshot even when the repo ignores it. No other ignored file travels. Then `git write-tree`, and
@@ -469,14 +469,14 @@ no `agent` task exists in the MVP, and the check does not claim to replace that 
 |----|------|-------------|--------|---------------|
 | AC-22 | unit | `validate_manifest` accepts `core/.agent/fleet.json.template` once its placeholders are filled, and refuses bad shapes. Observable: the returned code. | Local Canon (A-9, A-12) | Extra key, `v: 2`, `project: "../x"`, empty `commands`, a string where argv belongs, and a `requires` tool outside `CAPABILITY_TOOLS` are each refused with `bad_manifest:<reason>`. Each `FORBIDDEN_COMMANDS` name is refused with `bad_manifest:forbidden_command:<n>`, also when written as `GIT.EXE` or `C:/x/git` |
 | AC-23 | integration | The snapshot takes the working tree and leaves the repo alone. Observable: the tree inside the bundle; a path and SHA-256 listing of every file in the fixture outside `.git`, including ignored files; and `HEAD`, index file bytes, `git status --porcelain`, `git branch --list`, `git worktree list` and `git for-each-ref refs/fleet`. Chain: `C-CLI` to `cmd_run` to `make_snapshot`. | Research-backed (A-3; 2026-11-01 §5) | Fixture repo with staged, unstaged, untracked and ignored changes: the bundle has the first three and not the ignored file. A manifest the repo ignores still travels (D-8), and no other ignored file does. Every before-and-after observable is equal. Oracle check: overwriting an untracked file's content between the two listings leaves porcelain equal and makes the comparison fail, so it can catch a snapshot that clobbers a file. With `git bundle` forced to fail through a `PATH` shim, `refs/fleet` is still empty. A repo with no `HEAD` → `no_head` |
-| AC-24 | integration | A likely secret file stops the run before anything leaves SUPER. Observable: exit code, and the hub's blob count and row count. Chain: `C-CLI` to `make_snapshot`. | Human-approved (handoff "no secrets") | Each untracked `.env.local`, `deploy.pem`, `aws_credentials.txt` → exit `2` with `snapshot_secret_risk:<path>`, zero new blobs, zero new rows. `.env.example` is allowed by `SECRET_PATH_ALLOW` |
+| AC-24 | integration | A likely secret file stops the run before anything leaves <hub host>. Observable: exit code, and the hub's blob count and row count. Chain: `C-CLI` to `make_snapshot`. | Human-approved (handoff "no secrets") | Each untracked `.env.local`, `deploy.pem`, `aws_credentials.txt` → exit `2` with `snapshot_secret_risk:<path>`, zero new blobs, zero new rows. `.env.example` is allowed by `SECRET_PATH_ALLOW` |
 | AC-25 | integration | End to end on a fixture repo with a real hub and member (outline P3). Observable: `wait`'s JSON and the log. Chain: `C-CLI`, `C-MEMBER`. A command prints a marker read from an untracked file: state `completed`, exit code `0`, the log contains the marker, and `tree` equals the snapshot's tree. | Human-approved (outline P3) | A command exiting `3` → state `failed`, reason `nonzero_exit`, result `exit_code` `3`, and `wait` exits `1`. Execution stops at the first failing argv: a sentinel written by the next argv is absent |
 | AC-26 | integration | A refused task runs nothing. Observable: state, reason and a sentinel file on the member. Chain: `C-MEMBER` to `execute_run`. | Local Canon (A-12) | An unknown command → `rejected`, `unknown_command`. A snapshot with no manifest → `no_manifest`. A wrong `refs.tree` → `tree_mismatch`. A corrupt bundle → `bundle_bad`. `project` differing from the slot's manifest → `project_mismatch`. A command whose tool is absent → `tool_missing:<n>`. A manifest naming a `FORBIDDEN_COMMANDS` tool, in a task the harness posts directly so `run`'s own check is skipped → `bad_manifest:forbidden_command:<n>`, with a `PATH` shim for that tool recording no call. `wait` exits `3` for each. No sentinel appears in any case |
 | AC-27 | integration | Blob integrity and access. Observable: HTTP code and files in `blobs/`. Chain: `C-HTTP` to `route_put_blob`, `route_get_blob`, `route_post_task`. | Local Canon (outline §2.5) | Content not matching the path hash → `422 blob_hash_mismatch`, no file. Over `MAX_BLOB_BYTES` → `413 too_large`, no file. A task naming an absent bundle → `422 missing_blob`, no row. Member B fetching a bundle tied only to A's task → `403 blob_not_yours`. Non-hex path → `404` |
-| AC-28 | integration | Slot properties. Observable: `git` output in the slot. Chain: `C-MEMBER` to `prepare_slot`. After a run: `git remote` is empty, `HEAD` is detached, `git branch --list` shows only the detached `HEAD` line and `refs/heads` is empty, a stale untracked file is removed, and an ignored dependency folder stays. | Human-approved (outline §2.5; `P:/av-kit/AGENTS.md:102`; D-4) | A test script run by an allowed command makes a commit in the slot. After the run, the status message's `body` keys are exactly the result keys and hold no bundle; SUPER's `HEAD` and refs are unchanged; and the next run's `HEAD^{tree}` equals its own `refs.tree`, with that commit absent from its history |
+| AC-28 | integration | Slot properties. Observable: `git` output in the slot. Chain: `C-MEMBER` to `prepare_slot`. After a run: `git remote` is empty, `HEAD` is detached, `git branch --list` shows only the detached `HEAD` line and `refs/heads` is empty, a stale untracked file is removed, and an ignored dependency folder stays. | Human-approved (outline §2.5; `P:/av-kit/AGENTS.md:102`; D-4) | A test script run by an allowed command makes a commit in the slot. After the run, the status message's `body` keys are exactly the result keys and hold no bundle; <hub host>'s `HEAD` and refs are unchanged; and the next run's `HEAD^{tree}` equals its own `refs.tree`, with that commit absent from its history |
 | AC-29 | integration | Timeout and heartbeats. Observable: state, reason, a sentinel, and `last_seen`. Chain: `C-MEMBER` to `execute_run`. | Local Canon (A-7) | A command that starts a child which writes a sentinel after 8 s, run with `--timeout 2`: state `failed`, reason `timeout`, sentinel absent after 10 s, so the child died too. During a run longer than `OFFLINE_AFTER_S` as set for the test, `status` still shows the member online |
 | AC-30 | integration | The environment reaches child processes unchanged. Observable: a value printed by a manifest command. Chain: `C-MEMBER` to `execute_run`. | Human-approved (handoff billing rule) | A sentinel variable set on the member, and `CLAUDECODE` set to a test value in that member's environment, both appear unchanged in the child's output |
-| AC-31 | integration | Live: av-kit on DUPER (outline P3 done). Observable: `wait`'s JSON receipts, checked by `check_live.py av-kit`. The manifest `P:/av-kit/.agent/fleet.json` is uncommitted, so a run that uses it proves that uncommitted files moved. It is ignored through av-kit's `.git/info/exclude` since another session added that line, and it travels under D-8. After `publish`, `duper-tools.ps1` runs `check --project av-kit` and installs what it reports missing, and `status` must then show every `requires` tool with a version. Then `setup`, `check-py`, `check-ui` and `check-mcp`, using the registered commands in `P:/av-kit/.agent/docs/commands.md`. Each returns state, `exit_code`, log and `tree`. A nonzero exit is reported, not fixed: this AC is about the fleet, not av-kit being green. | Human-approved (outline P3; A-8) | `check_live.py avkit-tools` fails if a `requires` tool has no version on `duper`. `check_live.py av-kit` fails if a result is `rejected`, or lacks `exit_code`, `log` or `tree`; if `tree` differs from the snapshot's; if `git -C P:/av-kit for-each-ref refs/fleet` is non-empty; or if av-kit's branch or worktree list differs from the before record taken in the same row |
+| AC-31 | integration | Live: av-kit on <member host> (outline P3 done). Observable: `wait`'s JSON receipts, checked by `check_live.py av-kit`. The manifest `P:/av-kit/.agent/fleet.json` is uncommitted, so a run that uses it proves that uncommitted files moved. It is ignored through av-kit's `.git/info/exclude` since another session added that line, and it travels under D-8. After `publish`, `<member host>-tools.ps1` runs `check --project av-kit` and installs what it reports missing, and `status` must then show every `requires` tool with a version. Then `setup`, `check-py`, `check-ui` and `check-mcp`, using the registered commands in `P:/av-kit/.agent/docs/commands.md`. Each returns state, `exit_code`, log and `tree`. A nonzero exit is reported, not fixed: this AC is about the fleet, not av-kit being green. | Human-approved (outline P3; A-8) | `check_live.py avkit-tools` fails if a `requires` tool has no version on `<member host>`. `check_live.py av-kit` fails if a result is `rejected`, or lacks `exit_code`, `log` or `tree`; if `tree` differs from the snapshot's; if `git -C P:/av-kit for-each-ref refs/fleet` is non-empty; or if av-kit's branch or worktree list differs from the before record taken in the same row |
 | AC-32 | integration | Package fit. `core/MANIFEST.md` lists the new files. `check_package_gates.py` finds no new `refcheck` or `sanitize --verify` failure against the row-0 baseline, and finds a `test_acNN_*` function for every AC except the live AC-20, AC-21 and AC-31, and this one. The full pytest gate passes. | Local Canon (`scripts/refcheck.py`, `scripts/sanitize.py`) | The checker run against a baseline with one line removed exits nonzero, so a new failure cannot slip through |
 
 #### Spec Sufficiency Table
@@ -507,7 +507,7 @@ Execution stops, and reports to Mat with evidence, on any of these:
 
 1. The row-0 baseline pytest gate is red.
 2. A human row is reached (rows 7, 8, 11 and 13). Mark it `[B]` with a human gate and tell Mat which script to ask for. A script that changes a machine runs only when Mat asks.
-3. A step on DUPER would touch the log collector, turn a firewall profile off or open a port.
+3. A step on <member host> would touch the log collector, turn a firewall profile off or open a port.
 4. `snapshot_secret_risk` fires on av-kit. Report the path. Do not widen `SECRET_PATH_ALLOW` to get past it without Mat's word.
 5. `refs/fleet`, a branch or a worktree in av-kit is left changed by this tool.
 6. Anything would need a commit that lands work or moves a branch, a push, a secret in a message, a change to `CLAUDE_CODE_ENTRYPOINT` or `CLAUDECODE`, or `cswap`. The snapshot's own `git commit-tree` object is not such a commit: it moves no branch and is dropped when its temporary ref is deleted.
@@ -528,7 +528,7 @@ Execution stops, and reports to Mat with evidence, on any of these:
 | Dashboard, long polling, server-sent events | out-of-scope | — | Human-approved: outline §3, "What each MVP phase should not grow into" |
 | Blob retention and cleanup | out-of-scope | — | Human-approved: Mat's 2026-11-03 simplicity rule. At 11 MiB per run the store grows slowly and can be deleted by hand; revisit when disk use shows a need |
 | Fixing the existing `refcheck` and `sanitize` failures | out-of-scope | — | Human-approved: outline §3 scope does not include them. Mat's 2026-11-03 message makes the proposals with stale references "reference material". They are outside P1 to P3, and row 0's baseline records them. The final report lists them for Mat |
-| Result bundles from `run` tasks and landing on SUPER | out-of-scope | — | Human-approved: outline P3 returns exit code, log and tree; outline P4 adds result bundles and landing |
+| Result bundles from `run` tasks and landing on <hub host> | out-of-scope | — | Human-approved: outline P3 returns exit code, log and tree; outline P4 adds result bundles and landing |
 | Exposing the hub beyond the LAN | out-of-scope | — | Human-approved: D-1 scopes the rule to the LAN |
 
 ---
@@ -575,7 +575,7 @@ python docs/execution/plans/2026-11-03-fleet-mvp/check_package_gates.py *> $env:
 ### 4. Live checks, after the human rows
 
 ```powershell
-python docs/execution/plans/2026-11-03-fleet-mvp/check_live.py duper *> $env:RECEIPTS_DIR/fleet-live-duper.txt; $code=$LASTEXITCODE; Get-Content $env:RECEIPTS_DIR/fleet-live-duper.txt -Tail 30; exit $code
+python docs/execution/plans/2026-11-03-fleet-mvp/check_live.py <member host> *> $env:RECEIPTS_DIR/fleet-live-<member host>.txt; $code=$LASTEXITCODE; Get-Content $env:RECEIPTS_DIR/fleet-live-<member host>.txt -Tail 30; exit $code
 ```
 
 ```powershell
@@ -603,10 +603,10 @@ are. A-9 onward were decided while planning.
 decision_log:
   - id: D-1
     stage: planning
-    question: "How do members and SUPER talk?"
+    question: "How do members and <hub host> talk?"
     resolution: human
     class: one-way-door
-    chosen: "Minimal stdlib hub on SUPER that members poll; TLS with a pinned self-signed certificate; one key per member; one named, reversible, LAN-scoped inbound rule on SUPER"
+    chosen: "Minimal stdlib hub on <hub host> that members poll; TLS with a pinned self-signed certificate; one key per member; one named, reversible, LAN-scoped inbound rule on <hub host>"
     source_tag: Human-approved
     precedents: ["docs/proposals/2026-11-03-fleet-mvp-outline.md §5 D-1"]
     research: { engine: tavily, sources: ["outline §5 D-1 and §6"] }
@@ -647,19 +647,19 @@ decision_log:
     source_tag: Human-approved
     precedents: ["handoff §3 — a message never authorizes a commit, push, merge, tag, release", "docs/proposals/2026-11-03-fleet-mvp-outline.md §2.6", "plan review round 1, F-001"]
     research: { engine: none, sources: [] }
-    reasoning: "The rule's aim is that work reaches Mat's repos only from SUPER, on Mat's word. Under option A the fleet is never that route, and the member holds no GitHub credential. Running a project's tests means running its code, so no check on the message can bind what that code does. The review asked for a ruling because this is narrower than the rule's wording"
+    reasoning: "The rule's aim is that work reaches Mat's repos only from <hub host>, on Mat's word. Under option A the fleet is never that route, and the member holds no GitHub credential. Running a project's tests means running its code, so no check on the message can bind what that code does. The review asked for a ruling because this is narrower than the rule's wording"
     human_message_reference: "USER_EXPLICIT 2026-11-03 'both decision recommendations are accepted'"
   - id: D-5
     stage: execution
-    question: "How do the human rows run, and how is DUPER reached?"
+    question: "How do the human rows run, and how is <member host> reached?"
     resolution: human
     class: two-way
-    chosen: "Each human step is a prepared script that the agent runs when Mat asks, and super-firewall.ps1, the one that needs elevation, runs in its own elevated window through a UAC prompt. DUPER is reached over WinRM with the local WinRM helper. No agent CLI on DUPER until P4. pair runs over WinRM. approve stays with Mat in a real terminal. The member runs as one named, triggerless scheduled task"
+    chosen: "Each human step is a prepared script that the agent runs when Mat asks, and <hub host>-firewall.ps1, the one that needs elevation, runs in its own elevated window through a UAC prompt. <member host> is reached over WinRM with the local WinRM helper. No agent CLI on <member host> until P4. pair runs over WinRM. approve stays with Mat in a real terminal. The member runs as one named, triggerless scheduled task"
     source_tag: Human-approved
-    precedents: ["the local network notes (lines 145-149) — named, reversible changes on DUPER", "plan A-7 — no autostart", "handoff §3 — keys created by a human at the console: pair over WinRM departs from this, flagged in User Review Required"]
-    research: { engine: none, sources: ["C:/Temp/agentic-framework/receipts/duper-probe.txt — read-only WinRM probe of DUPER"] }
+    precedents: ["the local network notes (lines 145-149) — named, reversible changes on <member host>", "plan A-7 — no autostart", "handoff §3 — keys created by a human at the console: pair over WinRM departs from this, flagged in User Review Required"]
+    research: { engine: none, sources: ["C:/Temp/agentic-framework/receipts/<member host>-probe.txt — read-only WinRM probe of <member host>"] }
     reasoning: "Mat replaced the console steps with scripts the agent runs on request. A process started in a WinRM shell dies with it, so the member needs one named task. A task with no trigger keeps A-7. The WinRM user and the console user differ, so pair and member both run as the WinRM user. A window reload does not elevate Cursor, and a real elevated relaunch would end every other Cursor session, so Mat chose the UAC prompt"
-    human_message_reference: "USER_EXPLICIT 2026-11-03 'check [the local ops folder] on how to access DUPER with winrm / rather than commands prepare script to be run in elevated prompt. I will elevat the IDE and ask you to run them for me.'; USER_EXPLICIT 2026-11-04 'yes use the UAC prompt for super-firewall.ps1'"
+    human_message_reference: "USER_EXPLICIT 2026-11-03 'check [the local ops folder] on how to access <member host> with winrm / rather than commands prepare script to be run in elevated prompt. I will elevat the IDE and ask you to run them for me.'; USER_EXPLICIT 2026-11-04 'yes use the UAC prompt for <hub host>-firewall.ps1'"
   - id: D-6
     stage: execution
     question: "The row-0 baseline was red in two tests about the Linux install's copy of the lane tests, which this plan had not touched. Stop, or fix them first?"
@@ -692,11 +692,11 @@ decision_log:
     source_tag: Human-approved
     precedents: ["AC-23 — ignored files stay out of the snapshot; this is a narrow exception"]
     research: { engine: tavily, sources: ["https://github.com/superfly/flyctl/issues/2245 — quotes Docker's docs that an ignored Dockerfile is still sent because the daemon needs it; flyctl left it out and failed the same way"] }
-    reasoning: "The member cannot run without the manifest. Refusing at run would force the exclude line out, which risks the file entering the RC1 commit. Sending the manifest in the task needs more code and a DUPER update. The change was made before the ruling and reported to Mat"
+    reasoning: "The member cannot run without the manifest. Refusing at run would force the exclude line out, which risks the file entering the RC1 commit. Sending the manifest in the task needs more code and a <member host> update. The change was made before the ruling and reported to Mat"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'all accepted'"
   - id: D-9
     stage: execution
-    question: "D-8 changed fleet.py after row 11. When do DUPER and the hub get the updated file?"
+    question: "D-8 changed fleet.py after row 11. When do <member host> and the hub get the updated file?"
     resolution: human
     class: two-way
     mandatory: [M-10]
@@ -704,7 +704,7 @@ decision_log:
     source_tag: Human-approved
     precedents: ["task.md row 11", "plan stop condition 2"]
     research: { engine: none, sources: [] }
-    reasoning: "D-8 runs only on SUPER, so DUPER behaves the same until then, and the review may change the file again"
+    reasoning: "D-8 runs only on <hub host>, so <member host> behaves the same until then, and the review may change the file again"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'all accepted'"
   - id: A-1-to-A-8
     stage: planning
@@ -738,10 +738,10 @@ decision_log:
     reasoning: "Two connection paths are more code than one, and the plain path would get no use after P1"
   - id: A-11
     stage: planning
-    question: "Where does state live on SUPER: P:/.agent as A-5 said, or ~/.agent/fleet?"
+    question: "Where does state live on <hub host>: P:/.agent as A-5 said, or ~/.agent/fleet?"
     resolution: autonomous
     class: two-way
-    chosen: "FLEET_HOME, default ~/.agent/fleet, on every machine. SUPER runs fleet.py from this repo"
+    chosen: "FLEET_HOME, default ~/.agent/fleet, on every machine. <hub host> runs fleet.py from this repo"
     source_tag: Local Canon
     precedents: ["outline §2.8 — no P: anywhere; member home is ~/.agent"]
     research: { engine: none, sources: [] }
@@ -761,7 +761,7 @@ decision_log:
     question: "How does the key get to the member and the hub?"
     resolution: autonomous
     class: two-way
-    chosen: "The member generates it (at the console, or over WinRM on DUPER under D-5) and sends it over the pinned connection. A human approves on SUPER with a short code derived from it"
+    chosen: "The member generates it (at the console, or over WinRM on <member host> under D-5) and sends it over the pinned connection. A human approves on <hub host> with a short code derived from it"
     source_tag: Research-backed
     precedents: ["outline §3 P2 — a human types the key; the agent never sees it"]
     research: { engine: none, sources: ["agichan README — one-time join code", "outline §6 Hosted AO — pairing by pinned fingerprint"] }
@@ -771,7 +771,7 @@ decision_log:
     question: "Pairing in P2 as the outline listed, or in WP-1?"
     resolution: autonomous
     class: two-way
-    chosen: "WP-1, so P1's localhost skeleton uses the same pairing, key and TLS path as DUPER"
+    chosen: "WP-1, so P1's localhost skeleton uses the same pairing, key and TLS path as <member host>"
     source_tag: Local Canon
     precedents: ["outline §2 — each phase adds and none replaces"]
     research: { engine: none, sources: [] }
@@ -825,7 +825,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["outline D-1 precedent — port 8766 + configurable"]
     research: { engine: none, sources: [] }
-    reasoning: "Free on SUPER, and in the same range as the existing precedent"
+    reasoning: "Free on <hub host>, and in the same range as the existing precedent"
   - id: A-20
     stage: planning
     question: "How can the plan gate on refcheck and sanitize, when both are already red?"
@@ -865,8 +865,8 @@ at the plan gate.
 | Targeted | Verification Plan §2 | repo root | The three fleet test files | Yes | Pass |
 | Package | Verification Plan §3 | repo root | `refcheck`, `sanitize --verify` against the baseline; AC-to-test coverage | Yes | No new failure |
 | Fresh full | Verification Plan §5 | repo root | `core/tools/tests`, `scripts/tests` | Yes | Pass |
-| Runtime | Verification Plan §4 | repo root, on SUPER, with hub and member running | Live DUPER and av-kit | Yes, for AC-20, AC-21, AC-31 | Pass, from the receipts named in each row |
+| Runtime | Verification Plan §4 | repo root, on <hub host>, with hub and member running | Live <member host> and av-kit | Yes, for AC-20, AC-21, AC-31 | Pass, from the receipts named in each row |
 
-Native shell: PowerShell, with Python 3.14 on SUPER. Input identity for evidence is the SHA-256 of
+Native shell: PowerShell, with Python 3.14 on <hub host>. Input identity for evidence is the SHA-256 of
 `git rev-parse HEAD`, `git status --porcelain` and `sys.version`, computed independently at H1-6b.
 Intermediate evidence is not reused: the final review follows one fresh full gate.

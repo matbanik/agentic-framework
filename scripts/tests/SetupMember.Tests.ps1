@@ -1,18 +1,30 @@
 # AC-2 to AC-4 of the fleet agents plan: what setup-member.ps1 publishes, that it is idempotent, and that
 # a real write chooses the Codex sandbox.
+BeforeDiscovery {
+    # The fleet's machine names: this machine and the members its hub knows. They are read here, never written
+    # in this file, so the public repository carries no machine name.
+    $hubDb = Join-Path $HOME '.agent/fleet/hub/hub.db'
+    $members = @()
+    if (Test-Path -LiteralPath $hubDb) {
+        $members = @(& python -c "import pathlib, sqlite3, sys; c = sqlite3.connect(pathlib.Path(sys.argv[1]).as_uri() + '?mode=ro', uri=True); print('\n'.join(r[0] for r in c.execute('SELECT name FROM members')))" $hubDb 2>$null)
+    }
+    $hostNames = @(@($env:COMPUTERNAME) + $members | Where-Object { $_ } | Sort-Object -Unique)
+    $hostCases = @($hostNames | ForEach-Object { @{ label = 'a fleet machine''s name'; line = '$h = "' + $_ + '"'; rule = 'host name'; names = $hostNames } })
+}
+
 BeforeAll {
     $script:SetupPath = Join-Path $PSScriptRoot '../../.agent/fleet/setup-member.ps1'
     . $script:SetupPath -LibraryOnly
 
     function script:Get-SetupProblems {
-        param([string]$Text)
+        param([string]$Text, [string[]]$HostNames)
         $rules = [ordered]@{
             'ipv4 literal' = '(?<![\d.])\d{1,3}(\.\d{1,3}){3}(?![\d.])'
-            'host name' = '(?-i)\b(DUPER|SUPER)\b'
             'drive path' = '(?<![A-Za-z0-9_])[A-Za-z]:[\\/]'
             'token command' = 'setup-token'
             'login file' = 'auth\.json|\.credentials\.json'
         }
+        if ($HostNames) { $rules['host name'] = '(?i)\b(' + (($HostNames | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b' }
         foreach ($name in $rules.Keys) {
             if ($Text -match $rules[$name]) { $name }
         }
@@ -21,21 +33,20 @@ BeforeAll {
 }
 
 Describe 'setup-member.ps1 publishes no host or credential' {
-    It 'AC-2: the clean file has no problems' {
-        @(Get-SetupProblems (Get-Content $script:SetupPath -Raw)) | Should -BeNullOrEmpty
+    It 'AC-2: the clean file has no problems' -ForEach @(@{ names = $hostNames }) {
+        @(Get-SetupProblems (Get-Content $script:SetupPath -Raw) $names) | Should -BeNullOrEmpty
     }
 
     It 'AC-2: a copy with <label> fails' -ForEach @(
-        @{ label = 'an IPv4 literal'; line = '$h = "10.1.2.3"'; rule = 'ipv4 literal' }
-        @{ label = 'one member''s name'; line = '$h = "DUPER"'; rule = 'host name' }
-        @{ label = 'the hub machine''s name'; line = '$h = "SUPER"'; rule = 'host name' }
-        @{ label = 'a drive-letter path'; line = '$h = "P:\x"'; rule = 'drive path' }
-        @{ label = 'the token command'; line = 'claude setup-token'; rule = 'token command' }
-        @{ label = 'a read of the Codex login'; line = 'Get-Content "$HOME\.codex\auth.json"'; rule = 'login file' }
-        @{ label = 'a read of the Claude login'; line = 'Get-Content "$HOME\.claude\.credentials.json"'; rule = 'login file' }
+        @{ label = 'an IPv4 literal'; line = '$h = "192.0.2.10"'; rule = 'ipv4 literal'; names = $hostNames }
+        $hostCases
+        @{ label = 'a drive-letter path'; line = '$h = "P:\x"'; rule = 'drive path'; names = $hostNames }
+        @{ label = 'the token command'; line = 'claude setup-token'; rule = 'token command'; names = $hostNames }
+        @{ label = 'a read of the Codex login'; line = 'Get-Content "$HOME\.codex\auth.json"'; rule = 'login file'; names = $hostNames }
+        @{ label = 'a read of the Claude login'; line = 'Get-Content "$HOME\.claude\.credentials.json"'; rule = 'login file'; names = $hostNames }
     ) {
         $text = (Get-Content $script:SetupPath -Raw) + "`n" + $line + "`n"
-        @(Get-SetupProblems $text) | Should -Contain $rule
+        @(Get-SetupProblems $text $names) | Should -Contain $rule
     }
 }
 

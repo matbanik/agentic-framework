@@ -28,8 +28,8 @@ fleet agents outline §3, phases A1 to A6, which the plan cites.
 **Predecessor**: the plan review, approved:
 `.agent/context/handoffs/2026-11-04-fleet-agents-plan-critical-review.md`.
 
-**What changed:** SUPER can start a Claude or Codex job on a fleet member under Mat's subscription,
-talk to it while it runs, resume it with Mat's words, and land its result as a ref on SUPER.
+**What changed:** <hub host> can start a Claude or Codex job on a fleet member under Mat's subscription,
+talk to it while it runs, resume it with Mat's words, and land its result as a ref on <hub host>.
 
 - `.agent/fleet/setup-member.ps1` sets a member up on the member itself and writes
   `setup-report.json`. It picks Codex's sandbox by a real write test, tests a full-access Codex
@@ -47,9 +47,9 @@ talk to it while it runs, resume it with Mat's words, and land its result as a r
   folder and the system temp folder. A Claude job's Codex call stays sandboxed.
 - `bootstrap.md` is relabelled for a setup agent on the orchestrator, with D-6's three human stops.
   The credits and cli-dispatch skills document the member route.
-- Live on DUPER: setup twice, the credits gate and a credits run, a Claude job and a Codex job each
-  stopped for a decision and resumed with Mat's words, and both results landed on SUPER. The first
-  Codex job ran before P-4, in the workspace-write sandbox. After P-4, setup ran twice again on DUPER,
+- Live on <member host>: setup twice, the credits gate and a credits run, a Claude job and a Codex job each
+  stopped for a decision and resumed with Mat's words, and both results landed on <hub host>. The first
+  Codex job ran before P-4, in the workspace-write sandbox. After P-4, setup ran twice again on <member host>,
   and row 15's Codex job ran again under `FullAccess` with the same stop and resume (point 18).
   Its result was not landed.
 
@@ -65,7 +65,7 @@ talk to it while it runs, resume it with Mat's words, and land its result as a r
 | AC-2 | unit | `setup-member.ps1` publishes no host or credential (D-6). | Human-approved (D-6, plan D-13) | `scripts/tests/SetupMember.Tests.ps1`: 'AC-2: the clean file has no problems', 'AC-2: a copy with <label> fails' | ✅ |
 | AC-3 | integration | Setup is idempotent. | Human-approved (outline §3 A1) | `scripts/tests/SetupMember.Tests.ps1`: 'AC-3: a second run with every tool present installs nothing and changes no byte', 'AC-3: with codex absent the installer runs exactly once, for codex' and 8 more | ✅ |
 | AC-4 | integration | The sandbox is chosen by a real write, never by exit code. | Human-approved (D-4); Research-backed (openai/codex 34961) | `scripts/tests/SetupMember.Tests.ps1`: 'AC-4: exit 0 with no file is a fail', 'AC-4: the wrong contents are a fail' and 6 more | ✅ |
-| AC-5 | integration | **Live, human row 3.** On DUPER, `setup-member.ps1` runs twice. | Human-approved (outline §3 A1 done-when, P-1) | `check_live.py setup` (live: SUPER and DUPER), with `--selftest` | ✅ |
+| AC-5 | integration | **Live, human row 3.** On <member host>, `setup-member.ps1` runs twice. | Human-approved (outline §3 A1 done-when, P-1) | `check_live.py setup` (live: <hub host> and <member host>), with `--selftest` | ✅ |
 | AC-6 | integration | Manifest rules. | Human-approved (D-2) | `core/tools/tests/CreditsFleetMember.Tests.ps1`: 'AC-6: a manifest with no auth behaves as the key route', 'AC-6: auth subscription with a gate project registers' and 6 more | ✅ |
 | AC-7 | integration | Logon by route. | Human-approved (D-2) | `core/tools/tests/CreditsFleetMember.Tests.ps1`: 'AC-7: the subscription route registers an S4U run task with no trigger', 'AC-7: the subscription route registers an S4U monitor with its five-minute repeat and no A' and 3 more | ✅ |
 | AC-8 | integration | No key on the member route, and no change on the key route. | Human-approved (D-2) | `core/tools/tests/CreditsFleetMember.Tests.ps1`: 'AC-8: auth subscription with no key file registers', 'AC-8: auth key with no key file still gives key_missing' and 3 more | ✅ |
@@ -76,7 +76,7 @@ talk to it while it runs, resume it with Mat's words, and land its result as a r
 | AC-13 | integration | Resume on this route. | Human-approved (D-1, D-3) | `core/tools/tests/CreditsFleetMember.Tests.ps1`: 'AC-13: the resumed launch continues the same session, with no key file', 'AC-13: the resumed launch gets the token and the scrub, and neither Anthropic key' and 1 more | ✅ |
 | AC-14 | integration | `member_kit.py install`. | Human-approved (D-3, outline §3 A2) | `scripts/tests/test_fleet_agent.py`: `test_ac14_install_fills_the_kit_for_this_member`, `test_ac14_the_hook_merge_keeps_other_keys_and_adds_only_the_inbox_hook` and 16 more | ✅ |
 | AC-15 | integration | `member_kit.py gate`. | Human-approved (D-1, D-2) | `scripts/tests/test_fleet_agent.py`: `test_ac15_a_clean_gate_runs_in_the_scheduled_environment_and_keeps_the_receipt`, `test_ac15_a_missing_or_empty_token_file_refuses` and 5 more | ✅ |
-| AC-16 | integration | **Live, human row 8.** On DUPER: install, gate, then a credits run started locally under S4U with the subscription token, finishing with `Status: DONE`, a hook firing under the scrub (an `info` message is acknowledged), and `--max-budget-usd` in the … | Human-approved (D-2, outline §3 A2 done-when) | `check_live.py credits` (live: SUPER and DUPER), with `--selftest` | ✅ |
+| AC-16 | integration | **Live, human row 8.** On <member host>: install, gate, then a credits run started locally under S4U with the subscription token, finishing with `Status: DONE`, a hook firing under the scrub (an `info` message is acknowledged), and `--max-budget-usd` in the … | Human-approved (D-2, outline §3 A2 done-when) | `check_live.py credits` (live: <hub host> and <member host>), with `--selftest` | ✅ |
 | AC-17 | integration | Who may send `agent`. | Human-approved (D-3) | `scripts/tests/test_fleet_agent.py`: `test_ac17_executors_match_the_send_policy`, `test_ac17_kind_not_enabled_is_gone` and 4 more | ✅ |
 | AC-18 | integration | The quote rule (D-3). | Human-approved (D-3) | `scripts/tests/test_fleet_agent.py`: `test_ac18_start_and_resume_need_mats_words`, `test_ac18_a_refused_start_never_reaches_the_member` and 3 more | ✅ |
 | AC-19 | integration | Closed bodies. | Human-approved (D-4, D-5) | `scripts/tests/test_fleet_agent.py`: `test_ac19_an_unknown_action_is_refused`, `test_ac19_no_action_is_refused` and 14 more | ✅ |
@@ -88,20 +88,20 @@ talk to it while it runs, resume it with Mat's words, and land its result as a r
 | AC-25 | integration | Resume. | Human-approved (D-3) | `scripts/tests/test_fleet_agent.py`: `test_ac25_resume_writes_the_next_brief_and_rearms_the_gate`, `test_ac25_resume_checks_the_retained_receipt_of_the_run` and 7 more | ✅ |
 | AC-26 | integration | A secret-shaped status doesn't end the member. | Local Canon | `scripts/tests/test_fleet_agent.py`: `test_ac26_output_holding_a_secret_is_withheld` | ✅ |
 | AC-27 | integration | `fleet watch`. | Human-approved (D-3) | `scripts/tests/test_fleet_agent.py`: `test_ac27_a_done_run_exits_0`, `test_ac27_a_stopped_run_exits_7_with_its_class` and 6 more | ✅ |
-| AC-28 | integration | **Live, human row 12.** From SUPER on DUPER, with Mat's words: `agent start` on a throwaway repo; `agent message --kind query` is answered in `outbox` during the run; the run stops with `stop_class: decision` and `fleet watch` exits `7`; `agent … | Human-approved (outline §3 A3 done-when) | `check_live.py agent` (live: SUPER and DUPER), with `--selftest` | ✅ |
+| AC-28 | integration | **Live, human row 12.** From <hub host> on <member host>, with Mat's words: `agent start` on a throwaway repo; `agent message --kind query` is answered in `outbox` during the run; the run stops with `stop_class: decision` and `fleet watch` exits `7`; `agent … | Human-approved (outline §3 A3 done-when) | `check_live.py agent` (live: <hub host> and <member host>), with `--selftest` | ✅ |
 | AC-29 | integration | Codex job start and resume. | Human-approved (D-4, P-4, outline §3 A4) | `scripts/tests/test_fleet_agent.py`: `test_ac29_a_start_goes_to_the_task_script_with_the_slot_and_the_first_brief`, `test_ac29_the_manifest_names_the_cli_and_keeps_the_options` and 23 more + `scripts/tests/SetupMember.Tests.ps1`: 'AC-29: it publishes no host or credential', 'AC-29: <label> is a binding error' and 18 more | ✅ |
 | AC-30 | unit | `normalize_codex` is total. | Human-approved (D-4) | `scripts/tests/test_fleet_agent.py`: `test_ac30_a_well_formed_state`, `test_ac30_anything_else_is_stopped_with_no_status_line` | ✅ |
 | AC-31 | integration | The lock and the override refusal. | Human-approved (D-5); Local Canon (A-6) | `core/tools/tests/CodexDispatchFleetLock.Tests.ps1`: 'AC-31: a wrapper exits 11 with codex_job_busy, and the stub is not called', 'AC-31: a second wrapper is busy while the first runs its job, and the first still finishes' and 8 more | ✅ |
 | AC-32 | integration | `allow_codex`. | Human-approved (D-5) | `scripts/tests/test_fleet_agent.py`: `test_ac32_without_the_flag_no_rule_mentions_codex`, `test_ac32_with_the_flag_exactly_the_two_rules` and 3 more | ✅ |
-| AC-33 | integration | **Live, human row 15.** On DUPER, with Mat's words: the AC-28 job finishes on Codex under `workspace-write` (under `FullAccess` after P-4), judged by the file written and the status line; a stopped Codex run resumes between turns. A remote Claude … | Human-approved (outline §3 A4 done-when) | `check_live.py codex` (live: SUPER and DUPER), with `--selftest` | ✅ |
+| AC-33 | integration | **Live, human row 15.** On <member host>, with Mat's words: the AC-28 job finishes on Codex under `workspace-write` (under `FullAccess` after P-4), judged by the file written and the status line; a stopped Codex run resumes between turns. A remote Claude … | Human-approved (outline §3 A4 done-when) | `check_live.py codex` (live: <hub host> and <member host>), with `--selftest` | ✅ |
 | AC-34 | integration | `collect`. | Human-approved (outline §3 A5, global commit identity rule) | `scripts/tests/test_fleet_agent.py`: `test_ac34_collect_bundles_the_slot_under_the_base_identity`, `test_ac34_a_job_commit_under_the_base_identity_is_collected` and 7 more | ✅ |
 | AC-35 | integration | `result`. | Human-approved (outline §3 A5) | `scripts/tests/test_fleet_agent.py`: `test_ac35_a_result_lands_at_its_ref_with_no_branch`, `test_ac35_an_existing_result_is_kept` and 11 more | ✅ |
 | AC-36 | integration | `drop`. | Human-approved (outline §3 A5) | `scripts/tests/test_fleet_agent.py`: `test_ac36_a_run_not_collected_is_not_dropped`, `test_ac36_an_active_run_is_not_dropped` and 2 more | ✅ |
-| AC-37 | integration | **Live, human row 17.** On Mat's word, one Claude and one Codex result land at `refs/fleet/result/<run>` on SUPER, with their diff shown to Mat and no branch created, and each slot is then dropped. | Human-approved (outline §3 A5 done-when) | `check_live.py result` (live: SUPER and DUPER), with `--selftest` | ✅ |
+| AC-37 | integration | **Live, human row 17.** On Mat's word, one Claude and one Codex result land at `refs/fleet/result/<run>` on <hub host>, with their diff shown to Mat and no branch created, and each slot is then dropped. | Human-approved (outline §3 A5 done-when) | `check_live.py result` (live: <hub host> and <member host>), with `--selftest` | ✅ |
 | AC-38 | unit | `bootstrap.md` and the skills. | Human-approved (D-1, D-6) | `scripts/tests/test_fleet_agent.py`: `test_ac38_bootstrap_stops_are_the_three_d6_names`, `test_ac38_the_template_is_relabelled` and 5 more | ✅ |
 | AC-39 | integration | No new gate failure, and the coverage map holds. | Local Canon (plan MVP A-20) | `check_package_gates.py`, `check_package_gates.py --selftest`, full pytest gate | ✅ |
 | AC-40 | integration | The installed kit accepts the member layout. | Local Canon (A-13, P-1) | `scripts/tests/test_fleet_agent.py`: `test_ac40_claude_takes_a_brief_from_fleet_briefs_and_runs_in_the_slot`, `test_ac40_a_codex_start_then_a_resume_through_the_task_script` and 6 more | ✅ |
-| AC-41 | integration | The SUPER half of commit identity, built in row 7a. | Human-approved (P-2, global commit identity rule) | `scripts/tests/test_fleet_agent.py`: `test_ac41_the_commit_carries_the_checked_identity`, `test_ac41_the_environment_can_not_change_the_commit` and 7 more | ✅ |
+| AC-41 | integration | The <hub host> half of commit identity, built in row 7a. | Human-approved (P-2, global commit identity rule) | `scripts/tests/test_fleet_agent.py`: `test_ac41_the_commit_carries_the_checked_identity`, `test_ac41_the_environment_can_not_change_the_commit` and 7 more | ✅ |
 
 <!-- CACHE BOUNDARY -->
 <!-- Content above this line is stable across revision passes (KV cache prefix). -->
@@ -588,8 +588,8 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "phase": "runtime",
   "result": "pass",
   "exit_code": 0,
-  "tested_state": "working tree at the row (HEAD c9b47ca); hub and DUPER on the fleet.py of that row",
-  "command": "the row's two setup runs on DUPER, then python docs/execution/plans/2026-11-04-fleet-agents/check_live.py setup; the reports were kept as fa-setup-report-1.row3.json and -2.row3.json",
+  "tested_state": "working tree at the row (HEAD c9b47ca); hub and <member host> on the fleet.py of that row",
+  "command": "the row's two setup runs on <member host>, then python docs/execution/plans/2026-11-04-fleet-agents/check_live.py setup; the reports were kept as fa-setup-report-1.row3.json and -2.row3.json",
   "output": "the second report's changed list is empty; write tests claude pass, codex pass; reason null. check_live setup printed 0 problem(s); that receipt was replaced by A-17's rerun",
   "receipt_sha256": "b788324245fc6577a4158fd23b5a3da96f04fa346124b7b739679072d5516f36"
 }
@@ -632,11 +632,11 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "schema_version": "evidence.v1",
   "check_id": "live-setup-after-reboot",
   "cwd": "P:/agentic-framework",
-  "scope": "AC-5, the same rerun after Mat rebooted DUPER",
+  "scope": "AC-5, the same rerun after Mat rebooted <member host>",
   "phase": "runtime",
   "result": "fail",
   "exit_code": 1,
-  "tested_state": "working tree after the F-001 fix (HEAD c9b47ca); DUPER rebooted",
+  "tested_state": "working tree after the F-001 fix (HEAD c9b47ca); <member host> rebooted",
   "command": "uv run --no-project --with pywinrm python docs/execution/plans/2026-11-04-fleet-agents/scripts/run_member_setup.py 1; ... run_member_setup.py 2; python docs/execution/plans/2026-11-04-fleet-agents/check_live.py setup > $RECEIPTS_DIR/fa-setup-rerun.log 2>&1 (the reports kept as fa-setup-report-1.prep4.json and -2.prep4.json)",
   "output": "both reports: changed [], write tests claude pass, codex fail, reason sandbox_no_write",
   "receipt_sha256": "c0f61966245dc2cb086ff0928ad3ea96027892a53e9fe2049a9bcba6e8c87f77"
@@ -648,12 +648,12 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "schema_version": "evidence.v1",
   "check_id": "p4-fullaccess-probe",
   "cwd": "P:/agentic-framework",
-  "scope": "P-4's test: one Codex write under danger-full-access in a one-shot S4U task on DUPER",
+  "scope": "P-4's test: one Codex write under danger-full-access in a one-shot S4U task on <member host>",
   "phase": "runtime",
   "result": "pass",
   "exit_code": 0,
-  "tested_state": "working tree after the F-001 fix (HEAD c9b47ca); DUPER rebooted",
-  "command": "a local probe script run on DUPER through the WinRM runner: it registers a one-shot S4U task that runs codex exec --skip-git-repo-check --sandbox danger-full-access with a write prompt, waits, reads the probe file and removes its folder > $RECEIPTS_DIR/fa-codex-fullaccess-probe.txt",
+  "tested_state": "working tree after the F-001 fix (HEAD c9b47ca); <member host> rebooted",
+  "command": "a local probe script run on <member host> through the WinRM runner: it registers a one-shot S4U task that runs codex exec --skip-git-repo-check --sandbox danger-full-access with a write prompt, waits, reads the probe file and removes its folder > $RECEIPTS_DIR/fa-codex-fullaccess-probe.txt",
   "output": "folder=codex-full-a2eeb893 done=True probe=True passed=True; probe bytes=44 expected=44. Codex wrote the file with pwsh, which succeeded in 132ms. The sandbox log lines in the receipt carry another probe's text, from sandboxed runs, not this write; folder removed",
   "receipt_sha256": "96a479b7fdda84ae5ae82d451db6bdb7b71a9778c98d6d7239971ad0be9a171d"
 }
@@ -668,7 +668,7 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "phase": "runtime",
   "result": "pass",
   "exit_code": 0,
-  "tested_state": "working tree after P-4 (HEAD c9b47ca); hub and DUPER on fleet.py 95743b24…; the hub's bootstrap.md ab001085…",
+  "tested_state": "working tree after P-4 (HEAD c9b47ca); hub and <member host> on fleet.py 95743b24…; the hub's bootstrap.md ab001085…",
   "command": "uv run --no-project --with pywinrm python docs/execution/plans/2026-11-04-fleet-agents/scripts/run_member_setup.py 1; ... run_member_setup.py 2; python docs/execution/plans/2026-11-04-fleet-agents/check_live.py setup > $RECEIPTS_DIR/fa-setup-rerun.log 2>&1",
   "output": "setup 1 exit 0; setup 2 exit 0 with changed []; sandbox unelevated, elevated tried; write tests claude pass, codex pass, codex_sandbox fail; reason null",
   "receipt_sha256": "939d9247288255d4e17d737a92782771f30bd3dcbc741dc7b6c147cbd9435362"
@@ -824,12 +824,12 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "schema_version": "evidence.v1",
   "check_id": "live-kit-gate",
   "cwd": "P:/agentic-framework",
-  "scope": "AC-16, the M-1 gate on DUPER through a fleet run task",
+  "scope": "AC-16, the M-1 gate on <member host> through a fleet run task",
   "phase": "runtime",
   "result": "pass",
   "exit_code": 0,
-  "tested_state": "working tree at the row (HEAD c9b47ca); hub and DUPER on the fleet.py of that row",
-  "command": "python .agent/fleet/fleet.py run duper --repo P:/agentic-framework kit-gate; python .agent/fleet/fleet.py wait <task> --log $RECEIPTS_DIR/fa-kit-gate.log",
+  "tested_state": "working tree at the row (HEAD c9b47ca); hub and <member host> on the fleet.py of that row",
+  "command": "python .agent/fleet/fleet.py run <member host> --repo P:/agentic-framework kit-gate; python .agent/fleet/fleet.py wait <task> --log $RECEIPTS_DIR/fa-kit-gate.log",
   "output": "GATE live PASS: 5/5 cases; qualifying=true",
   "receipt_sha256": "f493c3894dcb0dccdfc2aa94d29b73d8e481d12af126285023c592f21e863322"
 }
@@ -844,7 +844,7 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "phase": "runtime",
   "result": "pass",
   "exit_code": 0,
-  "tested_state": "working tree at the row (HEAD c9b47ca); hub and DUPER on the fleet.py of that row",
+  "tested_state": "working tree at the row (HEAD c9b47ca); hub and <member host> on the fleet.py of that row",
   "command": "python docs/execution/plans/2026-11-04-fleet-agents/check_live.py credits *> $env:RECEIPTS_DIR/fa-live-credits.txt",
   "output": "run smoke-4b3ef8ff2b under S4U (task and monitor), the start quote is Mat's words, final status DONE; the info message was delivered and confirmed; --max-budget-usd 20 in argv; gate qualifying; known list-price spend 4.29 USD; stream probe: apiKeySource none, seven_day 0.27, isUsingOverage false; P-3 ruling recorded; check printed 0 problem(s)",
   "receipt_sha256": "528b133b0c8b1fa932643d534430b650d532bb32656b351b9c74c448bd7bd88c"
@@ -860,7 +860,7 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "phase": "runtime",
   "result": "pass",
   "exit_code": 0,
-  "tested_state": "working tree at the row (HEAD c9b47ca); hub and DUPER on the fleet.py of that row",
+  "tested_state": "working tree at the row (HEAD c9b47ca); hub and <member host> on the fleet.py of that row",
   "command": "python docs/execution/plans/2026-11-04-fleet-agents/check_live.py agent *> $env:RECEIPTS_DIR/fa-live-agent.txt",
   "output": "a start with no quote was refused quote_required; fa-row12b started on Mat's words; a query was answered while the run was running; the run stopped STOPPED:decision (watch exit 7) asking north or south; resumed in the same session with Mat's words 'hold south'; final DONE, watch exit 0, answer.txt holds south; check printed 0 problem(s)",
   "receipt_sha256": "528b133b0c8b1fa932643d534430b650d532bb32656b351b9c74c448bd7bd88c"
@@ -876,7 +876,7 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "phase": "runtime",
   "result": "pass",
   "exit_code": 0,
-  "tested_state": "working tree of the H1-2 run (HEAD c9b47ca); kit installed and gated on DUPER from it",
+  "tested_state": "working tree of the H1-2 run (HEAD c9b47ca); kit installed and gated on <member host> from it",
   "command": "python docs/execution/plans/2026-11-04-fleet-agents/scripts/live_codex.py kit|start|watch|resume west|final; python docs/execution/plans/2026-11-04-fleet-agents/check_live.py codex > $RECEIPTS_DIR/fa-live-codex.txt 2>&1",
   "output": "Codex job fa-row15p4 started on Mat's words 'Run row 15 again (Recommended)' through fleet-tasks.ps1; it wrote draft.txt and stopped STOPPED:decision asking east or west (watch exit 7); resumed with Mat's words 'west' in the same session 01a1aea5-d9a0-7291-b9e2-97846d881464; answer.txt holds west, status DONE; both turns' wrapper receipt.txt read Mode: FullAccess, Sandbox: danger-full-access, Exit Code: 0; the remote_claude record is fa-row15d's, unchanged; check printed 0 problem(s)",
   "receipt_sha256": "528b133b0c8b1fa932643d534430b650d532bb32656b351b9c74c448bd7bd88c"
@@ -892,7 +892,7 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "phase": "runtime",
   "result": "pass",
   "exit_code": 0,
-  "tested_state": "working tree at the row (HEAD c9b47ca); hub and DUPER on the fleet.py of that row",
+  "tested_state": "working tree at the row (HEAD c9b47ca); hub and <member host> on the fleet.py of that row",
   "command": "python docs/execution/plans/2026-11-04-fleet-agents/check_live.py codex > $RECEIPTS_DIR/fa-live-codex.txt 2>&1 (run before P-4; the receipt and its JSON kept as fa-live-codex.prep4.txt and .prep4.json)",
   "output": "Codex job fa-row15 under workspace-write stopped STOPPED:decision asking east or west; resumed between turns in the same session with Mat's words 'west'; draft.txt and answer.txt written, status DONE; a Claude job (fa-row15d) reached Codex only through the wrapper with -NonReviewDispatch: a FullAccess call was refused, the next ran and exited 0, and the answer came back as a file; check printed 0 problem(s)",
   "receipt_sha256": "528b133b0c8b1fa932643d534430b650d532bb32656b351b9c74c448bd7bd88c"
@@ -908,9 +908,9 @@ H1-2 ran the plan's PowerShell commands as written, from one script.
   "phase": "runtime",
   "result": "pass",
   "exit_code": 0,
-  "tested_state": "working tree at the row (HEAD c9b47ca); hub and DUPER on the fleet.py of that row",
+  "tested_state": "working tree at the row (HEAD c9b47ca); hub and <member host> on the fleet.py of that row",
   "command": "python docs/execution/plans/2026-11-04-fleet-agents/check_live.py result *> $env:RECEIPTS_DIR/fa-live-result.txt",
-  "output": "on Mat's word, fa-row12b (claude) and fa-row15 (codex) landed at refs/fleet/result/<run> on SUPER, each tree equal to the expected tree, author and committer the noreply identity, the diff shown; the branch lists equal before and after; both slots dropped; check printed 0 problem(s)",
+  "output": "on Mat's word, fa-row12b (claude) and fa-row15 (codex) landed at refs/fleet/result/<run> on <hub host>, each tree equal to the expected tree, author and committer the noreply identity, the diff shown; the branch lists equal before and after; both slots dropped; check printed 0 problem(s)",
   "receipt_sha256": "528b133b0c8b1fa932643d534430b650d532bb32656b351b9c74c448bd7bd88c"
 }
 ```
@@ -1258,7 +1258,7 @@ _Left blank for reviewer agent._
 ### Points raised for the reviewer
 
 1. **D-1 departs from "logins are created by a human at each member's console".** Mat's Claude token
-   is issued on SUPER on browser approval and stored on DUPER over WinRM in a user-only file. It
+   is issued on <hub host> on browser approval and stored on <member host> over WinRM in a user-only file. It
    never passes through the hub or a message. Mat ruled this for their own account on their own
    machines.
 2. **P-3 replaced row 8's meter readings** with Mat's ruling and a one-turn stream test of the token
@@ -1266,13 +1266,13 @@ _Left blank for reviewer agent._
    The Console wasn't read again after the runs, so a later Console charge still fires stop
    condition 3.
 3. **Row 3 was repeated after row 19 (A-17).** A-16 took the model pin out of the setup probe, which
-   AC-5 proves, so setup ran twice again on DUPER and `check_live.py setup` passed again. The first
+   AC-5 proves, so setup ran twice again on <member host> and `check_live.py setup` passed again. The first
    reports are kept as `fa-setup-report-1.row3.json` and `-2.row3.json`.
 4. **The member route keeps only the inbox hook.** On a member, `credits_inbox.py` is the only
    user-level hook (PostToolUse and Stop). `stop_gate` and `commit_gate` stay out: a slot has no real
    plan, and a member has no route to commit. A project that brings its own hooks isn't supported on
    a member yet.
-5. **D-5's route on DUPER.** A Claude job reaches Codex only through the wrapper with
+5. **D-5's route on <member host>.** A Claude job reaches Codex only through the wrapper with
    `-NonReviewDispatch`, and the answer comes back as a file in the slot. In `fa-row15d` the first
    call asked for `-Mode FullAccess` and was refused (`This command requires approval`); the next
    call ran and exited 0. `permission_denials` in Claude's output covers only the last segment of a
@@ -1314,22 +1314,22 @@ _Left blank for reviewer agent._
     on a table-form file. Each checks that the file still parses and that the second run changes
     nothing. Red: `fa-f001-red.txt` (4 failed, 59 passed, with the old writer put back). Green: the
     setup suite, now 65 tests (`fa-p4-pester-setup.txt`).
-13. **F-002, F-003 and F-004, fixed.** The live smoke helper commits with SUPER's checked identity,
+13. **F-002, F-003 and F-004, fixed.** The live smoke helper commits with <hub host>'s checked identity,
     carried in `smoke.json`, instead of its own invalid one. The helper stays local under D-13.
     `real_receipt` restores `sys.dont_write_bytecode` through `monkeypatch`, as `load_probe` does,
     and a new AC-25 test checks the flag after the helper (`fa-f003-red.txt` 1 failed with the
     restore taken out; `fa-f003.txt` 9 passed; `fa-f003-alone.txt` 1 passed). The handoff text no
     longer adds a site to an existing tool line or names a cache path, and the package-gate receipt
     is refreshed after this handoff's last edit.
-14. **Stop condition 5, then P-4.** Row 3's rerun after F-001 failed Codex's write test on DUPER.
-    Mat rebooted DUPER, and the rerun failed the same way. The diagnosis: under the S4U task, every
+14. **Stop condition 5, then P-4.** Row 3's rerun after F-001 failed Codex's write test on <member host>.
+    Mat rebooted <member host>, and the rerun failed the same way. The diagnosis: under the S4U task, every
     sandboxed `pwsh` exits `0xC0000142` and `apply_patch` reports "Failed to write file", in both
     sandboxes and since the first run. Only a `cmd` redirect writes, so the earlier passes depended on
     how the model quoted one command. One write under `danger-full-access` and the same task passed
     (`fa-codex-fullaccess-probe.txt`). Mat then ruled P-4: a direct Codex job runs with full access,
     and its brief keeps it to reading and to writing in its folder and temp. The P-4 tests failed on
     a copy with the old behavior (`fa-p4-pester-red.txt`: 5 failed, 60 passed) and pass now
-    (`fa-p4-pester-setup.txt` 65 passed; `fa-p4-ac29.txt` 34 passed). Setup then ran twice on DUPER:
+    (`fa-p4-pester-setup.txt` 65 passed; `fa-p4-ac29.txt` 34 passed). Setup then ran twice on <member host>:
     both exit 0, the second with `changed` empty, `codex` pass and `codex_sandbox` fail, and
     `check_live.py setup` printed 0 problem(s) (A-19). Row 15's Codex job (`fa-row15`) ran before P-4,
     under workspace-write; its rerun under `FullAccess` is point 18. The
@@ -1337,7 +1337,7 @@ _Left blank for reviewer agent._
     installed task script and the real wrapper with a stub `codex`, and now expects `-s
     danger-full-access` (`fa-p4-ac40.txt`: 9 passed). Before that change it failed with
     `'danger-full-access' == 'workspace-write'`. The write itself is covered by the probe. The
-    cli-dispatch skill's fleet section now names `-Mode FullAccess`, and the kit on DUPER was
+    cli-dispatch skill's fleet section now names `-Mode FullAccess`, and the kit on <member host> was
     installed again from this tree.
 15. **The limit P-4 accepts.** No sandbox enforces a Codex job's write scope; only the brief's
     `CODEX_WRITE_SCOPE` line does. A job can read anything the member's user can, including the
@@ -1346,18 +1346,18 @@ _Left blank for reviewer agent._
     setup no longer reports it: the full-access test decides the run's `reason`.
 17. **The bootstrap order (round 1's out-of-contract note).** `bootstrap.md` step 1 now says that
     each write test needs that CLI's sign-in, so a new machine reports `claude_no_write` or
-    `codex_no_write` until step 6, and setup runs again after it. The hub running on SUPER read
+    `codex_no_write` until step 6, and setup runs again after it. The hub running on <hub host> read
     `bootstrap.md` when it started, so it serves the earlier text until its next restart.
 
 **Corrections after review round 2** (same review file, round 2):
 
 18. **F-005, done.** Round 2 found F-001 to F-004 fixed. It blocked on AC-33: the only Codex job
     on a member had run before P-4. Mat chose to run row 15 again ("Run row 15 again
-    (Recommended)"). The kit was published, installed and gated again on DUPER (`GATE live PASS:
+    (Recommended)"). The kit was published, installed and gated again on <member host> (`GATE live PASS:
     5/5`). Then `fa-row15p4` started on those words through `fleet-tasks.ps1`. It wrote `draft.txt`
     and stopped `STOPPED:decision` asking east or west (watch exit 7). Mat answered "west", and the
     resumed turn kept the same session (`01a1aea5-…` on both). It wrote `answer.txt` holding
-    `west` and ended `DONE`. Each turn's wrapper `receipt.txt` on DUPER reads `Mode: FullAccess`,
+    `west` and ended `DONE`. Each turn's wrapper `receipt.txt` on <member host> reads `Mode: FullAccess`,
     `Sandbox: danger-full-access`, `Exit Code: 0`. `check_live.py codex` printed 0 problem(s) on the
     new `fa-live-codex.json`, which keeps the earlier `remote_claude` record (D-5's route, unchanged
     by P-4). The pre-P-4 evidence is kept as `fa-live-codex.prep4.json` and `.prep4.txt`. This
@@ -1368,12 +1368,12 @@ _Left blank for reviewer agent._
 
 ## Deferred Items
 
-- **DUPER cleanup.** The runs `fa-row12`, `fa-row15c`, `fa-row15d`, `fa-row15p4` and the smoke runs stay on DUPER
+- **<member host> cleanup.** The runs `fa-row12`, `fa-row15c`, `fa-row15d`, `fa-row15p4` and the smoke runs stay on <member host>
   until Mat asks. `smoke-0e1f973aee` holds an open $20 exposure in its ledger.
 - **The logout test (done 2026-11-05, after the live rows).** Mat used "Log out of all devices". The
-  stream probe on DUPER then failed with `authentication_failed`: "OAuth token revoked. Please log in
+  stream probe on <member host> then failed with `authentication_failed`: "OAuth token revoked. Please log in
   again" (`fa-logout-probe.txt`, cost 0). So that logout revokes a setup token, and it is the way to
-  cut off a lost member. Mat then issued a new token on SUPER, and it was stored on DUPER (D-1). The
+  cut off a lost member. Mat then issued a new token on <hub host>, and it was stored on <member host> (D-1). The
   same probe then passed: `apiKeySource` none, a seven_day window, overage false, cost about $0.0014
   (`fa-relogin-probe.txt`). Codex was not affected by this test.
 - **Linux and macOS** in `bootstrap.md` have headings only.
@@ -1397,10 +1397,10 @@ decision_log:
     question: "Row 8 asked for Mat's plan usage and Console readings before and after the runs. The weekly meter stayed at 27% after about $11.66 of list-price work. How is the subscription route proved?"
     resolution: human
     class: two-way
-    chosen: "No meter proof on the Ultra account. Row 8 rests on Mat's ruling and a one-turn stream test of DUPER's token: apiKeySource none, a seven_day window at 0.27 with the reset Mat's Usage page shows, and isUsingOverage false"
+    chosen: "No meter proof on the Ultra account. Row 8 rests on Mat's ruling and a one-turn stream test of <member host>'s token: apiKeySource none, a seven_day window at 0.27 with the reset Mat's Usage page shows, and isUsingOverage false"
     source_tag: Human-approved
     precedents: ["plan stop condition 3 — a Console charge still stops the work", "AC-16 — P-3 replaced the readings"]
-    research: { engine: none, sources: ["the stream-json probe run on DUPER, filtered fields only"] }
+    research: { engine: none, sources: ["the stream-json probe run on <member host>, filtered fields only"] }
     reasoning: "One percent of the weekly meter takes hours of agentic work, so a movement could not be shown in a reasonable run. Free accounts don't offer Claude Code, so a second account can't stand in. The stream test shows the token is a subscription sign-in with no API key"
     human_message_reference: "USER_EXPLICIT 2026-11-05 '1% takes few hours of agentic work so we will drop proving that on the Ultra account. Free accounts do not offer claude code so we will just accept what we have with pretty high degree of certenty that everything works as it should.'"
   - id: A-16
@@ -1418,11 +1418,11 @@ decision_log:
     question: "A-16 changed setup-member.ps1's Claude probe after row 3's live receipt. Does row 3 repeat?"
     resolution: autonomous
     class: two-way
-    chosen: "Yes: setup ran twice again on DUPER and check_live.py setup ran again, under row 3's approval. The first reports are kept"
+    chosen: "Yes: setup ran twice again on <member host> and check_live.py setup ran again, under row 3's approval. The first reports are kept"
     source_tag: Local Canon
     precedents: ["task.md H1-2 — live receipts stand unless a later change touched what they prove", "Mat's approval of rows 3, 8, 12, 15 and 17"]
     research: { engine: none, sources: [] }
-    reasoning: "AC-5 proves both write tests pass under S4U, and the probe is one of them. The rerun is named and reversible and changes nothing on DUPER when nothing is missing, as its empty changed list shows"
+    reasoning: "AC-5 proves both write tests pass under S4U, and the probe is one of them. The rerun is named and reversible and changes nothing on <member host> when nothing is missing, as its empty changed list shows"
   - id: A-18
     stage: execution
     question: "Two H1-2 full runs failed the same 2 fixture tests. Their cause is this package's AC-11 test, which leaves sys.dont_write_bytecode set. Fix the test or the fixtures?"
@@ -1442,18 +1442,18 @@ decision_log:
     source_tag: Human-approved
     precedents: ["core/.agent/skills/cli-dispatch/SKILL.md:61 — FullAccess for a reproduced sandbox capability failure", "stop condition 5"]
     research: { engine: native, sources: ["https://github.com/openai/codex/issues/38665", "https://github.com/openai/codex/issues/13887"] }
-    reasoning: "Under S4U on DUPER, every sandboxed pwsh exits 0xC0000142 and apply_patch fails; only cmd redirects write, so setup's pass depended on the model's quoting. One full-access write under the same task passed. Amends D-4's 'Codex workspace-write'"
+    reasoning: "Under S4U on <member host>, every sandboxed pwsh exits 0xC0000142 and apply_patch fails; only cmd redirects write, so setup's pass depended on the model's quoting. One full-access write under the same task passed. Amends D-4's 'Codex workspace-write'"
     human_message_reference: "USER_EXPLICIT 2026-11-05 'i don't mind this since the guardrails and other instructions are very explicit about read actions and write only into temp', then 'I agree and approve, proceed'"
   - id: A-19
     stage: execution
     question: "F-001 and then P-4 changed setup-member.ps1 after row 3's live receipts. Does row 3 repeat?"
     resolution: autonomous
     class: two-way
-    chosen: "Yes, as A-17: setup ran twice again on DUPER after P-4 and check_live.py setup ran again, under row 3's approval. The failing reports from before P-4 are kept as fa-setup-report-1.prep4.json and -2.prep4.json"
+    chosen: "Yes, as A-17: setup ran twice again on <member host> after P-4 and check_live.py setup ran again, under row 3's approval. The failing reports from before P-4 are kept as fa-setup-report-1.prep4.json and -2.prep4.json"
     source_tag: Local Canon
     precedents: ["A-17", "task.md H1-2 — live receipts stand unless a later change touched what they prove"]
     research: { engine: none, sources: [] }
-    reasoning: "Both changes touch what AC-5 proves. The rerun is named and reversible and changes nothing on DUPER when nothing is missing, as its empty changed list shows"
+    reasoning: "Both changes touch what AC-5 proves. The rerun is named and reversible and changes nothing on <member host> when nothing is missing, as its empty changed list shows"
 ```
 
 ---
