@@ -38,6 +38,7 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `.agent/fleet/setup-member.ps1` — Sets up a member on the member itself: installs what is missing, sets Codex's config lines, chooses the Codex sandbox by a real write test, and writes `setup-report.json`. Holds no hosts or credentials.
 - `.agent/fleet/fleet-tasks.ps1` — The scheduled tasks behind a member's `agent` jobs: Claude through the credits launcher, Codex through `tools/Invoke-CodexDispatch.ps1` under `FLEET_CODEX_LOCK`. Copied into the member's kit.
 - `.agent/fleet/usb/` — The USB drive kit that gives the hub machine an SSH admin connection to a new Windows, macOS or Linux machine. `fleet_usb.py prepare` copies the hub's public key and the member scripts to the drive; `setup-windows.ps1` and `setup-unix.sh`, behind double-click launchers, set up each machine and write its record; `fleet_usb.py import` pins the host keys and writes `~/.ssh/fleet_config`. Holds no hosts or credentials.
+- `.agent/fleet/install-usb/` — How the hub machine's agent makes an Ubuntu installer drive for a new Linux member: download and signature check, the write, and the install, with a stop at each human step. `write-installer-usb.ps1` finds the drive by its serial number, writes the image and reads it back to verify.
 - `.agent/fleet.json` — This repository's own fleet manifest: what a member needs, and the named `kit-install` and `kit-gate` commands.
 
 ---

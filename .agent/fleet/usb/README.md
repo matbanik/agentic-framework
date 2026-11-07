@@ -7,6 +7,9 @@ the drive with you.
 
 Use an exFAT drive, which all three systems can read and write.
 
+A new machine with no operating system needs the installer drive first: see
+[../install-usb/README.md](../install-usb/README.md).
+
 ## 1. On the hub machine
 
 ```powershell
