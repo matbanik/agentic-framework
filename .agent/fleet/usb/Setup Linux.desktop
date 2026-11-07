@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Fleet setup
+Comment=Set up this machine for the hub machine's admin connection
+Icon=utilities-terminal
+Terminal=true
+Exec=bash -c 'f=$(ls -d /media/*/*/fleet-usb/setup-unix.sh /run/media/*/*/fleet-usb/setup-unix.sh /mnt/hgfs/*/fleet-usb/setup-unix.sh 2>/dev/null | head -n 1); if [ -z "$f" ]; then echo "No fleet-usb drive is mounted."; else sudo bash "$f"; fi; echo; read -n 1 -s -r -p "Press any key to close this window."'
