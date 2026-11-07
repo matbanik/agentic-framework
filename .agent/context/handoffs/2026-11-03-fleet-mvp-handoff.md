@@ -66,8 +66,8 @@ predecessor: "2026-11-03-fleet-mvp-plan-critical-review.md"
 | AC-17 | integration | Bootstrap files match the pairing line. | Local Canon (A-16) | `scripts/tests/test_fleet_bootstrap.py`: `test_ac17_served_files_match_the_pairing_line`, `test_ac17_the_hub_saves_the_pairing_line` and 1 more | ✅ |
 | AC-18 | integration | `publish` then `check --project` reports missing tools. | Human-approved (outline P2) | `scripts/tests/test_fleet_bootstrap.py`: `test_ac18_publish_then_check_lists_missing_tools`, `test_ac18_check_passes_when_nothing_is_missing` and 8 more | ✅ |
 | AC-19 | unit | Template shape. | Human-approved (outline P2) | `scripts/tests/test_fleet_bootstrap.py`: `test_ac19_the_template_has_its_shape`, `test_ac19_the_checker_sees_a_removed_stop_line` and 2 more | ✅ |
-| AC-20 | integration | Live, on <hub host>: `FIREWALL_RULE` exists, created by `<hub host>-firewall.ps1` when Mat asks (D-5). | Human-approved (D-1, `the local network notes (lines 145-149)`) | `check_live.py firewall` (live on <hub host>); `the local firewall record fleet-hub-rule-before` and `-after.txt` | ✅ |
-| AC-21 | integration | Live: <member host> (outline P2 done). See H1-2 record `live-<member host>`, repeated on the settled `fleet.py` after the D-9 refresh. | Human-approved (outline P2) | `check_live.py <member host>` (live: <hub host> and <member host>) | ✅ |
+| AC-20 | integration | Live, on <hub host>: `FIREWALL_RULE` exists, created by `hub-firewall.ps1` when the human asks (D-5). | Human-approved (D-1, `the local network notes (lines 145-149)`) | `check_live.py firewall` (live on <hub host>); `the local firewall record fleet-hub-rule-before` and `-after.txt` | ✅ |
+| AC-21 | integration | Live: <member host> (outline P2 done). See H1-2 record `live-<member host>`, repeated on the settled `fleet.py` after the D-9 refresh. | Human-approved (outline P2) | `check_live.py member` (live: <hub host> and <member host>) | ✅ |
 | AC-22 | unit | `validate_manifest` accepts `core/.agent/fleet.json.template` once its placeholders are filled, and refuses bad shapes. | Local Canon (A-9, A-12) | `scripts/tests/test_fleet_run.py`: `test_ac22_the_filled_template_is_valid`, `test_ac22_the_unfilled_template_is_refused` and 5 more | ✅ |
 | AC-23 | integration | The snapshot takes the working tree and leaves the repo alone. | Research-backed (A-3; 2026-11-01 §5) | `scripts/tests/test_fleet_run.py`: `test_ac23_the_bundle_has_the_working_tree_and_not_the_ignored_file`, `test_ac23_an_ignored_manifest_still_travels_and_nothing_else_ignored_does` and 7 more | ✅ |
 | AC-24 | integration | A likely secret file stops the run before anything leaves <hub host>. Round 1 widened the check to every path in the bundle's history. | Human-approved (handoff "no secrets") | `scripts/tests/test_fleet_run.py`: `test_ac24_a_likely_secret_stops_the_run`, `test_ac24_an_ignored_secret_and_the_allowed_names_pass` and 5 more | ✅ |
@@ -267,8 +267,8 @@ the session's shell, so each uses `> file 2>&1` where the plan's row shows the P
   "result": "pass",
   "exit_code": 0,
   "tested_state": "working tree at the row (HEAD 3a4eac6); hub and <member host> on the settled fleet.py, hash 921674e4135c74e5, after the D-9 refresh",
-  "command": "stopped the hub and started it again; run_duper.py <member host>-member.ps1 ACTION=Stop; run_duper.py <member host>-update.ps1; run_duper.py <member host>-member.ps1 ACTION=Restart; python .agent/fleet/fleet.py status > $RECEIPTS_DIR/fleet-status-after-update.txt 2>&1",
-  "output": "the hub serves 921674e4135c74e5; <member host>-update.ps1 printed fleet.py updated to 921674e4; the Fleet member service is Running; status lists <member host> online and approved. The firewall rule and the member's key and approval were not touched",
+  "command": "stopped the hub and started it again; run_member.py member-task.ps1 ACTION=Stop; run_member.py member-update.ps1; run_member.py member-task.ps1 ACTION=Restart; python .agent/fleet/fleet.py status > $RECEIPTS_DIR/fleet-status-after-update.txt 2>&1",
+  "output": "the hub serves 921674e4135c74e5; member-update.ps1 printed fleet.py updated to 921674e4; the Fleet member service is Running; status lists <member host> online and approved. The firewall rule and the member's key and approval were not touched",
   "receipt_sha256": "fc6ad9d88a326f9c772f21555860f1d1660b42ef9b2416a23bfb8cb101afec8a"
 }
 ```
@@ -299,7 +299,7 @@ the session's shell, so each uses `> file 2>&1` where the plan's row shows the P
   "result": "pass",
   "exit_code": 0,
   "tested_state": "working tree at the row (HEAD 3a4eac6); hub and <member host> on the settled fleet.py, hash 921674e4135c74e5, after the D-9 refresh",
-  "command": "python docs/execution/plans/2026-11-03-fleet-mvp/check_live.py <member host> > $RECEIPTS_DIR/fleet-live-<member host>.txt 2>&1",
+  "command": "python docs/execution/plans/2026-11-03-fleet-mvp/check_live.py member > $RECEIPTS_DIR/fleet-live-<member host>.txt 2>&1",
   "output": "status lists <member host> as approved and online with its capability report (git 2.56.0, Python 3.14.7); send <member host> ping then wait exited 0; a call from <member host> with no key returned 401; log-collector, firewall profiles and inbound rule count equal before and after; check printed: ok",
   "receipt_sha256": "7a698046957421149fa0694cf4eccaf386c48f5f5d488610db8309c8853741e8"
 }
@@ -498,7 +498,7 @@ sanitize --verify: not green, 40 lines, all existed at row 0 (listed below)
 No pyright or ruff gate: this package's static gates are `refcheck` and `sanitize --verify`
 (Verification Plan §3).
 
-### Gate failures that existed before this work, for Mat
+### Gate failures that existed before this work, for the human
 
 These come from row 0, HEAD `3a4eac6`. This plan did not add any: `check_package_gates.py` compares
 with this baseline. Quoting the lines here would count as new references, so they are grouped by
@@ -616,13 +616,13 @@ as round 2 reports; the log now says so when that happens.
    `644262a9988c0ebf…`, are kept in `row14-first/` under the receipts folder. Rounds 1 and 2 reviewed
    those first results, not these.
 3. **D-8 came before its ruling.** The first row 14 attempt was rejected with `no_manifest`; the
-   change was made, then reported. M-8 asks for the ruling first. Mat accepted it afterwards.
+   change was made, then reported. M-8 asks for the ruling first. The human accepted it afterwards.
 4. **Reduced coverage (D-6):** 17 lane and run-parameter test files no longer ship to non-Windows
    installs.
-5. **`pair` over WinRM** departs from "keys created by a human at the console"; Mat chose this in
-   D-5. `approve` stays with Mat in a real terminal.
+5. **`pair` over WinRM** departs from "keys created by a human at the console"; the human chose this in
+   D-5. `approve` stays with the human in a real terminal.
 6. **Additions to the plan's design:** the hub saves `pairing.txt`, `members` has a `capabilities`
-   column, and `<member host>-member.ps1` takes `ACTION=` rather than `-Stop` style flags (recorded in the plan).
+   column, and `member-task.ps1` takes `ACTION=` rather than `-Stop` style flags (recorded in the plan).
 7. **Full-gate identity:** the identity lists paths, not contents. The round 2 run started after
    the last code and test edit. A listing taken when it ended showed no file under `.agent`, `core`,
    `scripts` or `docs` newer than a marker made as it started. After the run, only this handoff,
@@ -644,7 +644,7 @@ as round 2 reports; the log now says so when that happens.
   `bundle_bad` and the run fails. Round 2 raised it as non-blocking, and the older scan had the same
   gap. If a shallow source ever matters, the fix is a refusal before upload; rebuilding the history
   is not needed.
-- **The D-7 av-kit manifest commit** is ruled and listed in the plan, and waits for Mat's word.
+- **The D-7 av-kit manifest commit** is ruled and listed in the plan, and waits for the human's word.
 - **Hashes in this record.** `8621e3a` and `3a4eac6` were the two local plan commits, folded under
   D-14 and never pushed, so a clone cannot resolve them. The evidence records and the review keep
   them, because they are literal output of those runs.
@@ -668,12 +668,12 @@ decision_log:
     question: "How do the human rows run, and how is <member host> reached?"
     resolution: human
     class: two-way
-    chosen: "Each human step is a prepared script that the agent runs when Mat asks, and <hub host>-firewall.ps1, the one that needs elevation, runs in its own elevated window through a UAC prompt. <member host> is reached over WinRM with the local WinRM helper. No agent CLI on <member host> until P4. pair runs over WinRM. approve stays with Mat in a real terminal. The member runs as one named, triggerless scheduled task"
+    chosen: "Each human step is a prepared script that the agent runs when the human asks, and hub-firewall.ps1, the one that needs elevation, runs in its own elevated window through a UAC prompt. <member host> is reached over WinRM with the local WinRM helper. No agent CLI on <member host> until P4. pair runs over WinRM. approve stays with the human in a real terminal. The member runs as one named, triggerless scheduled task"
     source_tag: Human-approved
     precedents: ["the local network notes (lines 145-149) — named, reversible changes on <member host>", "plan A-7 — no autostart", "handoff §3 — keys created by a human at the console: pair over WinRM departs from this, flagged in User Review Required"]
     research: { engine: none, sources: ["C:/Temp/agentic-framework/receipts/<member host>-probe.txt — read-only WinRM probe of <member host>"] }
-    reasoning: "Mat replaced the console steps with scripts the agent runs on request. A process started in a WinRM shell dies with it, so the member needs one named task. A task with no trigger keeps A-7. The WinRM user and the console user differ, so pair and member both run as the WinRM user. A window reload does not elevate Cursor, and a real elevated relaunch would end every other Cursor session, so Mat chose the UAC prompt"
-    human_message_reference: "USER_EXPLICIT 2026-11-03 'check [the local ops folder] on how to access <member host> with winrm / rather than commands prepare script to be run in elevated prompt. I will elevat the IDE and ask you to run them for me.'; USER_EXPLICIT 2026-11-04 'yes use the UAC prompt for <hub host>-firewall.ps1'"
+    reasoning: "The human replaced the console steps with scripts the agent runs on request. A process started in a WinRM shell dies with it, so the member needs one named task. A task with no trigger keeps A-7. The WinRM user and the console user differ, so pair and member both run as the WinRM user. A window reload does not elevate Cursor, and a real elevated relaunch would end every other Cursor session, so the human chose the UAC prompt"
+    human_message_reference: "USER_EXPLICIT 2026-11-03 'check [the local ops folder] on how to access <member host> with winrm / rather than commands prepare script to be run in elevated prompt. I will elevat the IDE and ask you to run them for me.'; USER_EXPLICIT 2026-11-04 'yes use the UAC prompt for hub-firewall.ps1'"
   - id: D-6
     stage: execution
     question: "The row-0 baseline was red in two tests about the Linux install's copy of the lane tests, which this plan had not touched. Stop, or fix them first?"
@@ -687,12 +687,12 @@ decision_log:
     human_message_reference: "USER_EXPLICIT 2026-11-03 answer 'Fix them first' to the red baseline question"
   - id: D-7
     stage: execution
-    question: "Another av-kit session excluded P:/av-kit/.agent/fleet.json from its RC1 commit until Mat decides. What happens to the file?"
+    question: "Another av-kit session excluded P:/av-kit/.agent/fleet.json from its RC1 commit until the human decides. What happens to the file?"
     resolution: human
     class: product-preference
-    chosen: "Keep it local and leave that exclude line through RC1. Commit it as its own small av-kit commit once fleet.py is committed here, on Mat's separate word"
+    chosen: "Keep it local and leave that exclude line through RC1. Commit it as its own small av-kit commit once fleet.py is committed here, on the human's separate word"
     source_tag: Human-approved
-    precedents: ["docs/proposals/2026-11-03-fleet-mvp-outline.md:259 — each project's manifest lives in its repo", "this plan, 'Two files land outside this repo' — left for Mat to keep or delete"]
+    precedents: ["docs/proposals/2026-11-03-fleet-mvp-outline.md:259 — each project's manifest lives in its repo", "this plan, 'Two files land outside this repo' — left for the human to keep or delete"]
     research: { engine: tavily, sources: ["https://git-scm.com/docs/gitignore/2.9.5 — info/exclude is for files specific to one user's workflow", "https://gitbybit.com/gitopedia/best-practices/atomic-commits — commit unrelated changes separately", "https://blog.vincentqiao.com/en/posts/claude-code-settings-intro — shared config is committed, personal overrides are not"] }
     reasoning: "The design puts the manifest in the repo, but today it serves a tool that is not committed and has nothing to do with RC1. Committing it in RC1 mixes unrelated work; deleting it stops av-kit running on the fleet"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'all accepted'"
@@ -706,7 +706,7 @@ decision_log:
     source_tag: Human-approved
     precedents: ["AC-23 — ignored files stay out of the snapshot; this is a narrow exception"]
     research: { engine: tavily, sources: ["https://github.com/superfly/flyctl/issues/2245 — quotes Docker's docs that an ignored Dockerfile is still sent because the daemon needs it; flyctl left it out and failed the same way"] }
-    reasoning: "The member cannot run without the manifest. Refusing at run would force the exclude line out, which risks the file entering the RC1 commit. Sending the manifest in the task needs more code and a <member host> update. The change was made before the ruling and reported to Mat"
+    reasoning: "The member cannot run without the manifest. Refusing at run would force the exclude line out, which risks the file entering the RC1 commit. Sending the manifest in the task needs more code and a <member host> update. The change was made before the ruling and reported to the human"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'all accepted'"
   - id: D-9
     stage: execution
@@ -729,7 +729,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["AC-23 and AC-24", "execution review round 1, F-001's recommendation", "plan stop condition 4"]
     research: { engine: none, sources: [] }
-    reasoning: "It is the reviewer's recommendation, uses no new pattern or dependency, and leaves AC-23's parent as it is. Neither av-kit's nor this repo's history holds a matching path, so stop condition 4 is not reached. Cost: a repo whose history holds such a path cannot run until the history or the allow list changes, and the second needs Mat's word"
+    reasoning: "It is the reviewer's recommendation, uses no new pattern or dependency, and leaves AC-23's parent as it is. Neither av-kit's nor this repo's history holds a matching path, so stop condition 4 is not reached. Cost: a repo whose history holds such a path cannot run until the history or the allow list changes, and the second needs the human's word"
   - id: A-22
     stage: execution
     question: "Execution review F-004, non-blocking: does the settled fleet.py change so a shallow source repo is refused before upload?"
@@ -737,7 +737,7 @@ decision_log:
     class: two-way
     chosen: "No code change. Full local history is a stated prerequisite of a source repo, recorded in Deferred Items"
     source_tag: Local Canon
-    precedents: ["execution review round 2, F-004's recommendation", "task row H1-2: row 11 repeats once after the review settles fleet.py", "the human's simplicity principle"]
+    precedents: ["execution review round 2, F-004's recommendation", "task row H1-2: row 11 repeats once after the review settles fleet.py", "The human's simplicity principle"]
     research: { engine: none, sources: [] }
     reasoning: "The reviewer's recommendation is to document it and calls a refusal optional. The failure is not silent: the member reports bundle_bad and the run ends. A refusal would change fleet.py after approval, which means another review, another refresh and another live pass, for a case neither live repo has. Cost: a shallow clone fails after its upload, with a less direct reason"
   - id: D-12
@@ -746,7 +746,7 @@ decision_log:
     resolution: human
     class: one-way-door
     mandatory: [M-1, M-12]
-    chosen: "The unpushed ones only: 15c9872 keeps its tree, message and dates and is signed again under the noreply address. The pushed history stays as it is, and Mat checks GitHub's email privacy settings"
+    chosen: "The unpushed ones only: 15c9872 keeps its tree, message and dates and is signed again under the noreply address. The pushed history stays as it is, and the human checks GitHub's email privacy settings"
     source_tag: Human-approved
     precedents: ["the global commit identity rule, which leaves a rewrite to the user"]
     research: { engine: tavily, sources: ["https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository — rewritten commits can stay reachable by SHA in cached views", "https://docs.github.com/en/account-and-profile/how-tos/email-preferences/blocking-command-line-pushes-that-expose-your-personal-email-address — the block checks only the most recent commit", "https://docs.github.com/en/account-and-profile/how-tos/email-preferences/setting-your-commit-email-address — earlier commits keep their earlier address"] }
@@ -762,7 +762,7 @@ decision_log:
     source_tag: Human-approved
     precedents: ["scripts/sanitize.py — the published package already replaces real project strings"]
     research: { engine: tavily, sources: ["https://blog.gitguardian.com/how-we-got-a-cisa-github-leak-taken-down-in-26-hours — a far larger leak, in which hostnames were part of the concern; weak evidence, and nothing closer was found"] }
-    reasoning: "More can be published later and nothing can be taken back. Publishing everything is simplest and holds no credential, but it would map the LAN for good. Making the scripts take the address as a parameter would change reviewed code for files that have done their job. The scrub came after the approved review and is wording only, so it was shown to Mat rather than sent for another round"
+    reasoning: "More can be published later and nothing can be taken back. Publishing everything is simplest and holds no credential, but it would map the LAN for good. Making the scripts take the address as a parameter would change reviewed code for files that have done their job. The scrub came after the approved review and is wording only, so it was shown to the human rather than sent for another round"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'all accepted'"
   - id: D-14
     stage: closeout
@@ -784,9 +784,9 @@ decision_log:
     mandatory: [M-12]
     chosen: "Commit the outline, scrubbed, because the plan names it as the scope source. Keep the other seven files local"
     source_tag: Human-approved
-    precedents: ["Mat's 2026-11-03 ruling that the research drafts are reference material"]
+    precedents: ["The human's 2026-11-03 ruling that the research drafts are reference material"]
     research: { engine: none, sources: [] }
-    reasoning: "The scope reference then resolves in a clone. Committing all of them publishes drafts Mat set aside. Committing none leaves the plan's scope reference broken"
+    reasoning: "The scope reference then resolves in a clone. Committing all of them publishes drafts the human set aside. Committing none leaves the plan's scope reference broken"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'all accepted'"
 ```
 
@@ -803,4 +803,4 @@ decision_log:
 | Submitted for review | 2026-11-04 | implementing agent | Round 2 |
 | Round 2 result | 2026-11-04 | codex | `approved`, 0 blocking; F-001, F-002 fixed; F-003 accepted risk; F-004 open and non-blocking |
 | D-9 refresh | 2026-11-04 | implementing agent | Hub and <member host> on `921674e4135c74e5…`; live checks repeated; F-003 run on <member host> |
-| Rulings D-12 to D-15 | 2026-11-04 | Mat | Address, publication, commit shape and inputs; scrub and four commits, no push |
+| Rulings D-12 to D-15 | 2026-11-04 | The human | Address, publication, commit shape and inputs; scrub and four commits, no push |

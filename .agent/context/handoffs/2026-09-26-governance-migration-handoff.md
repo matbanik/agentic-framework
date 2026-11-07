@@ -329,7 +329,7 @@ Environment: 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64
 {
   "schema_version": "evidence.v1",
   "check_id": "skill-quality-gate",
-  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/Mat/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/quality-gate",
+  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/<user>/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/quality-gate",
   "cwd": ".",
   "exit_code": 0,
   "output": "Skill is valid!",
@@ -344,7 +344,7 @@ Environment: 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64
 {
   "schema_version": "evidence.v1",
   "check_id": "skill-completion-preflight",
-  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/Mat/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/completion-preflight",
+  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/<user>/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/completion-preflight",
   "cwd": ".",
   "exit_code": 0,
   "output": "Skill is valid!",
@@ -359,7 +359,7 @@ Environment: 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64
 {
   "schema_version": "evidence.v1",
   "check_id": "skill-pre-handoff-review",
-  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/Mat/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/pre-handoff-review",
+  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/<user>/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/pre-handoff-review",
   "cwd": ".",
   "exit_code": 0,
   "output": "Skill is valid!",
@@ -374,7 +374,7 @@ Environment: 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64
 {
   "schema_version": "evidence.v1",
   "check_id": "skill-terminal-preflight",
-  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/Mat/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/terminal-preflight",
+  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/<user>/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/terminal-preflight",
   "cwd": ".",
   "exit_code": 0,
   "output": "Skill is valid!",
@@ -389,7 +389,7 @@ Environment: 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64
 {
   "schema_version": "evidence.v1",
   "check_id": "skill-cli-dispatch",
-  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/Mat/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/cli-dispatch",
+  "command": "C:\\Python314\\python.exe -X utf8 C:/Users/<user>/.codex/skills/.system/skill-creator/scripts/quick_validate.py core/.agent/skills/cli-dispatch",
   "cwd": ".",
   "exit_code": 0,
   "output": "Skill is valid!",

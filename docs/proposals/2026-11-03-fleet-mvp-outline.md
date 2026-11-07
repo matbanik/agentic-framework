@@ -6,7 +6,7 @@ Rulings: D-1, D-2 and D-3 accepted as recommended, USER_EXPLICIT 2026-11-03: "Al
 are accepted, proceed with create plan". Refinements made while planning are in the Decision Log of
 `docs/execution/plans/2026-11-03-fleet-mvp/implementation-plan.md`, and where they differ, the plan holds.
 
-Inputs: Mat's 2026-11-03 brief (handoff §2) and its rule that simplicity comes first.
+Inputs: the human's 2026-11-03 brief (handoff §2) and its rule that simplicity comes first.
 `2026-10-31-fleet-nodes.md`, `2026-11-01-remote-hosts.md` and handoff §5 are **reference only**:
 where this outline and they disagree, this outline holds. The HDP receipts are in
 `C:/Temp/agentic-framework/fleet-hdp/`.
@@ -38,7 +38,7 @@ These eight points are the long-term design. Each phase adds to them and none re
 4. **A closed list of task kinds, one executor for each:** `ping`, `run` and `agent`. Behind
    `agent`, each CLI has an adapter: a command template plus an output parser.
 5. **Git moves only as bundles plus commit ids.** No member has `origin`, GitHub credentials or a
-   signing key. Landing stays on <hub host>, on Mat's word, as in the 2026-11-01 proposal §4.
+   signing key. Landing stays on <hub host>, on the human's word, as in the 2026-11-01 proposal §4.
 6. **Authority is in the protocol from day 1.** The hub refuses any task kind its sender may not
    send. No message ever authorizes a commit, push, merge, tag or release. No secret goes in a
    message.
@@ -53,11 +53,11 @@ Each phase is useful on its own, and work can stop after any of them. **The MVP 
 
 | # | Phase | Builds | Done when | Blocked by |
 |---|---|---|---|---|
-| P0 | Decide and scope | `docs/research/fleet/scope.md`. Read the Dobby, Sidefleet and agichan sources as reference implementations (§6) | Mat rules D-1. D-2 and D-3 can wait | — |
+| P0 | Decide and scope | `docs/research/fleet/scope.md`. Read the Dobby, Sidefleet and agichan sources as reference implementations (§6) | The human rules D-1. D-2 and D-3 can wait | — |
 | P1 | Walking skeleton, <hub host> only | `fleet.py` with `hub`, `member`, `send`, `status` and `wait`. The envelope, the SQLite store, and the `ping` task | `fleet send local ping` returns the member's tool versions over localhost | D-1 |
-| P2 | Bootstrap template and the first real member | Common template (Windows section filled; Linux and macOS sections only headed). Pairing. Hub TLS. One named firewall rule on <hub host> | <member host>'s agent sets <member host> up from the template, Mat does the human-only steps, and <hub host>'s `fleet status` lists <member host> with its capability report | P1 |
+| P2 | Bootstrap template and the first real member | Common template (Windows section filled; Linux and macOS sections only headed). Pairing. Hub TLS. One named firewall rule on <hub host> | <member host>'s agent sets <member host> up from the template, the human does the human-only steps, and <hub host>'s `fleet status` lists <member host> with its capability report | P1 |
 | P3 | `run` tasks on av-kit | av-kit's per-project manifest; one slot per project on the member; a snapshot bundle from <hub host> that includes untracked files (2026-11-01 §5); results returned | A <hub host> session runs av-kit's checks on its uncommitted tree on <member host> and gets the exit code, the log and the tree id back | P2 |
-| P4 | `agent` tasks: Claude and Codex | Two adapters; the brief goes in, and the final message, usage and a result bundle come back; landing on <hub host> through the existing human-gated path | One plan job runs on <member host> through each CLI, and its result lands on Mat's word | P3, D-2 |
+| P4 | `agent` tasks: Claude and Codex | Two adapters; the brief goes in, and the final message, usage and a result bundle come back; landing on <hub host> through the existing human-gated path | One plan job runs on <member host> through each CLI, and its result lands on the human's word | P3, D-2 |
 | P5 | Cursor and Antigravity adapters, follow-ups, Zorivest | `stop`, plus `query` and `info` delivered as a resume turn; Zorivest's manifest; 2026-11-01 D-2 (H1-2 evidence) decided here | Each of the four CLIs runs a job. A follow-up gets an answer | P4 |
 | P6 | Member-to-member requests | Addressing by capability (for example `to: any{os: macos}`); the hub's allowlist per sender | A member asks for a build on another member and gets the result. <hub host>'s log shows both | P5, D-3, R-7 |
 | P7 | Autostart, Linux and macOS members | A Task Scheduler task at logon, a systemd user service, a launchd agent | A member restarts and rejoins without help | First non-Windows host, R-5 |
@@ -103,7 +103,7 @@ below answered the questions that block the MVP. The rest move to the phase that
 
 **Recommendation: build it.** It's one standard-library Python file: an HTTP endpoint over a
 SQLite file, TLS with a self-signed certificate that members pin, and one key per member. It is
-the smallest thing that meets Mat's brief. Polling members get offline delivery for free, because
+the smallest thing that meets the human's brief. Polling members get offline delivery for free, because
 the hub holds a task until it's collected. Dobby and Sidefleet show the same hub-and-spoke shape
 working with Claude and Codex, and keeping the envelope transport-neutral (§2.3) leaves NATS or
 A2A open for later.
@@ -206,7 +206,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["core/.agent/workflows/pre-build-research.md:11-15 — research order is local canon, primary sources, then reference implementations; no deep-research run is required"]
     research: {engine: tavily, sources: ["the D-1 to D-3 sources answer what blocks the MVP"]}
-    reasoning: "Mat's brief puts simplicity first. Questions that don't block the MVP get researched when their phase starts"
+    reasoning: "The human's brief puts simplicity first. Questions that don't block the MVP get researched when their phase starts"
   - id: A-2
     stage: planning
     question: "How does a task reach an agent CLI?"
@@ -247,7 +247,7 @@ decision_log:
     mandatory: none
     chosen: "Not in the MVP. Bootstrap runs at the member's console; recovery is at the console, or through <member host>'s existing WinRM. Revisit for a member without a console"
     source_tag: Local Canon
-    precedents: ["handoff §2 item 5 — Mat: 'LAN first, possibly without ssh'"]
+    precedents: ["handoff §2 item 5 — the human: 'LAN first, possibly without ssh'"]
     research: {engine: none, sources: []}
     reasoning: "The member's own agent does the setup, so nothing needs a remote way in"
   - id: A-5

@@ -17,7 +17,7 @@ agent: "gpt-6.1-sol"
 > **Review Mode**: `plan`
 > **Verdict**: `changes_required`
 
-**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on Mat's words, and land its result on Mat's word, by connecting the credits engine and the dispatch wrappers to the fleet."
+**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on the human's words, and land its result on the human's word, by connecting the credits engine and the dispatch wrappers to the fleet."
 
 Executing this plan as written would not yet deliver that objective: the installed wrappers reject the proposed paths, Codex rejects the proposed resume, and the live sequence cannot update its kit. The gate's token handling and the result commit identity also need correction.
 
@@ -208,7 +208,7 @@ All seven findings were checked against the code first, and all held.
 | Finding | Correction | Where |
 |---|---|---|
 | F-001 | `PROJECT_ROOT` is filled with `FLEET_HOME`, and briefs move to `receipts/fleet-briefs/<run>/`. No wrapper path check changes. `drop` also deletes the brief folder. New AC-40 runs the real installed wrappers against the member layout, with negatives. | A-13, Named definitions, WP-A2, WP-A3, WP-A4, WP-A5, AC-25, AC-36, AC-40, row 14 |
-| F-002 | `CodexRun` passes `CODEX_MODEL_CLASS` (`isolated_worker`) on start and resume, and the review-class resume guard stays. The binding doesn't exist yet, so P-1 goes to Mat and row 3 is held until it is ruled. D-5's remote Claude route stays on the default reviewer class and never resumes. | Named definitions, WP-A4, AC-29, AC-40, Decision Log closing note, stop condition 12, row 3 |
+| F-002 | `CodexRun` passes `CODEX_MODEL_CLASS` (`isolated_worker`) on start and resume, and the review-class resume guard stays. The binding doesn't exist yet, so P-1 goes to the human and row 3 is held until it is ruled. D-5's remote Claude route stays on the default reviewer class and never resumes. | Named definitions, WP-A4, AC-29, AC-40, Decision Log closing note, stop condition 12, row 3 |
 | F-003 | `runs_present` is replaced by `run_active`, read from the task state. Stopped and finished run folders stay. A rename failing on a held file restores the old kit and exits `kit_busy`. | A-15, WP-A2, Atomicity, AC-14, row 15 |
 | F-004 | `member_kit.py gate` uses the scheduled route's child environment, then scans every file under `receipts/gate/` and `gate-project/` for the token. A hit deletes them and exits `gate_token_leak`, leaving no receipt. | WP-A2, AC-15, stop condition 7 |
 | F-005 | `SNAPSHOT_IDENTITY` is removed. <hub host> uses repo git config, or `identity_missing` if unset. A member reuses the slot HEAD's author. `result` refuses `identity_mismatch` and creates no ref. **Differs from this review's suggestion:** the address stays out of `fleet.py`, because the template is public and git config already holds it. The MVP's `run` route changes too, and row 16 keeps its tests green. | A-14, User Review Required item 7, WP-A5, AC-34, AC-35, the `check_live.py` selftest, row 16 |
@@ -240,11 +240,11 @@ Corrected input SHA-256 values:
 
 ## Corrections Applied — 2026-11-04, addendum: ruling P-1
 
-Mat first ruled P-1 (a), then changed it to member-only after the author reported that the brief behind that ruling was wrong: any edit to `P:/.agent/model-registry.json` makes the 9 projects with a compiled overlay refuse dispatch with `overlay_not_validated` until each re-syncs. A scratch-copy probe confirmed this for zorivest and av-kit, and the re-sync changes a tracked file in 8 of those repos.
+The human first ruled P-1 (a), then changed it to member-only after the author reported that the brief behind that ruling was wrong: any edit to `P:/.agent/model-registry.json` makes the 9 projects with a compiled overlay refuse dispatch with `overlay_not_validated` until each re-syncs. A scratch-copy probe confirmed this for zorivest and av-kit, and the re-sync changes a tracked file in 8 of those repos.
 
 `run_member_setup.py` adds `isolated_worker` on `codex-cli` to the copy it carries to a member, and takes the slug from the reviewer's Codex binding. <hub host>'s file is never written. Changed: User Review Required, `CODEX_MODEL_CLASS`, WP-A1, AC-5, stop condition 12, the Decision Log, and rows 2 and 3. The tracked template is unchanged, because it keeps bindings empty by design (`core/MANIFEST.md:27`).
 
-Token budget extended by Mat to 70,500,000 and recorded in the ledger.
+Token budget extended by the human to 70,500,000 and recorded in the ledger.
 
 Corrected input SHA-256 values:
 
@@ -257,7 +257,7 @@ Corrected input SHA-256 values:
 
 **Workflow:** `/plan-critical-review`, round 2. **Agent:** `gpt-6.1-sol` (the live registry's `independent_reviewer` binding on `codex-cli`). **Verdict:** `changes_required`. **Intent achieved:** `partial`.
 
-**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on Mat's words, and land its result on Mat's word, by connecting the credits engine and the dispatch wrappers to the fleet."
+**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on the human's words, and land its result on the human's word, by connecting the credits engine and the dispatch wrappers to the fleet."
 
 **Scope:** the implementation plan and task file named above, both Corrections Applied sections, both census receipts, and the specified local source contracts. References below use **plan** and **task** for the two target files. This remains an unstarted plan: all 43 task rows are unchecked, and the implementation handoff is absent. Row 0's checkers and later rows' new files are scheduled deliverables, not missing prerequisites.
 
@@ -280,7 +280,7 @@ The fixed `fleet@fleet.invalid` identity is now explicitly removed throughout th
 
 There are two concrete gaps. On <hub host>, nonempty `user.name` and `user.email` are accepted without checking that they are the authorized identity. On a member, plan:576-577 calls the slot's current HEAD "the snapshot <hub host> sent", but an allowed bounded job can create commits in its slot. HEAD then names the job's commit. AC-34 positively requires collection to copy that HEAD's identity, so a job commit with another author makes collection create another wrong-identity commit. `make_snapshot` calls `git commit-tree` before returning a bundle (`fleet.py:1058-1072`); `identity_mismatch` is checked later on <hub host>. It prevents the final result ref but cannot undo the already-created snapshot's author/committer. The check also compares with <hub host>'s current config, which is not necessarily the approved identity.
 
-The fix need not publish Mat's address in `fleet.py`. Resolve and validate the authorized identity before snapshot creation, retain it with the run/base, and use that trusted source on collection. A wrong repo config and a job-created wrong-identity HEAD should both be refused before creating another commit. Retain AC-35's check of job-created history as a separate landing refusal. No real or scratch commit was created during this review.
+The fix need not publish the human's address in `fleet.py`. Resolve and validate the authorized identity before snapshot creation, retain it with the run/base, and use that trusted source on collection. A wrong repo config and a job-created wrong-identity HEAD should both be refused before creating another commit. Retain AC-35's check of job-created history as a separate landing refusal. No real or scratch commit was created during this review.
 
 ### F-008 — Re-gating does not replace the receipt the retained run reads
 
@@ -445,7 +445,7 @@ Corrected input SHA-256 values:
 
 **Workflow:** `/plan-critical-review`. **Agent:** `gpt-6.1-sol`, independently checked against the dispatch registry's `independent_reviewer` / `codex-cli` binding. **Verdict:** `changes_required`. **Intent achieved:** `partial`.
 
-**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on Mat's words, and land its result on Mat's word, by connecting the credits engine and the dispatch wrappers to the fleet."
+**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on the human's words, and land its result on the human's word, by connecting the credits engine and the dispatch wrappers to the fleet."
 
 **Scope:** the two supplied plan files, the round-2 correction section above, both round-3 census receipts, the outline's ruled scope, and the relevant live fleet, test, credits, wrapper, registry, installer and planning contracts. Below, **plan** and **task** identify the implementation plan and task file in `docs/execution/plans/2026-11-04-fleet-agents/`. This is an unstarted execution plan: 43 task rows are unchecked, no task status is in progress, and the implementation handoff is absent. New files scheduled in row 0 and rows 1–18 are not missing prerequisites.
 
@@ -522,7 +522,7 @@ The plan/task SHA-256 values independently match rolling-review:439–440 exactl
 
 ### Verdict and stop
 
-`changes_required` — intent is **partial**. F-005 still permits the wrong authorized identity, and F-010 prevents the specified retained live results from being collected. F-007, F-008 and F-009 hold as described above. This is **round 3 of 3**: stop the bounded review loop here and report the result to Mat; do not schedule another review round or autonomously start corrections. The concrete repairs are an authorized-identity comparison and moving the snapshot identity work before the first live snapshots, without reopening any ruled decision.
+`changes_required` — intent is **partial**. F-005 still permits the wrong authorized identity, and F-010 prevents the specified retained live results from being collected. F-007, F-008 and F-009 hold as described above. This is **round 3 of 3**: stop the bounded review loop here and report the result to the human; do not schedule another review round or autonomously start corrections. The concrete repairs are an authorized-identity comparison and moving the snapshot identity work before the first live snapshots, without reopening any ruled decision.
 
 No hub or <member host> contact, credential/token/member configuration read, product/plan/tool edit, scratch commit or git commit occurred. Only this canonical rolling review was edited. An initial memory-index search accessed a file under the excluded home `.codex` directory; that access was outside the requested scope. None of that file's contents is used or reproduced as review evidence. No file in either excluded project was opened. The AST probe stubbed the profile/version producers and is not a full receipt-gate or future implementation test. The local timestamp skill path named by the workflow is absent; the completion time below was obtained from the clock tool. The user's final JSON contract takes precedence over the workflow's prose timestamp suffix.
 
@@ -530,7 +530,7 @@ No hub or <member host> contact, credential/token/member configuration read, pro
 
 ## Corrections Applied — 2026-11-04, round 3
 
-Applied by the plan's author through `/plan-corrections`, after the round cap's hard stop and Mat's answer: "c, P-2 recommended, 2 more rounds". This section is not an approval. The review text above is unchanged, and only an independent reviewer can set `approved`.
+Applied by the plan's author through `/plan-corrections`, after the round cap's hard stop and the human's answer: "c, P-2 recommended, 2 more rounds". This section is not an approval. The review text above is unchanged, and only an independent reviewer can set `approved`.
 
 Both findings were checked against the code and the task order first, and both held. F-010 came from the author's own F-005 correction.
 
@@ -574,7 +574,7 @@ Row 8's dependency, not a census term, moved from 7 to 7a at task:49.
 
 **Verification:** `lint_task_contract.py` passes with 44 rows. `P:/.agent/model-registry.json` still hashes to `7097dc5bb0f07978...`. No AC was executed, because every correction is plan text and the tests don't exist yet.
 
-**Ledger:** Mat granted 2 more rounds, recorded with their words. 3 of 5 rounds used and 25,959,300 of 70,500,000 tokens spent, and the next round is permitted.
+**Ledger:** The human granted 2 more rounds, recorded with their words. 3 of 5 rounds used and 25,959,300 of 70,500,000 tokens spent, and the next round is permitted.
 
 Corrected input SHA-256 values:
 
@@ -587,7 +587,7 @@ Corrected input SHA-256 values:
 
 **Workflow:** `/plan-critical-review`. **Agent:** `gpt-6.1-sol`, checked against the dispatch registry's `independent_reviewer` / `codex-cli` binding. **Verdict:** `approved`. **Intent achieved:** `yes`, as an implementation plan; no implementation or live acceptance is claimed.
 
-**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on Mat's words, and land its result on Mat's word, by connecting the credits engine and the dispatch wrappers to the fleet."
+**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on the human's words, and land its result on the human's word, by connecting the credits engine and the dispatch wrappers to the fleet."
 
 **Scope:** both supplied plan files; Corrections Applied — 2026-11-04, round 3; the two raw round-4 census receipts; the outline's ruled scope; relevant live fleet producer, caller, tests and harness; credits, dispatch, registry, installer and planning contracts. Below, **plan** and **task** mean the two files in `docs/execution/plans/2026-11-04-fleet-agents/`. All 44 task statuses remain unchecked, `scripts/tests/test_fleet_agent.py` is absent as expected before row 1, and the implementation handoff is absent. This remains plan review.
 
@@ -633,7 +633,7 @@ Both hashes match the author's final input hashes. The surviving `fleet.invalid`
 | Can AC-41's negatives fail? | Yes as specified observables: missing global name/email even with local values; missing effective values when neither source supplies them; different noreply addresses; same address/different name; matching non-noreply values; and an empty repository's `no_head` (plan:633). Commit-object count, refs and hub blobs distinguish a pre-commit refusal from a late refusal or upload. Removing only a local value while the global still supplies it does **not** create a missing-effective-config case; that follows the ruled effective-config definition. These future negatives have not executed. |
 | Global fixture's other effects | The current `new_repo` sets local identity and `commit.gpgsign=false` (`test_fleet_run.py:107–116`); the slot COMMITTER explicitly passes its identity and `--no-gpg-sign` (:712–717). A read-only comparison using `GIT_CONFIG_GLOBAL=/dev/null` observed the real global `commit.gpgsign=true` disappear, while system `core.autocrlf=true`, `core.symlinks=true` and `init.defaultBranch=main` remained. The fixture therefore does not erase system config. No concrete dependency on the removed global signing settings was found in these tests, including the member's slot commit. This does not prove every future fixture implementation or subprocess lifetime is correct. |
 | Rig process lifetime | `rig` is module-scoped and starts its member at `test_fleet_run.py:175–188`; `Member.start` copies the current environment at `fleet_harness.py:103–108`, as does `run_cli` at :40–44. A function-scoped autouse fixture need not precede the module-scoped rig, and a member started while a temporary config is active keeps that path after the parent changes it. The proposed fixture has no implementation yet. Scope/file lifetime and the complete existing run suite, explicitly selected by task:48, are **runtime/unverified**; there is no demonstrated member regression to rate as a blocker. |
-| Row 3 versus first snapshot | Task:43 runs setup and member update through the local helper/WinRM route, not `fleet run`; outline:22 likewise distinguishes the earlier S4U experiments from a fleet task. The existing update script fetches/hash-checks the bootstrap `fleet.py` (`docs/execution/plans/2026-11-03-fleet-mvp/scripts/<member host>-update.ps1:1–13`). Row 8 is the first declared live snapshot route (task:49; plan:322–323). Row 7a is therefore early enough. |
+| Row 3 versus first snapshot | Task:43 runs setup and member update through the local helper/WinRM route, not `fleet run`; outline:22 likewise distinguishes the earlier S4U experiments from a fleet task. The existing update script fetches/hash-checks the bootstrap `fleet.py` (`docs/execution/plans/2026-11-03-fleet-mvp/scripts/member-update.ps1:1–13`). Row 8 is the first declared live snapshot route (task:49; plan:322–323). Row 7a is therefore early enough. |
 | Rows 9–16 and test visibility | Row 1 creates `test_fleet_agent.py` (task:41), so row 7a's `-k ac41` can see its new test. Rows 9–11 then add hub/agent/watch, row 12 creates the retained Claude run, rows 13–14 add Codex and its lock, row 15 creates the Codex run while retaining Claude, and row 16 adds collection/result (task:50–57). These dependencies remain coherent. The pre-existing whole-suite `fleet` author expectation is F-011. |
 | Simplicity and ruled scope | The correction adds one shared identity resolver, reuses the current producer with an optional identity argument, and moves its <hub host> portion earlier. No extra live job, migration, overlay rollout, protected identity store, runner or hub route is introduced. D-1–D-6 remain aligned with outline:49–62,72–77,114–118,149–153,180–185,212–216,241–246. Member-only P-1 stays at plan:237–241,1023–1028. P-2's reference-config limitation is disclosed. No correction silently changes the member-only binding or bounded-job scope. |
 
@@ -663,7 +663,7 @@ Both hashes match the author's final input hashes. The surviving `fleet.invalid`
 
 ### Verdict and stop
 
-`approved` — the corrected plan is capable of delivering the registered intent within the human's ruled limits. F-005 and F-010 are closed **for this unstarted plan**. F-011 is a routine stale expectation to update during row 7a; the environment-binding, conditional-global and fixture-lifetime points above remain explicitly classified implementation verification. They do not establish another delivery blocker or justify additional machinery. Approval does not authorize execution: plan:75–76 and task:15–17 still require Mat's proceed instruction.
+`approved` — the corrected plan is capable of delivering the registered intent within the human's ruled limits. F-005 and F-010 are closed **for this unstarted plan**. F-011 is a routine stale expectation to update during row 7a; the environment-binding, conditional-global and fixture-lifetime points above remain explicitly classified implementation verification. They do not establish another delivery blocker or justify additional machinery. Approval does not authorize execution: plan:75–76 and task:15–17 still require the human's proceed instruction.
 
 Only this canonical review was edited, with earlier body text preserved and frontmatter advanced. No memory search, excluded project/directory access, token/credential/member-config read, hub/<member host> contact, product/plan/tool change, scratch commit or repository commit occurred. The workflow was re-read before closeout. Its local timestamp skill path is absent; the time below comes from the clock tool. The requested v2 final JSON takes precedence over the workflow's older prose-only final shape and its obsolete empty-findings-on-approval clause.
 
@@ -717,7 +717,7 @@ Corrected input SHA-256 values:
 **Agent:** gpt-6.1-sol (live registry: independent_reviewer / codex-cli)  
 **Scope:** implementation-plan.md and task.md in docs/execution/plans/2026-11-04-fleet-agents/, checked against the outline, MVP contracts and the cited live fleet, test, credits, dispatch and packaging sources.
 
-**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on Mat's words, and land its result on Mat's word, by connecting the credits engine and the dispatch wrappers to the fleet."
+**Intent anchor:** "Let <hub host> start a Claude or Codex job on another machine with no sign-in there, talk to it while it runs, get its question back, resume it on the human's words, and land its result on the human's word, by connecting the credits engine and the dispatch wrappers to the fleet."
 
 This is an independent replacement for the unrecorded round-4 dispatch, not another ledger round. The earlier round-4 section was a lead only. This section uses a different heading so it does not add a fifth round to the Markdown recheck counter. Intent achieved: **yes, as an unstarted execution plan**, within the ruled limits.
 
@@ -757,7 +757,7 @@ Current SHA-256 values match the author's corrected inputs:
 | Can the environment case fail? | Yes as a specified oracle: plan:634 checks author and committer on the produced commit, not merely config or env names. A producer that lets inherited wrong values override the checked identity yields different commit metadata and fails that assertion. fleet.py:1065,1071 shows the concrete environment-to-commit route. The current fixed fleet identity would also fail the planned fixture-identity assertion. The new test and corrected producer have not run. |
 | Route skipping snapshot_identity | The current fleet source has one commit-tree producer, make_snapshot at :1071, and cmd_run calls it without an identity argument at :1091. The plan retains that default checked path for run and agent start (plan:591-594; :412). Member collect intentionally supplies the saved base identity instead: it has no member-global identity to compare, and must check the base suffix and every intervening author/committer before creating its snapshot (plan:600-605; AC-34). result separately compares to <hub host>'s checked identity before creating the result ref (plan:607-610; AC-35). No other planned production caller is authorized to inject an arbitrary identity. This is a trusted internal argument, not a guarantee against arbitrary code running as the same user. |
 | Job-created commits | A job can itself run Git without calling snapshot_identity. The existing MVP test deliberately does so through Python at test_fleet_run.py:712-717,749-759; its result stays in the run slot. Plan:650 explicitly preserves that test, while plan:429 tells agent jobs to leave changes uncommitted, and AC-34/35 refuse collection/landing of intervening mismatched commits. The plan controls its snapshot producer and result acceptance; it does not sandbox every possible Git invocation. This existing limit does not justify adding an identity service or new enforcement layer. |
-| Ruled scope and simplicity | D-1 to D-6 remain reflected in plan:297-347,408-460,511-545,655-661 and :803-868. P-1 remains member-only at :237-241,1024,1046-1048; P-2 is :1035,1050-1052. Codex messaging remains between turns, full execution sessions/project hooks remain outside the bounded-job scope, and Mat's words still gate starts/resumes/results. The corrections add an assertion update, a correctly scoped fixture and reuse of the existing env overlay. They neither widen deployment nor silently narrow the accepted A1-A6 work. |
+| Ruled scope and simplicity | D-1 to D-6 remain reflected in plan:297-347,408-460,511-545,655-661 and :803-868. P-1 remains member-only at :237-241,1024,1046-1048; P-2 is :1035,1050-1052. Codex messaging remains between turns, full execution sessions/project hooks remain outside the bounded-job scope, and the human's words still gate starts/resumes/results. The corrections add an assertion update, a correctly scoped fixture and reuse of the existing env overlay. They neither widen deployment nor silently narrow the accepted A1-A6 work. |
 | Prior correction dependencies | A-13 still fits the real wrapper path checks at Invoke-ClaudeDispatch.ps1:698-708 and Invoke-CodexDispatch.ps1:965-995. P-1's non-review worker avoids the real review-class resume refusal at CodexDispatch:595-600. A-15 still matches the copied per-run receipt at Register-CreditsRun.ps1:355-360 and the live version/revision checks at run_gate.py:227-236. These are source observations, not fresh runtime probes. |
 
 ### Checklist Results

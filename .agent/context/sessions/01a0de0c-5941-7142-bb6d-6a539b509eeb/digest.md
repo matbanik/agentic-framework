@@ -46,4 +46,4 @@ See [implementation handoff](../../handoffs/2026-09-26-governance-migration-hand
 ## Provenance
 
 - Conversation ID: `01a0de0c-5941-7142-bb6d-6a539b509eeb`
-- Transcript: `C:/Users/Mat/.codex/sessions/2026/09/26/rollout-2026-09-26T10-09-06-01a0de0c-5941-7142-bb6d-6a539b509eeb.jsonl`
+- Transcript: `C:/Users/<user>/.codex/sessions/2026/09/26/rollout-2026-09-26T10-09-06-01a0de0c-5941-7142-bb6d-6a539b509eeb.jsonl`

@@ -68,14 +68,14 @@ precedent plan `docs/execution/plans/2026-10-20-review-limits-parameters/` ran o
 
 > [!IMPORTANT]
 > **Run parameters:** `manual`. They are disabled in this repo (`policy_missing`). Execution starts
-> only when Mat says proceed after the plan is approved. Mat said proceed on 2026-11-03 and authorized
+> only when the human says proceed after the plan is approved. The human said proceed on 2026-11-03 and authorized
 > one commit: the plan files, on branch `fleet-mvp` (`PC`). No code is committed and nothing is pushed.
 >
 > **Review limits:** `repo` (no `review_limits` block). Plan loop 3 rounds, execution loop 6, from
-> `core/.agent/review-limits.json`. Mat then granted this plan loop 3 more rounds and 21,000,000 more
+> `core/.agent/review-limits.json`. The human then granted this plan loop 3 more rounds and 21,000,000 more
 > tokens (6 rounds, 31,500,000 tokens), recorded with `review_ledger.py continue`.
 >
-> **Mat ruled on D-4, what a `run` task is allowed to do: option A.** A `run`
+> **The human ruled on D-4, what a `run` task is allowed to do: option A.** A `run`
 > task is trusted project execution: the project's own code runs with the member user's files, login
 > and network, as it would if you ran its tests by hand. The fleet can refuse `git`, agent CLIs and
 > shells as a manifest's command, but it cannot stop that code from calling them or from using the
@@ -85,24 +85,24 @@ precedent plan `docs/execution/plans/2026-10-20-review-limits-parameters/` ran o
 > setup fact the fleet does not enforce. The Decision Log has the options under D-4.
 >
 > **D-5 changes how the human rows run.** Every human step is a prepared script in
-> `docs/execution/plans/2026-11-03-fleet-mvp/scripts/`. Mat asks and the agent runs it. The one script that
+> `docs/execution/plans/2026-11-03-fleet-mvp/scripts/`. The human asks and the agent runs it. The one script that
 > needs elevation opens its own elevated window through a UAC prompt, so the IDE stays as it is. <member host> is reached with `the local WinRM helper` over WinRM.
 >
-> **Mat still does three things:**
-> 1. Ask the agent to run `<hub host>-firewall.ps1` and accept its UAC prompt (row 7). The agent's shell is
+> **The human still does three things:**
+> 1. Ask the agent to run `hub-firewall.ps1` and accept its UAC prompt (row 7). The agent's shell is
 >    not elevated, and D-1 scoped the rule to the LAN.
 > 2. Ask the agent to run each <member host> script (rows 8, 11 and 13).
 > 3. Run `approve <member host> <code>` in a real terminal on <hub host> (row 8). `approve` requires a TTY
 >    and the agent's shell has none. This check stays as it is.
 >
-> Execution stops at these rows and resumes when Mat asks or reports them done.
+> Execution stops at these rows and resumes when the human asks or reports them done.
 >
 > **One departure from the handoff rule is flagged.** The handoff says keys are created "by a human at
-> each member's console". Under D-5, `pair` runs over WinRM at Mat's request, so <member host>'s key is created
+> each member's console". Under D-5, `pair` runs over WinRM at the human's request, so <member host>'s key is created
 > by a script and not at the console. The key is still made on <member host>, is never printed, read or copied,
-> and the human approval on <hub host> is unchanged. Mat can reverse this by running `pair` at the console.
+> and the human approval on <hub host> is unchanged. The human can reverse this by running `pair` at the console.
 >
-> **Two files land outside this repo, both untracked and left for Mat to keep or delete:**
+> **Two files land outside this repo, both untracked and left for the human to keep or delete:**
 > `P:/av-kit/.agent/fleet.json` (AC-31) and the firewall records in `the local firewall records folder` (AC-20).
 > Another session is active in av-kit. This plan adds one untracked file there and creates and
 > deletes one temporary non-branch ref per run. It creates no branch or worktree.
@@ -202,7 +202,7 @@ connection, and prints an approval code: the first 12 hex digits of `sha256(key)
 runs `approve <name> <code>`. The code must match the stored hash. `approve` and `revoke` require a
 TTY on stdin and write to the database directly, so no HTTP route can approve anything. The TTY check
 stops an agent running the command by accident. It is not a security boundary against a hostile
-process running as Mat on <hub host>, which is outside this threat model.
+process running as the human on <hub host>, which is outside this threat model.
 
 **Member loop.** One task at a time, on one thread. `hello` reports capabilities, gets a new session
 id and fails any `working` task of this member with `member_restarted`. A new hello invalidates the
@@ -311,8 +311,8 @@ It also has an update section (stop the member, re-fetch, re-check the hash, res
 
 **On <member host> (D-5)** the template is followed by <hub host>'s agent over WinRM, through the prepared scripts,
 and no agent CLI is installed on <member host>, because the MVP has no `agent` tasks: `install-agent-cli` waits
-for P4. Mat's request to run a script is the stop for `firewall-rule` and `run-pair`, and `pair` itself
-enforces the pin, which covers `confirm-fingerprint`. `run-approve` stays with Mat in a real terminal.
+for P4. The human's request to run a script is the stop for `firewall-rule` and `run-pair`, and `pair` itself
+enforces the pin, which covers `confirm-fingerprint`. `run-approve` stays with the human in a real terminal.
 The template itself keeps all five stops for a member set up at its console.
 
 **`publish` and `check`.** `publish --repo PATH` stores `<repo>/.agent/fleet.json` in the hub.
@@ -323,14 +323,14 @@ are missing, exiting `6` if any are.
 
 `the local network notes (lines 145-149)` is the practice here. This plan does not touch the router, so no router
 dump is needed. Reading firewall state needs no elevation, so the agent takes both records. Creating
-the rule does, so it is a prepared script (D-5): Mat asks, the agent runs `docs/execution/plans/2026-11-03-fleet-mvp/scripts/elevate-firewall.ps1`, Mat accepts
-the UAC prompt, and `docs/execution/plans/2026-11-03-fleet-mvp/scripts/<hub host>-firewall.ps1` runs in that elevated window. Its one command is:
+the rule does, so it is a prepared script (D-5): the human asks, the agent runs `docs/execution/plans/2026-11-03-fleet-mvp/scripts/elevate-firewall.ps1`, the human accepts
+the UAC prompt, and `docs/execution/plans/2026-11-03-fleet-mvp/scripts/hub-firewall.ps1` runs in that elevated window. Its one command is:
 
 ```powershell
 New-NetFirewallRule -DisplayName 'Fleet hub 8770' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8770 -RemoteAddress the-LAN-subnet -Profile Private
 ```
 
-To reverse it: `scripts/<hub host>-firewall.ps1 -Remove`.
+To reverse it: `scripts/hub-firewall.ps1 -Remove`.
 
 Each record holds `Get-NetFirewallProfile`; the rule with its address and port filters; and the state
 of the Plex inbound rule and `FPS-SMB-In-TCP`. `check_live.py firewall-before` writes
@@ -338,13 +338,13 @@ of the Plex inbound rule and `FPS-SMB-In-TCP`. `check_live.py firewall-before` w
 `the local firewall record fleet-hub-rule-after` and compares the two.
 
 The agent then starts the hub in a background shell:
-`python .agent/fleet/fleet.py hub --host the-hub-LAN-address`. It ends with that shell, so Mat can also run it
+`python .agent/fleet/fleet.py hub --host the-hub-LAN-address`. It ends with that shell, so the human can also run it
 in a separate terminal. If Windows offers its own firewall prompt for Python, cancel it, since the
 rule already exists.
 
 #### <member host> scripts (D-5)
 
-Each runs on <member host> through `docs/execution/plans/2026-11-03-fleet-mvp/scripts/run_duper.py`, which calls `the local WinRM helper` with
+Each runs on <member host> through `docs/execution/plans/2026-11-03-fleet-mvp/scripts/run_member.py`, which calls `the local WinRM helper` with
 its default login, so no password appears in a script, an argument or a receipt. `pywinrm` is not in
 <hub host>'s Python, so the call is `uv run --no-project --with pywinrm`, which installs nothing globally.
 The WinRM user is `<member host>\<member user>`, whose profile is `C:\Users\<member user>`, so `pair` and `member` share one
@@ -352,12 +352,12 @@ The WinRM user is `<member host>\<member user>`, whose profile is `C:\Users\<mem
 
 | Script | Row | Does |
 |---|---|---|
-| `<member host>-record.ps1` | 8 | Prints log-collector state, firewall profile state and inbound rule count. Runs before and after |
-| `<member host>-python.ps1` | 8 | If Python 3.11 or later is absent, installs it for this user from python.org with no elevation. `winget` is absent on <member host> |
-| `<member host>-pair.ps1` | 8 | Fetches both files, checks the hashes, runs `pair`, and prints only the approval code |
-| `<member host>-member.ps1` | 8, 11, 13 | Creates, starts, restarts, stops or removes the scheduled task `Fleet member`. The task has no trigger, so nothing starts at boot (A-7 stands) and it outlives the WinRM shell that starts it. `ACTION=Remove` reverses it. `run_duper.py` passes values as `KEY=VALUE`, because the remote runner takes a file and no parameters |
-| `<member host>-update.ps1` | 11 | Re-fetches `fleet.py` and checks the hash |
-| `<member host>-tools.ps1` | 13 | Installs what `check --project av-kit` reports missing, for this user |
+| `member-record.ps1` | 8 | Prints log-collector state, firewall profile state and inbound rule count. Runs before and after |
+| `member-python.ps1` | 8 | If Python 3.11 or later is absent, installs it for this user from python.org with no elevation. `winget` is absent on <member host> |
+| `member-pair.ps1` | 8 | Fetches both files, checks the hashes, runs `pair`, and prints only the approval code |
+| `member-task.ps1` | 8, 11, 13 | Creates, starts, restarts, stops or removes the scheduled task `Fleet member`. The task has no trigger, so nothing starts at boot (A-7 stands) and it outlives the WinRM shell that starts it. `ACTION=Remove` reverses it. `run_member.py` passes values as `KEY=VALUE`, because the remote runner takes a file and no parameters |
+| `member-update.ps1` | 11 | Re-fetches `fleet.py` and checks the hash |
+| `member-tools.ps1` | 13 | Installs what `check --project av-kit` reports missing, for this user |
 
 #### Boundary Inventory
 
@@ -374,8 +374,8 @@ The WinRM user is `<member host>\<member user>`, whose profile is `C:\Users\<mem
 | AC-17 | integration | Bootstrap files match the pairing line. Observable: the SHA-256 of the bytes served and the hashes printed by `hub`. Chain: `C-HTTP` to `route_bootstrap`. | Local Canon (A-16) | `/bootstrap/../hub/hub.key`, `/bootstrap/hub.db` and `/bootstrap/orchestrator.key` → `404`, and no response contains the key file's bytes |
 | AC-18 | integration | `publish` then `check --project` reports missing tools. Observable: exit code and JSON. Chain: `C-CLI` to `route_put_project`, `route_get_project`. Publishing is a new `project` message; the latest wins. | Human-approved (outline P2) | A manifest requiring a tool absent from the report → exit `6` naming it. An unknown project → `404`. An invalid manifest → `422 bad_manifest:<reason>` with no new row |
 | AC-19 | unit | Template shape. Observable: the parsed file. Every `BOOTSTRAP_STOPS` id appears as `STOP FOR HUMAN: <id>`. The headings Windows, Linux and macOS exist, and the last two have no steps. `pair` and `approve` appear only after their stop lines. The file has no `P:` path. It has the sentence forbidding the agent from reading `member.json`. | Human-approved (outline P2) | A copy with one stop line removed fails the same checker |
-| AC-20 | integration | Live, on <hub host>: `FIREWALL_RULE` exists, created by `<hub host>-firewall.ps1` when Mat asks (D-5). Observable: the before record (rule absent) and the after record that the checklist names. | Human-approved (D-1, `the local network notes (lines 145-149)`) | `check_live.py firewall` fails if the rule differs from `FIREWALL_RULE`, including remote address `Any` or a profile that includes Public; if more than one rule has that name; if the profile state differs from the before record; or if the Plex inbound rule or `FPS-SMB-In-TCP` is no longer enabled |
-| AC-21 | integration | Live: <member host> (outline P2 done). <hub host>'s agent follows the template over WinRM with the D-5 scripts when Mat asks, Mat runs `approve`, and <hub host>'s `status` lists `<member host>` as approved and online with its capability report, and `send <member host> ping` then `wait` exits `0`. Observable: the JSON receipts, checked by `check_live.py <member host>`. | Human-approved (outline P2) | From <member host>, `curl.exe -k https://the-hub-LAN-address:8770/v1/members` returns `401`. <member host>'s log-collector service state, firewall profile state and inbound rule count are equal before and after, from `<member host>-record.ps1`, and the template opened no port |
+| AC-20 | integration | Live, on <hub host>: `FIREWALL_RULE` exists, created by `hub-firewall.ps1` when the human asks (D-5). Observable: the before record (rule absent) and the after record that the checklist names. | Human-approved (D-1, `the local network notes (lines 145-149)`) | `check_live.py firewall` fails if the rule differs from `FIREWALL_RULE`, including remote address `Any` or a profile that includes Public; if more than one rule has that name; if the profile state differs from the before record; or if the Plex inbound rule or `FPS-SMB-In-TCP` is no longer enabled |
+| AC-21 | integration | Live: <member host> (outline P2 done). <hub host>'s agent follows the template over WinRM with the D-5 scripts when the human asks, the human runs `approve`, and <hub host>'s `status` lists `<member host>` as approved and online with its capability report, and `send <member host> ping` then `wait` exits `0`. Observable: the JSON receipts, checked by `check_live.py member`. | Human-approved (outline P2) | From <member host>, `curl.exe -k https://the-hub-LAN-address:8770/v1/members` returns `401`. <member host>'s log-collector service state, firewall profile state and inbound rule count are equal before and after, from `member-record.ps1`, and the template opened no port |
 
 #### Spec Sufficiency Table
 
@@ -396,7 +396,7 @@ The WinRM user is `<member host>\<member user>`, whose profile is `C:\Users\<mem
 | `core/.agent/fleet.json.template` | new | The manifest template a project copies. AC-22's first test reads it, so it is written here |
 | `scripts/tests/test_fleet_bootstrap.py` | new | AC-16 to AC-19 |
 | `docs/execution/plans/2026-11-03-fleet-mvp/check_live.py` | new | Plan-local verifier for AC-20, AC-21 and AC-31. It reads, and writes only under `$env:RECEIPTS_DIR`, apart from the two firewall records the Firewall checklist names |
-| `docs/execution/plans/2026-11-03-fleet-mvp/scripts/` | new | D-5: `<hub host>-firewall.ps1`, `elevate-firewall.ps1`, `run_duper.py` and the <member host> scripts. Plan-local |
+| `docs/execution/plans/2026-11-03-fleet-mvp/scripts/` | new | D-5: `hub-firewall.ps1`, `elevate-firewall.ps1`, `run_member.py` and the <member host> scripts. Plan-local |
 | `the local firewall record fleet-hub-rule-before`, `the local firewall record fleet-hub-rule-after` | new, outside this repo | The firewall records |
 
 ### WP-3: `run` tasks
@@ -476,7 +476,7 @@ no `agent` task exists in the MVP, and the check does not claim to replace that 
 | AC-28 | integration | Slot properties. Observable: `git` output in the slot. Chain: `C-MEMBER` to `prepare_slot`. After a run: `git remote` is empty, `HEAD` is detached, `git branch --list` shows only the detached `HEAD` line and `refs/heads` is empty, a stale untracked file is removed, and an ignored dependency folder stays. | Human-approved (outline §2.5; `P:/av-kit/AGENTS.md:102`; D-4) | A test script run by an allowed command makes a commit in the slot. After the run, the status message's `body` keys are exactly the result keys and hold no bundle; <hub host>'s `HEAD` and refs are unchanged; and the next run's `HEAD^{tree}` equals its own `refs.tree`, with that commit absent from its history |
 | AC-29 | integration | Timeout and heartbeats. Observable: state, reason, a sentinel, and `last_seen`. Chain: `C-MEMBER` to `execute_run`. | Local Canon (A-7) | A command that starts a child which writes a sentinel after 8 s, run with `--timeout 2`: state `failed`, reason `timeout`, sentinel absent after 10 s, so the child died too. During a run longer than `OFFLINE_AFTER_S` as set for the test, `status` still shows the member online |
 | AC-30 | integration | The environment reaches child processes unchanged. Observable: a value printed by a manifest command. Chain: `C-MEMBER` to `execute_run`. | Human-approved (handoff billing rule) | A sentinel variable set on the member, and `CLAUDECODE` set to a test value in that member's environment, both appear unchanged in the child's output |
-| AC-31 | integration | Live: av-kit on <member host> (outline P3 done). Observable: `wait`'s JSON receipts, checked by `check_live.py av-kit`. The manifest `P:/av-kit/.agent/fleet.json` is uncommitted, so a run that uses it proves that uncommitted files moved. It is ignored through av-kit's `.git/info/exclude` since another session added that line, and it travels under D-8. After `publish`, `<member host>-tools.ps1` runs `check --project av-kit` and installs what it reports missing, and `status` must then show every `requires` tool with a version. Then `setup`, `check-py`, `check-ui` and `check-mcp`, using the registered commands in `P:/av-kit/.agent/docs/commands.md`. Each returns state, `exit_code`, log and `tree`. A nonzero exit is reported, not fixed: this AC is about the fleet, not av-kit being green. | Human-approved (outline P3; A-8) | `check_live.py avkit-tools` fails if a `requires` tool has no version on `<member host>`. `check_live.py av-kit` fails if a result is `rejected`, or lacks `exit_code`, `log` or `tree`; if `tree` differs from the snapshot's; if `git -C P:/av-kit for-each-ref refs/fleet` is non-empty; or if av-kit's branch or worktree list differs from the before record taken in the same row |
+| AC-31 | integration | Live: av-kit on <member host> (outline P3 done). Observable: `wait`'s JSON receipts, checked by `check_live.py av-kit`. The manifest `P:/av-kit/.agent/fleet.json` is uncommitted, so a run that uses it proves that uncommitted files moved. It is ignored through av-kit's `.git/info/exclude` since another session added that line, and it travels under D-8. After `publish`, `member-tools.ps1` runs `check --project av-kit` and installs what it reports missing, and `status` must then show every `requires` tool with a version. Then `setup`, `check-py`, `check-ui` and `check-mcp`, using the registered commands in `P:/av-kit/.agent/docs/commands.md`. Each returns state, `exit_code`, log and `tree`. A nonzero exit is reported, not fixed: this AC is about the fleet, not av-kit being green. | Human-approved (outline P3; A-8) | `check_live.py avkit-tools` fails if a `requires` tool has no version on `<member host>`. `check_live.py av-kit` fails if a result is `rejected`, or lacks `exit_code`, `log` or `tree`; if `tree` differs from the snapshot's; if `git -C P:/av-kit for-each-ref refs/fleet` is non-empty; or if av-kit's branch or worktree list differs from the before record taken in the same row |
 | AC-32 | integration | Package fit. `core/MANIFEST.md` lists the new files. `check_package_gates.py` finds no new `refcheck` or `sanitize --verify` failure against the row-0 baseline, and finds a `test_acNN_*` function for every AC except the live AC-20, AC-21 and AC-31, and this one. The full pytest gate passes. | Local Canon (`scripts/refcheck.py`, `scripts/sanitize.py`) | The checker run against a baseline with one line removed exits nonzero, so a new failure cannot slip through |
 
 #### Spec Sufficiency Table
@@ -503,12 +503,12 @@ no `agent` task exists in the MVP, and the check does not claim to replace that 
 
 ### Stop conditions
 
-Execution stops, and reports to Mat with evidence, on any of these:
+Execution stops, and reports to the human with evidence, on any of these:
 
 1. The row-0 baseline pytest gate is red.
-2. A human row is reached (rows 7, 8, 11 and 13). Mark it `[B]` with a human gate and tell Mat which script to ask for. A script that changes a machine runs only when Mat asks.
+2. A human row is reached (rows 7, 8, 11 and 13). Mark it `[B]` with a human gate and tell the human which script to ask for. A script that changes a machine runs only when the human asks.
 3. A step on <member host> would touch the log collector, turn a firewall profile off or open a port.
-4. `snapshot_secret_risk` fires on av-kit. Report the path. Do not widen `SECRET_PATH_ALLOW` to get past it without Mat's word.
+4. `snapshot_secret_risk` fires on av-kit. Report the path. Do not widen `SECRET_PATH_ALLOW` to get past it without the human's word.
 5. `refs/fleet`, a branch or a worktree in av-kit is left changed by this tool.
 6. Anything would need a commit that lands work or moves a branch, a push, a secret in a message, a change to `CLAUDE_CODE_ENTRYPOINT` or `CLAUDECODE`, or `cswap`. The snapshot's own `git commit-tree` object is not such a commit: it moves no branch and is dropped when its temporary ref is deleted.
 7. A design point turns out not to work on Windows and the fix would add a dependency or a second file. That needs a Decision Brief, not a quiet change.
@@ -526,8 +526,8 @@ Execution stops, and reports to Mat with evidence, on any of these:
 | Autostart, Linux and macOS members (P7) | out-of-scope | — | Human-approved: outline §3 |
 | Discovery, session injection, MCP pull tool, NATS, capability matcher, credits billing | out-of-scope | — | Human-approved: outline §3, "Deliberately left out of the MVP" |
 | Dashboard, long polling, server-sent events | out-of-scope | — | Human-approved: outline §3, "What each MVP phase should not grow into" |
-| Blob retention and cleanup | out-of-scope | — | Human-approved: Mat's 2026-11-03 simplicity rule. At 11 MiB per run the store grows slowly and can be deleted by hand; revisit when disk use shows a need |
-| Fixing the existing `refcheck` and `sanitize` failures | out-of-scope | — | Human-approved: outline §3 scope does not include them. Mat's 2026-11-03 message makes the proposals with stale references "reference material". They are outside P1 to P3, and row 0's baseline records them. The final report lists them for Mat |
+| Blob retention and cleanup | out-of-scope | — | Human-approved: the human's 2026-11-03 simplicity rule. At 11 MiB per run the store grows slowly and can be deleted by hand; revisit when disk use shows a need |
+| Fixing the existing `refcheck` and `sanitize` failures | out-of-scope | — | Human-approved: outline §3 scope does not include them. The human's 2026-11-03 message makes the proposals with stale references "reference material". They are outside P1 to P3, and row 0's baseline records them. The final report lists them for the human |
 | Result bundles from `run` tasks and landing on <hub host> | out-of-scope | — | Human-approved: outline P3 returns exit code, log and tree; outline P4 adds result bundles and landing |
 | Exposing the hub beyond the LAN | out-of-scope | — | Human-approved: D-1 scopes the rule to the LAN |
 
@@ -575,7 +575,7 @@ python docs/execution/plans/2026-11-03-fleet-mvp/check_package_gates.py *> $env:
 ### 4. Live checks, after the human rows
 
 ```powershell
-python docs/execution/plans/2026-11-03-fleet-mvp/check_live.py <member host> *> $env:RECEIPTS_DIR/fleet-live-<member host>.txt; $code=$LASTEXITCODE; Get-Content $env:RECEIPTS_DIR/fleet-live-<member host>.txt -Tail 30; exit $code
+python docs/execution/plans/2026-11-03-fleet-mvp/check_live.py member *> $env:RECEIPTS_DIR/fleet-live-<member host>.txt; $code=$LASTEXITCODE; Get-Content $env:RECEIPTS_DIR/fleet-live-<member host>.txt -Tail 30; exit $code
 ```
 
 ```powershell
@@ -617,7 +617,7 @@ decision_log:
     question: "Who may start an agent job, with what permissions and billing?"
     resolution: human
     class: governance-value
-    chosen: "Orchestrator only, with Mat's words as start_quote; workspace-level permissions; the member's own login; Cursor and agy wait until P5. In this plan: the kind is refused with kind_not_enabled"
+    chosen: "Orchestrator only, with the human's words as start_quote; workspace-level permissions; the member's own login; Cursor and agy wait until P5. In this plan: the kind is refused with kind_not_enabled"
     source_tag: Human-approved
     precedents: ["docs/proposals/2026-11-03-fleet-mvp-outline.md §5 D-2"]
     research: { engine: tavily, sources: ["outline §5 D-2"] }
@@ -642,24 +642,24 @@ decision_log:
     chosen: "A"
     options:
       A: "Treat a run as trusted project execution with the member user's files, login and network. Refuse git, agent CLIs and shells as a manifest's commands. The fleet imports and lands nothing from a run. It does not stop project code from using what that user can reach. No new machinery"
-      B: "A, plus commands come only from a manifest Mat publishes at a terminal, so an agent session cannot add one. One more human step per manifest change. Project code can still call the same tools, so it gains little"
+      B: "A, plus commands come only from a manifest the human publishes at a terminal, so an agent session cannot add one. One more human step per manifest change. Project code can still call the same tools, so it gains little"
       C: "Sandbox the member's runs. The only option that stops project code, but it needs a container or restricted user, which breaks the one-file, stdlib MVP"
     source_tag: Human-approved
     precedents: ["handoff §3 — a message never authorizes a commit, push, merge, tag, release", "docs/proposals/2026-11-03-fleet-mvp-outline.md §2.6", "plan review round 1, F-001"]
     research: { engine: none, sources: [] }
-    reasoning: "The rule's aim is that work reaches Mat's repos only from <hub host>, on Mat's word. Under option A the fleet is never that route, and the member holds no GitHub credential. Running a project's tests means running its code, so no check on the message can bind what that code does. The review asked for a ruling because this is narrower than the rule's wording"
+    reasoning: "The rule's aim is that work reaches the human's repos only from <hub host>, on the human's word. Under option A the fleet is never that route, and the member holds no GitHub credential. Running a project's tests means running its code, so no check on the message can bind what that code does. The review asked for a ruling because this is narrower than the rule's wording"
     human_message_reference: "USER_EXPLICIT 2026-11-03 'both decision recommendations are accepted'"
   - id: D-5
     stage: execution
     question: "How do the human rows run, and how is <member host> reached?"
     resolution: human
     class: two-way
-    chosen: "Each human step is a prepared script that the agent runs when Mat asks, and <hub host>-firewall.ps1, the one that needs elevation, runs in its own elevated window through a UAC prompt. <member host> is reached over WinRM with the local WinRM helper. No agent CLI on <member host> until P4. pair runs over WinRM. approve stays with Mat in a real terminal. The member runs as one named, triggerless scheduled task"
+    chosen: "Each human step is a prepared script that the agent runs when the human asks, and hub-firewall.ps1, the one that needs elevation, runs in its own elevated window through a UAC prompt. <member host> is reached over WinRM with the local WinRM helper. No agent CLI on <member host> until P4. pair runs over WinRM. approve stays with the human in a real terminal. The member runs as one named, triggerless scheduled task"
     source_tag: Human-approved
     precedents: ["the local network notes (lines 145-149) — named, reversible changes on <member host>", "plan A-7 — no autostart", "handoff §3 — keys created by a human at the console: pair over WinRM departs from this, flagged in User Review Required"]
     research: { engine: none, sources: ["C:/Temp/agentic-framework/receipts/<member host>-probe.txt — read-only WinRM probe of <member host>"] }
-    reasoning: "Mat replaced the console steps with scripts the agent runs on request. A process started in a WinRM shell dies with it, so the member needs one named task. A task with no trigger keeps A-7. The WinRM user and the console user differ, so pair and member both run as the WinRM user. A window reload does not elevate Cursor, and a real elevated relaunch would end every other Cursor session, so Mat chose the UAC prompt"
-    human_message_reference: "USER_EXPLICIT 2026-11-03 'check [the local ops folder] on how to access <member host> with winrm / rather than commands prepare script to be run in elevated prompt. I will elevat the IDE and ask you to run them for me.'; USER_EXPLICIT 2026-11-04 'yes use the UAC prompt for <hub host>-firewall.ps1'"
+    reasoning: "The human replaced the console steps with scripts the agent runs on request. A process started in a WinRM shell dies with it, so the member needs one named task. A task with no trigger keeps A-7. The WinRM user and the console user differ, so pair and member both run as the WinRM user. A window reload does not elevate Cursor, and a real elevated relaunch would end every other Cursor session, so the human chose the UAC prompt"
+    human_message_reference: "USER_EXPLICIT 2026-11-03 'check [the local ops folder] on how to access <member host> with winrm / rather than commands prepare script to be run in elevated prompt. I will elevat the IDE and ask you to run them for me.'; USER_EXPLICIT 2026-11-04 'yes use the UAC prompt for hub-firewall.ps1'"
   - id: D-6
     stage: execution
     question: "The row-0 baseline was red in two tests about the Linux install's copy of the lane tests, which this plan had not touched. Stop, or fix them first?"
@@ -673,12 +673,12 @@ decision_log:
     human_message_reference: "USER_EXPLICIT 2026-11-03 answer 'Fix them first' to the red baseline question"
   - id: D-7
     stage: execution
-    question: "Another av-kit session excluded P:/av-kit/.agent/fleet.json from its RC1 commit until Mat decides. What happens to the file?"
+    question: "Another av-kit session excluded P:/av-kit/.agent/fleet.json from its RC1 commit until the human decides. What happens to the file?"
     resolution: human
     class: product-preference
-    chosen: "Keep it local and leave that exclude line through RC1. Commit it as its own small av-kit commit once fleet.py is committed here, on Mat's separate word"
+    chosen: "Keep it local and leave that exclude line through RC1. Commit it as its own small av-kit commit once fleet.py is committed here, on the human's separate word"
     source_tag: Human-approved
-    precedents: ["docs/proposals/2026-11-03-fleet-mvp-outline.md:259 — each project's manifest lives in its repo", "this plan, 'Two files land outside this repo' — left for Mat to keep or delete"]
+    precedents: ["docs/proposals/2026-11-03-fleet-mvp-outline.md:259 — each project's manifest lives in its repo", "this plan, 'Two files land outside this repo' — left for the human to keep or delete"]
     research: { engine: tavily, sources: ["https://git-scm.com/docs/gitignore/2.9.5 — info/exclude is for files specific to one user's workflow", "https://gitbybit.com/gitopedia/best-practices/atomic-commits — commit unrelated changes separately", "https://blog.vincentqiao.com/en/posts/claude-code-settings-intro — shared config is committed, personal overrides are not"] }
     reasoning: "The design puts the manifest in the repo, but today it serves a tool that is not committed and has nothing to do with RC1. Committing it in RC1 mixes unrelated work; deleting it stops av-kit running on the fleet"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'all accepted'"
@@ -692,7 +692,7 @@ decision_log:
     source_tag: Human-approved
     precedents: ["AC-23 — ignored files stay out of the snapshot; this is a narrow exception"]
     research: { engine: tavily, sources: ["https://github.com/superfly/flyctl/issues/2245 — quotes Docker's docs that an ignored Dockerfile is still sent because the daemon needs it; flyctl left it out and failed the same way"] }
-    reasoning: "The member cannot run without the manifest. Refusing at run would force the exclude line out, which risks the file entering the RC1 commit. Sending the manifest in the task needs more code and a <member host> update. The change was made before the ruling and reported to Mat"
+    reasoning: "The member cannot run without the manifest. Refusing at run would force the exclude line out, which risks the file entering the RC1 commit. Sending the manifest in the task needs more code and a <member host> update. The change was made before the ruling and reported to the human"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'all accepted'"
   - id: D-9
     stage: execution
@@ -715,7 +715,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["docs/proposals/2026-11-03-fleet-mvp-outline.md §5 decision_log"]
     research: { engine: none, sources: [] }
-    reasoning: "Mat accepted the outline without reversing any of them"
+    reasoning: "The human accepted the outline without reversing any of them"
   - id: A-9
     stage: planning
     question: "Manifest format: YAML as outline A-5 said, or JSON?"
@@ -835,11 +835,11 @@ decision_log:
     source_tag: Local Canon
     precedents: ["C:/Temp/agentic-framework/fleet-plan/refcheck-baseline.txt and sanitize-baseline.txt — both red before any fleet code exists"]
     research: { engine: none, sources: [] }
-    reasoning: "Requiring green would pull in unrelated repairs. Skipping them would let new breaks through. The red baseline is reported to Mat"
+    reasoning: "Requiring green would pull in unrelated repairs. Skipping them would let new breaks through. The red baseline is reported to the human"
 ```
 
 D-1 to D-9 are ruled. D-5 to D-9 were added during execution, after plan approval, and the execution
-review covers them. A-9 to A-20 passed the obviousness test. Each one is two-way, so Mat can reverse any of them
+review covers them. A-9 to A-20 passed the obviousness test. Each one is two-way, so the human can reverse any of them
 at the plan gate.
 
 ---

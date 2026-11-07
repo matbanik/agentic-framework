@@ -1,10 +1,10 @@
 # Fleet agents: work order and decisions
 
-Status: outline, 2026-11-04. It feeds `/create-plan`. Nothing here is built. Mat accepted all six
+Status: outline, 2026-11-04. It feeds `/create-plan`. Nothing here is built. The human accepted all six
 recommendations in section 4 on 2026-11-04 ("all recommendations are accepted"). Section 4 is the
 second HDP pass, with a precedent sweep and web research for each decision.
 
-Inputs: Mat's 2026-11-04 messages ("Once we have that confirmed you can proceed with the full
+Inputs: the human's 2026-11-04 messages ("Once we have that confirmed you can proceed with the full
 enhacments including retooling of the credit scripts for the fleet"), the fleet MVP plan's Decision
 Log, and the credits and dispatch code. `2026-11-01-remote-hosts.md` is reference only.
 
@@ -14,8 +14,8 @@ Log, and the credits and dispatch code. `2026-11-01-remote-hosts.md` is referenc
 detached scheduled task and answers at once, so it keeps polling. Later short tasks ask for status,
 pass a message, stop the run or resume it, and each one calls a script that already exists. If the
 agent has a question, its run stops and says so. `fleet watch` on <hub host> wakes the orchestrator,
-the orchestrator asks Mat, and Mat's words start the resume. The result comes back as a git bundle
-into a non-branch ref, and it lands on <hub host> only on Mat's word.
+the orchestrator asks the human, and the human's words start the resume. The result comes back as a git bundle
+into a non-branch ref, and it lands on <hub host> only on the human's word.
 
 ## 2. Tested on <member host>, 2026-11-04
 
@@ -47,10 +47,10 @@ meters.
 | # | Builds | Done when |
 |---|---|---|
 | A1 | Scripted member setup: both CLIs, `pwsh`, `uv`, Codex's file store and sandbox setting, recorded CLI versions. `fleet status` reports them | A clean re-run changes nothing, reports both CLIs, and passes a real write test on each |
-| A2 | Credits on a member: `launch.auth: subscription`, an S4U task route, the M-1 gate run per member, one install in the member's home, hooks at user level, the subprocess credential scrub | A credits run on <member host> finishes under the subscription token, started locally, and Mat sees plan usage move with no Console charge |
-| A3 | The `agent` task kind: `start`, `status`, `message`, `stop`, `resume`. One slot per run, kept across resume. The hub requires Mat's quote on `start` and `resume`. `fleet watch` on <hub host> | From <hub host>, a run answers a `query` mid-run, stops on a question, and finishes after a resume |
+| A2 | Credits on a member: `launch.auth: subscription`, an S4U task route, the M-1 gate run per member, one install in the member's home, hooks at user level, the subprocess credential scrub | A credits run on <member host> finishes under the subscription token, started locally, and the human sees plan usage move with no Console charge |
+| A3 | The `agent` task kind: `start`, `status`, `message`, `stop`, `resume`. One slot per run, kept across resume. The hub requires the human's quote on `start` and `resume`. `fleet watch` on <hub host> | From <hub host>, a run answers a `query` mid-run, stops on a question, and finishes after a resume |
 | A4 | Codex through `Invoke-CodexDispatch.ps1`, resume between turns, one Codex job at a time per member. Remote Claude may call it (D-5) | The same job finishes on Codex, and a remote Claude run gets a Codex answer |
-| A5 | Results: a temporary-index snapshot, a bundle to the hub, `refs/fleet/result/<run>` on <hub host>, then the slot is dropped | One result from each CLI lands on Mat's word |
+| A5 | Results: a temporary-index snapshot, a bundle to the hub, `refs/fleet/result/<run>` on <hub host>, then the slot is dropped | One result from each CLI lands on the human's word |
 | A6 | Rules and docs: `bootstrap.md` relabelled, the credits and dispatch skills updated, these rulings recorded | The tests and package gates pass |
 
 Left out: Cursor and Antigravity, member-to-member tasks (outline P6), Linux and macOS, autostart
@@ -69,8 +69,8 @@ Pomera search (Tavily and Exa), then the primary pages directly. Sources are lab
 
 ### D-1: How a member gets its logins   [source-conflict] [planning]   mandatory: [M-2, M-6]
 
-**Recommendation: keep the route just tested, and record it as a ruling for Mat's own account on
-Mat's own machines only.** Mat approves in a browser on <hub host>. A script stores the result over WinRM
+**Recommendation: keep the route just tested, and record it as a ruling for the human's own account on
+the human's own machines only.** The human approves in a browser on <hub host>. A script stores the result over WinRM
 in a file only that user can read, and nothing goes through the hub. Claude's token goes to the
 `claude` process through `-LaunchHook`, with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` so Bash commands
 and hooks don't inherit it. Codex gets a new login per machine, never a copy of <hub host>'s. The
@@ -80,11 +80,11 @@ credential script stays local and out of the public template.
 |---|---|---|---|
 | ✅ Issue on <hub host>, store on the member | — | — | §2; Claude Code authentication and env-var docs; Codex authentication docs |
 | ⚠️ Codex device-code login run on the member | The Codex credential never crosses the LAN, and it's OpenAI's preferred headless route | Beta, needs a ChatGPT security setting turned on, and is untested over WinRM. Claude still needs the token route, so two flows instead of one | Codex authentication docs |
-| ⚠️ Sign in at each member's console, the current rule | Nothing crosses the network, and logins use the OS store | Needs a person at every machine, which Mat ruled out. S4U probably can't read the OS store (untested) | `2026-11-01-remote-hosts.md:330` |
-| ⚠️ API keys on members | Anthropic's terms explicitly allow provisioning keys, and they're easy to reuse and cancel | Billed per token rather than the subscriptions Mat wants used. A stored key silently overrides the token | Anthropic legal page |
+| ⚠️ Sign in at each member's console, the current rule | Nothing crosses the network, and logins use the OS store | Needs a person at every machine, which the human ruled out. S4U probably can't read the OS store (untested) | `2026-11-01-remote-hosts.md:330` |
+| ⚠️ API keys on members | Anthropic's terms explicitly allow provisioning keys, and they're easy to reuse and cancel | Billed per token rather than the subscriptions the human wants used. A stored key silently overrides the token | Anthropic legal page |
 
 **Precedent:** `2026-11-01-remote-hosts.md:330` says "Set up by you at the console, never copied".
-Mat already accepted one departure from that class of rule: plan D-5 pairs over WinRM
+The human already accepted one departure from that class of rule: plan D-5 pairs over WinRM
 (`docs/execution/plans/2026-11-03-fleet-mvp/implementation-plan.md:652-659`). Plan D-2 (`:615-622`)
 says "the member's own login", and this route gives each member its own login, issued from <hub host>.
 GitHub credentials stay off members (`:84`, `:447`), and this ruling doesn't touch that. The credits
@@ -105,7 +105,7 @@ environment, not the file. Reports say `setup-token` has no list or revoke comma
 ([48373](https://github.com/anthropics/claude-code/issues/48373),
 [57400](https://github.com/anthropics/claude-code/issues/57400)), and the console route is
 unconfirmed, so a leaked token may be hard to cancel. Both machines share one plan's limits. If
-Anthropic reads its terms more strictly than I do, the consequence falls on Mat's account.
+Anthropic reads its terms more strictly than I do, the consequence falls on the human's account.
 **If you do not answer:** A1 and A2 stay held, and the test credentials stay on <member host> until
 `fleet_auth.py remove` runs.
 
@@ -115,12 +115,12 @@ Anthropic reads its terms more strictly than I do, the consequence falls on Mat'
 task route and one home install per member. Mid-run messages, `stop-after-row`, stop classes, caps,
 resume and fork then all carry over. The key route stays the default, so <hub host> is unchanged. Budget
 caps still apply, because §2 shows `--max-budget-usd` works on the token. A2's acceptance includes
-Mat checking that plan usage moved and Console balance didn't, which is the only direct billing proof.
+the human checking that plan usage moved and Console balance didn't, which is the only direct billing proof.
 
 | Option | Pros (vs. recommendation) | Cons (vs. recommendation) | Sources |
 |---|---|---|---|
 | ✅ Credits engine, subscription, S4U | — | — | `core/.agent/skills/claude-credits/SKILL.md`; Agent SDK plan article |
-| ⚠️ Dispatch wrappers only | Far less change: no store, gate or hooks | No mid-run messages or stop classes. It rebuilds what Mat asked to reuse | `cli-dispatch/SKILL.md:104-117` |
+| ⚠️ Dispatch wrappers only | Far less change: no store, gate or hooks | No mid-run messages or stop classes. It rebuilds what the human asked to reuse | `cli-dispatch/SKILL.md:104-117` |
 | ⚠️ Credits' no-task route, as a child of the member | No scheduled task or receipt | A member restart kills the run, and the M-1 gate is skipped | `Invoke-ClaudeCredits.ps1:187-191` |
 | ❌ Console API key on members | The credits path as it is today, and Max plans now include monthly API credits | Needs a key on each machine, and spend beyond the included credits bills separately | `SKILL.md:18-24`; Agent SDK plan article |
 
@@ -146,21 +146,21 @@ being cheap, and the key route is still there.
 
 ### D-3: Who starts and resumes, and what happens on a question   [governance-value] [planning]   mandatory: [M-14]
 
-**Recommendation: only the orchestrator, only on Mat's chat words, and a question stops the run.**
+**Recommendation: only the orchestrator, only on the human's chat words, and a question stops the run.**
 Members get `credits_start_policy: agent-on-user-chat` in their own config, and <hub host> stays
 `human-only`. The hub refuses `start` or `resume` with no quote, and the run checks the quote with
 `credits_msg.py authority`. On a question the run ends `STOPPED:decision`, `fleet watch` wakes the
-orchestrator, and it asks Mat. Mat's answer goes in a resume brief, in the same session and slot.
+orchestrator, and it asks the human. The human's answer goes in a resume brief, in the same session and slot.
 
 | Option | Pros (vs. recommendation) | Cons (vs. recommendation) | Sources |
 |---|---|---|---|
-| ✅ Orchestrator, Mat's quote, stop and resume | — | — | Plan D-2; open-tag |
+| ✅ Orchestrator, the human's quote, stop and resume | — | — | Plan D-2; open-tag |
 | ⚠️ The run waits at a live gate for a ruling | Keeps the session running, with no restart cost | The ruling check needs a transcript on <hub host>, so it needs new machinery. A waiting run also holds a slot | `2026-11-01-remote-hosts.md:89-92`; `create-plan.md:809-816` |
-| ❌ `human-only`, typed at a terminal | No agent can start anything | Mat would have to type on the member, or the orchestrator could never start a run | `core/.agent/credits/config.json:5` |
+| ❌ `human-only`, typed at a terminal | No agent can start anything | The human would have to type on the member, or the orchestrator could never start a run | `core/.agent/credits/config.json:5` |
 
 **Precedent:** plan D-2 (`implementation-plan.md:615-622`) and outline
-`2026-11-03-fleet-mvp-outline.md:143-144,158,163`, accepted by Mat, already say orchestrator only with
-Mat's quote. Line 164 records the open issue that a start source can't be verified. Zorivest has
+`2026-11-03-fleet-mvp-outline.md:143-144,158,163`, accepted by the human, already say orchestrator only with
+the human's quote. Line 164 records the open issue that a start source can't be verified. Zorivest has
 already run a credits job as `agent-on-user-chat` with a quote. `2026-11-01-remote-hosts.md:374-375`
 recommends the same policy, and `2026-10-31-fleet-nodes.md:253,660` wanted authority taken from the
 node's own transcript, which a member doesn't have. Nothing checks the quote yet, because `agent`
@@ -218,7 +218,7 @@ that Codex improves Claude's work is mixed. `FORBIDDEN_COMMANDS` stays as it is,
 | Option | Pros (vs. recommendation) | Cons (vs. recommendation) | Sources |
 |---|---|---|---|
 | ✅ Yes, wrapper only, review modes, serialized, on request | — | — | `cli-dispatch/SKILL.md:14`; Codex CI/CD docs |
-| ⚠️ No; review on <hub host> after the result returns | One less path, no second login in play during a run, and <hub host>'s sandbox is stronger | Reviews wait for the result, <hub host> does the work, and the answer to Mat's original question becomes no | §2 |
+| ⚠️ No; review on <hub host> after the result returns | One less path, no second login in play during a run, and <hub host>'s sandbox is stronger | Reviews wait for the result, <hub host> does the work, and the answer to the human's original question becomes no | §2 |
 | ❌ Bare `codex exec` from the run | Nothing to build | Breaks the wrapper-only rule, with no evidence or job limit, and reports warn of recursion and token burn | `cli-dispatch/SKILL.md:14`; codex-bridge |
 
 **Precedent:** `2026-11-01-remote-hosts.md:169-170` planned "the independent review on the host
@@ -241,22 +241,22 @@ work on that member.
 **Recommendation: track a setup script with no hosts or credentials, keep the rest local, and keep
 one typed `approve` line per new machine.** The WinRM connection and the credential script stay local.
 `bootstrap.md` is relabelled so the human steps are browser approvals, the UAC prompt on the first
-machine, and `approve`. This keeps one more step than Mat's "Human should be only needing to login",
-so that conflict is Mat's to settle. I'd keep it because it costs one line per machine, in the same
+machine, and `approve`. This keeps one more step than the human's "Human should be only needing to login",
+so that conflict is the human's to settle. I'd keep it because it costs one line per machine, in the same
 sitting as the sign-in, and it's the one thing stopping an agent from adding a machine to the fleet.
 The two parts can be ruled separately.
 
 | Option | Pros (vs. recommendation) | Cons (vs. recommendation) | Sources |
 |---|---|---|---|
 | ✅ Tracked script; local connection and credentials; typed `approve` | — | — | Plan D-13, D-15, AC-7 |
-| ⚠️ An agent runs `approve` | Matches Mat's words exactly, with no typed step | An agent could admit a machine that then receives work. Removes a tested guard and changes AC-7 | `fleet.py` `approve`; `implementation-plan.md:258` |
+| ⚠️ An agent runs `approve` | Matches the human's words exactly, with no typed step | An agent could admit a machine that then receives work. Removes a tested guard and changes AC-7 | `fleet.py` `approve`; `implementation-plan.md:258` |
 | ⚠️ A pre-approved single-use join key | No typed line per machine, and it's how Tailscale scripts this | New code and a new secret, for a fleet of a few machines. A leaked key admits a machine | Tailscale device approval |
 | ⚠️ Keep all scripts local | Nothing new to publish or maintain | Every new machine starts from an inaccurate template | `bootstrap.md` |
 
 **Precedent:** the plan requires a real terminal for `approve`, and "no HTTP route can approve
 anything" (`implementation-plan.md:95,154,203`, AC-7 at `:258`). Reflection lines 98 and 100 record D-13
 and D-15, which keep addresses and local inputs out of tracked files. Plan D-5 prepared scripts for
-elevation. `2026-11-03-fleet-mvp-outline.md:78` said setup was not an installer script, and Mat
+elevation. `2026-11-03-fleet-mvp-outline.md:78` said setup was not an installer script, and the human
 objected on 2026-11-04.
 **Research:** this search was thin, with three enrollment sources and none on a fleet this small.
 - [Tailscale device approval](https://tailscale.com/kb/1099/device-approval) (authority for that product): an admin approves each device, or generates a key that auto-approves.
@@ -266,7 +266,7 @@ objected on 2026-11-04.
 
 Automated enrollment is normal when a scoped credential backs it, so typed approval is stricter than
 some practice.
-**Reversibility / risk:** publishing is one-way once pushed, and pushing still needs Mat's word.
+**Reversibility / risk:** publishing is one-way once pushed, and pushing still needs the human's word.
 `approve` is two-way, and can be loosened later if the line proves annoying.
 **If you do not answer:** the scripts stay local, `bootstrap.md` is only relabelled, and `approve`
 stays as it is.

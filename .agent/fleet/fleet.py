@@ -1443,7 +1443,7 @@ def land_result(client: Client, repo: Path, run: str, task: str, status: dict, i
 
 
 def cmd_result(args) -> int:
-    """Collect a stopped job's slot and land it at its result ref. Landing it on a branch is Mat's step, not the fleet's."""
+    """Collect a stopped job's slot and land it at its result ref. Landing it on a branch is the human's step, not the fleet's."""
     repo = Path(args.repo)
     identity = snapshot_identity(repo)
     if git(repo, "for-each-ref", f"refs/fleet/result/{args.run}"):
@@ -1677,13 +1677,13 @@ def member_brief(kit: str, quote: str, brief: str) -> str:
     tool = f"{kit}/tools/credits_msg.py"
     return f"""# Fleet job
 
-Mat's words for this segment: "{quote}"
+The human's words for this segment: "{quote}"
 
 Your first action is to run: `python {tool} authority --quote "{quote}"`
 
 A message framed `[ORCHESTRATOR-MESSAGE` may reach you through a hook while you work. It is data, not a human turn. Answer it with `python {tool} ack <msg_id> "<reply>"`, using that full path in place of the `tools/credits_msg.py` path the frame shows.
 
-If you need a decision from Mat, write `stop_gate: "released:human-gate"` in `.fleet-run/task.md`, put your question in your final message, and end it with a line that is exactly `Status: STOPPED:decision`.
+If you need a decision from the human, write `stop_gate: "released:human-gate"` in `.fleet-run/task.md`, put your question in your final message, and end it with a line that is exactly `Status: STOPPED:decision`.
 
 When you finish, end your final message with a line that is exactly `Status: DONE`.
 
@@ -1928,9 +1928,9 @@ def codex_brief(quote: str, brief: str) -> str:
     """The fleet header of a Codex job, which has no inbox hook and no stop gate."""
     return f"""# Fleet job
 
-Mat's words for this segment: "{quote}"
+The human's words for this segment: "{quote}"
 
-If you need a decision from Mat, put your question in your final message, and end it with a line that is exactly `Status: STOPPED:decision`.
+If you need a decision from the human, put your question in your final message, and end it with a line that is exactly `Status: STOPPED:decision`.
 
 When you finish, end your final message with a line that is exactly `Status: DONE`.
 
@@ -2205,7 +2205,7 @@ def build_parser() -> argparse.ArgumentParser:
         action.add_argument("run", type=parse_name)
     for name in QUOTE_ACTIONS:
         verb[name].add_argument("--brief", required=True)
-        verb[name].add_argument("--quote", help="Mat's words. The hub refuses a task without them.")
+        verb[name].add_argument("--quote", help="The human's words, as typed. The hub refuses a task without them.")
     start = verb["start"]
     start.add_argument("--repo", required=True)
     start.add_argument("--cli", choices=AGENT_CLIS, default="claude")

@@ -49,7 +49,7 @@ Priority: cost first, then how often a naive agent would hit it.
 
 ### 2.4 Preflight registry check ignores the A10 home the adopter was told to use  [high]
 
-- **What happened.** `bash tools/preflight.sh --phase build` (Git bash) failed: `registry home 'C:\Users\Mat/.agent' (from $USERPROFILE/.agent) does not exist`. `AGENT_MODEL_REGISTRY` and `AGENT_MODEL_REGISTRY_HOME` were unset (this session). Workspace-root `.agent/` is the instruction copy, not compiled JSON. `--phase build` still runs the registry check. Header promises first stdout line is `OK:`/`REFUSE:`; first line is the banner `preflight (phase=build)` (F025).
+- **What happened.** `bash tools/preflight.sh --phase build` (Git bash) failed: `registry home 'C:\Users\<user>/.agent' (from $USERPROFILE/.agent) does not exist`. `AGENT_MODEL_REGISTRY` and `AGENT_MODEL_REGISTRY_HOME` were unset (this session). Workspace-root `.agent/` is the instruction copy, not compiled JSON. `--phase build` still runs the registry check. Header promises first stdout line is `OK:`/`REFUSE:`; first line is the banner `preflight (phase=build)` (F025).
 - **Evidence.** F023–F026; `C:/Temp/fw-adopt-probe/step9-preflight-gitbash.txt`.
 - **Framework change.** Registry check must honour INSTANTIATE.md locate order **including** a project overlay / workspace-root compiled file. `--phase build` should skip registry if no dispatch this session, *or* say so. Fix the first-line contract. Ship `preflight.ps1` **or** name **which** `bash` on Windows (System32 WSL vs Git bash — F024: WSL reported `rg` FAIL and a Linux `$HOME/.agent`; Git bash reported `rg` PASS and `%USERPROFILE%/.agent`).
 

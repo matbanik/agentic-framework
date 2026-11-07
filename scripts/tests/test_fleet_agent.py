@@ -647,7 +647,7 @@ def agent_body(action: str, cli: str = "claude") -> dict:
         if cli == "claude":
             body.update(segment_cap_usd=5, run_cap_usd=20)
     elif action == "resume":
-        body["brief"] = "Mat's answer."
+        body["brief"] = "The human's answer."
     elif action == "message":
         body.update(message_kind="query", text="Where are you?")
     return body
@@ -751,11 +751,11 @@ def test_ac18_a_secret_shaped_quote_is_refused(agent_hub):
 
 
 def test_ac18_the_quote_is_kept_exactly(agent_hub):
-    env = agent_env("start", start_quote="  Mat's words, as typed. ")
+    env = agent_env("start", start_quote="  The human's words, as typed. ")
     assert post_agent(agent_hub, env) == REFUSED_NOTHING
     with sqlite3.connect(agent_hub.db) as conn:
         stored = conn.execute("SELECT envelope FROM messages WHERE id=?", (env["id"],)).fetchall()
-    assert [json.loads(e)["start_quote"] for e, in stored] == ["  Mat's words, as typed. "]
+    assert [json.loads(e)["start_quote"] for e, in stored] == ["  The human's words, as typed. "]
 
 
 @pytest.mark.parametrize("action", ["exec", "", 5, None, ["start"]])
@@ -1098,7 +1098,7 @@ def test_ac21_the_cli_prints_the_member_status_and_exits_zero(agent_rig):
 
 def test_ac21_register_then_start_with_the_exact_quote(agent_rig):
     agent_rig.run_member()
-    words = "Start the row 12 test job, it's Mat's call."
+    words = "Start the row 12 test job, it's the human's call."
     assert agent_rig.start(quote=words).returncode == 0
     calls = agent_rig.calls()
     assert [c["script"] for c in calls] == ["Register-CreditsRun.ps1", "Start-CreditsRunTask.ps1"]
@@ -1660,7 +1660,7 @@ def test_ac29_the_brief_has_the_header_without_the_claude_parts(agent_rig):
     agent_rig.run_member()
     assert start_codex(agent_rig, quote="Start the Codex job.").returncode == 0
     text = (agent_rig.briefs() / "brief-1.md").read_text(encoding="utf-8")
-    assert 'Mat\'s words for this segment: "Start the Codex job."' in text
+    assert 'The human\'s words for this segment: "Start the Codex job."' in text
     assert BRIEF_TEXT in text
     assert "`Status: DONE`" in text and "`Status: STOPPED:decision`" in text
     assert "Leave your changes uncommitted." in text

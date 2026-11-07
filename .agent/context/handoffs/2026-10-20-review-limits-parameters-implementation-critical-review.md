@@ -146,7 +146,7 @@ The template regression initially failed because nested pytest used an inaccessi
   "exit_code": 1,
   "result": "blocked",
   "tested_state": "HEAD e667fb6 plus supplied working-tree implementation",
-  "output": "125 passed, 37 errors in 55.30s. All 37 errors are fixture setup git commits; independent direct reproduction: No private key found for C:/Users/Mat/.ssh/id_ed25519_signing; fatal: failed to write commit object. The other three targeted files passed."
+  "output": "125 passed, 37 errors in 55.30s. All 37 errors are fixture setup git commits; independent direct reproduction: No private key found for C:/Users/<user>/.ssh/id_ed25519_signing; fatal: failed to write commit object. The other three targeted files passed."
 }
 ```
 

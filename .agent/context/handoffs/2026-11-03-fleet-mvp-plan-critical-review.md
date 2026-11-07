@@ -149,12 +149,12 @@ Ledger note: the wrapper refused to record the first pass above because its mech
 
 | Finding | Correction | Where |
 |---------|------------|-------|
-| F-001 (AC-8) | New named set `FORBIDDEN_COMMANDS`, refused as any argv's first element at `publish`, at `run` and on the member. "A slot cannot push" removed. The boundary now says what holds and what does not: only the result comes back, nothing reaches <hub host> or GitHub, and project code run by an allowed command can still call those tools (`uv run git` included). Recorded as D-4, `Human-decision-required`, with option A written into the plan. Execution cannot start without Mat's ruling (stop condition 9, task row 0). | Named definitions; WP-3 "What `run` is allowed to do"; AC-22, AC-26, AC-28; Decision Log D-4; User Review Required |
+| F-001 (AC-8) | New named set `FORBIDDEN_COMMANDS`, refused as any argv's first element at `publish`, at `run` and on the member. "A slot cannot push" removed. The boundary now says what holds and what does not: only the result comes back, nothing reaches <hub host> or GitHub, and project code run by an allowed command can still call those tools (`uv run git` included). Recorded as D-4, `Human-decision-required`, with option A written into the plan. Execution cannot start without the human's ruling (stop condition 9, task row 0). | Named definitions; WP-3 "What `run` is allowed to do"; AC-22, AC-26, AC-28; Decision Log D-4; User Review Required |
 | F-002 (AC-5) | The server now asserts zero application bytes after the handshake, for `status` and `pair`, with an oracle check using a client that writes a fake key before checking the pin. | AC-5 |
 | F-003 (AC-31) | Old row 12 split. Row 12 writes and publishes the manifest. New human row 13 installs tools on <member host> and restarts the member, proved by new `check_live.py avkit-tools`. Row 14 is the live run. MANIFEST moved to 15, BUILD_PLAN to 16, and references followed. | task.md rows 6, 12-16, H1-1, H1-2, Evidence rules; plan AC-31, stop condition 2, BUILD_PLAN audit, Verification §4 |
 | F-004 (AC-23) | Before-and-after path and SHA-256 listing of every fixture file outside `.git`, including ignored files, with an oracle check that overwrites an untracked file. | AC-23 |
 | F-005 (Low) | Stop condition 6 separates the temporary `commit-tree` object from a commit that lands work or moves a branch. | Stop conditions |
-| F-006 (Low) | `FIREWALL_RULE` defined once. One Firewall checklist holds the command, the reversal, the records, and the Plex and `FPS-SMB-In-TCP` checks. Agent takes the records; Mat runs the one elevated command. | Named definitions; Firewall checklist; AC-20; task row 7 |
+| F-006 (Low) | `FIREWALL_RULE` defined once. One Firewall checklist holds the command, the reversal, the records, and the Plex and `FPS-SMB-In-TCP` checks. Agent takes the records; the human runs the one elevated command. | Named definitions; Firewall checklist; AC-20; task row 7 |
 | Note: AC-9 | Stopped-member fixture ages past a short `--offline-after` before expecting exit 5. | AC-9 |
 | Note: `killpg` | POSIX branch removed until P7. | WP-3 run text |
 | Note: member death | Stated limitation: a child can outlive a closed member; the restarted member does not look for it, and the human checks. | WP-1 member text |
@@ -198,7 +198,7 @@ All findings have **High confidence**. Short plan/task paths resolve inside `doc
 
 | # | Severity | Blocking | Kind | Finding | File:Line | Recommendation | Status |
 |---|---|---|---|---|---|---|---|
-| F-001 | High | yes | behavior | **D-4 option A still promises a boundary the design does not provide.** It says nothing a run does reaches <hub host> or GitHub, and reasons that these are kept out of reach. The actual chain is accepted `run` → `execute_run` → project code with the member user's rights and unchanged environment. No network restriction appears anywhere in that chain. An absent `origin` and absent GitHub/signing credentials do not prevent outbound requests or use of any writable network destination already available to that user. An allowed Python program can open a socket; it can also send arbitrary bytes through the member's existing hub connection. AC-28's exact result keys and unchanged <hub host> HEAD/refs establish absence of fleet-managed landing, not confinement of the child or its network effects. A local child-process probe confirmed outbound bytes with `shell=False` and the unchanged environment; it did not test <member host> or establish a successful push. **Violates AC-28's D-4-backed boundary and the binding handoff section 3 authority constraint as represented to the human.** This carries the unresolved assurance from F-001; it does not re-demand prevention of the local commits the corrected limitation explicitly admits. | `implementation-plan.md:80`, `:389`, `:401-410`, `:433`, `:603-609` | State option A as trusted project execution with the member user's filesystem, login and network access; promise only that the fleet does not import or land its changes. Remove the claims that <hub host>/GitHub are unreachable. Mat must decide whether that accurately stated trust boundary is acceptable, or whether stronger isolation is required. A stated limitation suffices for the MVP; this finding does not require a sandbox or another mechanism. | open |
+| F-001 | High | yes | behavior | **D-4 option A still promises a boundary the design does not provide.** It says nothing a run does reaches <hub host> or GitHub, and reasons that these are kept out of reach. The actual chain is accepted `run` → `execute_run` → project code with the member user's rights and unchanged environment. No network restriction appears anywhere in that chain. An absent `origin` and absent GitHub/signing credentials do not prevent outbound requests or use of any writable network destination already available to that user. An allowed Python program can open a socket; it can also send arbitrary bytes through the member's existing hub connection. AC-28's exact result keys and unchanged <hub host> HEAD/refs establish absence of fleet-managed landing, not confinement of the child or its network effects. A local child-process probe confirmed outbound bytes with `shell=False` and the unchanged environment; it did not test <member host> or establish a successful push. **Violates AC-28's D-4-backed boundary and the binding handoff section 3 authority constraint as represented to the human.** This carries the unresolved assurance from F-001; it does not re-demand prevention of the local commits the corrected limitation explicitly admits. | `implementation-plan.md:80`, `:389`, `:401-410`, `:433`, `:603-609` | State option A as trusted project execution with the member user's filesystem, login and network access; promise only that the fleet does not import or land its changes. Remove the claims that <hub host>/GitHub are unreachable. The human must decide whether that accurately stated trust boundary is acceptable, or whether stronger isolation is required. A stated limitation suffices for the MVP; this finding does not require a sandbox or another mechanism. | open |
 | F-007 | Low | no | clerical | **AC-22's template prerequisite is assigned to a later row.** Row 5 runs the AC-22 tests, whose positive contract reads the filled `core/.agent/fleet.json.template`; row 10 first creates that template. The file is a planned output, so its present absence is expected. This is a scheduling correction, not a missing-product finding. | `task.md:45`, `:50`; `implementation-plan.md:427` | Move creation of the existing manifest template into row 5 alongside its validator and AC-22 tests. | open |
 | F-008 | Low | no | clerical | **The correction census log does not disposition every receipt hit.** All 27 receipts are untruncated, and all 71 hit lines match the current plan/task. However, the `SHA-256` receipt includes plan lines 184, 281, 338, 696 and 772 in addition to AC-23 at 428; the log dispositions only the SHA-256 hit at AC-23. Those other five hits have no disposition. The protocol's procedural refusal expressly applies on round 2+, whereas this is ledger round 1; this note does not block or replace the substantive review. Subject: `review-scaffolding`. | This review's correction log:169-170; `census-f004-new-sha.txt` | Append `confirmed-consistent` dispositions for those five `implementation-plan.md:<line>` hits and explicitly enumerate the remaining grouped hits so the next resubmission has a complete per-hit record. Preserve the raw receipts. | open |
 
@@ -281,7 +281,7 @@ This assesses the proposed tests, not completed fleet behavior.
 
 ### Verdict
 
-**changes_required** — one High blocking finding, F-001, and two Low nonblocking notes, F-007/F-008. D-4 may remain queued for Mat after review, but its options must accurately describe what acceptance grants. Mat alone can settle whether trusted, unsandboxed execution with ambient member access is acceptable. No additional security machinery is prescribed.
+**changes_required** — one High blocking finding, F-001, and two Low nonblocking notes, F-007/F-008. D-4 may remain queued for the human after review, but its options must accurately describe what acceptance grants. The human alone can settle whether trusted, unsandboxed execution with ambient member access is acceptable. No additional security machinery is prescribed.
 
 Follow-up is `/plan-corrections` for the inaccurate assurance and the two small notes. This review stops here and does not perform corrections or begin execution.
 
@@ -303,7 +303,7 @@ Applied by the plan author to the findings in the pass above. Documents only. Ve
 
 | Finding | Correction | Where |
 |---------|------------|-------|
-| F-001 (AC-28) | Option A now reads as trusted project execution with the member user's files, login and network. The claims that nothing reaches <hub host> or GitHub are gone. The fleet promises only that no message can ask for a commit or push and that it imports and lands nothing. The absence of GitHub credentials is stated as a setup fact the fleet does not check. Still D-4, pending Mat's ruling. | User Review Required; WP-3 "What `run` is allowed to do"; Decision Log D-4 |
+| F-001 (AC-28) | Option A now reads as trusted project execution with the member user's files, login and network. The claims that nothing reaches <hub host> or GitHub are gone. The fleet promises only that no message can ask for a commit or push and that it imports and lands nothing. The absence of GitHub credentials is stated as a setup fact the fleet does not check. Still D-4, pending the human's ruling. | User Review Required; WP-3 "What `run` is allowed to do"; Decision Log D-4 |
 | F-007 (Low) | `core/.agent/fleet.json.template` moved into WP-2 and task row 5, ahead of AC-22's first test. | WP-2 and WP-3 file tables; Work Packages table; task rows 5, 10 |
 | F-008 (Low) | Every hit in the first census is dispositioned in the table below, by receipt, with line numbers as they stood in those receipts. | This section |
 
@@ -346,13 +346,13 @@ Verification: `python core/tools/lint_task_contract.py --task docs/execution/pla
 
 ## Corrections Applied, third pass (2026-11-03)
 
-Applied by the plan author after Mat's message, verbatim: "tripple the token budget and add 3 more rounds / both decision recommendations are accepted". Documents only. Verdict stays `corrections_applied`, not an approval.
+Applied by the plan author after the human's message, verbatim: "tripple the token budget and add 3 more rounds / both decision recommendations are accepted". Documents only. Verdict stays `corrections_applied`, not an approval.
 
 | Change | Where |
 |--------|-------|
-| D-4 is `Human-approved`, option A, with Mat's message as its reference. "Recommended" and the pending wording are removed; the substance of option A is unchanged. | Decision Log D-4; User Review Required; Spec Sufficiency row; closing Decision Log paragraph |
+| D-4 is `Human-approved`, option A, with the human's message as its reference. "Recommended" and the pending wording are removed; the substance of option A is unchanged. | Decision Log D-4; User Review Required; Spec Sufficiency row; closing Decision Log paragraph |
 | The wait for the ruling is removed: stop condition 9 and the first sentence of task row 0. | Stop conditions; task row 0 |
-| The review limits line records the grant: 6 plan rounds, 31,500,000 tokens, from `review_ledger.py continue` by Mat. | User Review Required |
+| The review limits line records the grant: 6 plan rounds, 31,500,000 tokens, from `review_ledger.py continue` by the human. | User Review Required |
 
 Blast-radius census: 3 values changed, 9 sweeps, receipts in `C:/Temp/agentic-framework/receipts/census-fleet-r3/`.
 
@@ -377,7 +377,7 @@ Verification: `python core/tools/lint_task_contract.py --task docs/execution/pla
 
 "Build the MVP of a stdlib-only hub on <hub host> and a pull-only member so that a <hub host> session can run a project's checks on its uncommitted tree on <member host> and get back the exit code, log and tree id, with authority enforced by the hub."
 
-Executing this plan would deliver that objective within Mat's accepted D-4 option A. This approves an unstarted plan; it is not evidence of implemented behavior or permission to begin execution.
+Executing this plan would deliver that objective within the human's accepted D-4 option A. This approves an unstarted plan; it is not evidence of implemented behavior or permission to begin execution.
 
 ### Findings
 
@@ -394,12 +394,12 @@ References below use `implementation-plan.md` and `task.md` in `docs/execution/p
 
 | Earlier finding | Independently verified correction | Status |
 |---|---|---|
-| F-001 — execution authority / inaccurate D-4 assurance | Plan:77-84 and :399-417 explicitly admit ambient filesystem, login and network access, indirect Git/agent invocation, and absence of enforcement of credential absence. D-4:599-613 records Mat's accepted option A. AC-22/26 check forbidden first arguments at the real boundaries; AC-28 tests absence of fleet-managed result landing. The obsolete ruling stop is removed from the stop list and task row 0. No sandbox is required or implied. | fixed |
+| F-001 — execution authority / inaccurate D-4 assurance | Plan:77-84 and :399-417 explicitly admit ambient filesystem, login and network access, indirect Git/agent invocation, and absence of enforcement of credential absence. D-4:599-613 records the human's accepted option A. AC-22/26 check forbidden first arguments at the real boundaries; AC-28 tests absence of fleet-managed result landing. The obsolete ruling stop is removed from the stop list and task row 0. No sandbox is required or implied. | fixed |
 | F-002 — pin oracle | AC-5, plan:247, observes every post-handshake application byte for both `status` and `pair`. Its deliberately premature fake-key write must fail that same oracle. The shared `hub_request` chain checks the pin before writing a request. This addresses partial headers as well as complete requests. | fixed |
 | F-003 — av-kit tools before live run | Task:52-54 publish the manifest, stop for <member host>'s project-tool installation and member restart, verify fresh reported tool versions, then run setup/checks. AC-31 at plan:441 and H1-2 at task:59 follow this order. | fixed |
 | F-004 — snapshot content preservation | AC-23, plan:433, compares path/content SHA-256 identities including ignored files, alongside the real index, HEAD, porcelain, branch/worktree lists and fleet refs. Its content-corruption oracle distinguishes unchanged porcelain from unchanged contents. The forced bundle failure tests ref cleanup. | fixed |
 | F-005 — snapshot commit vs stop condition | Plan:475 expressly permits the temporary `commit-tree` object without granting landing, branch movement or push authority. | fixed |
-| F-006 — firewall checklist | Named policy at plan:130; executable creation/reversal and associated address/port filters, profile and Plex/SMB observations at :307-326; AC-20 at :343; task row 7 at task:47. Mat performs the elevated change; records precede and follow it. | fixed |
+| F-006 — firewall checklist | Named policy at plan:130; executable creation/reversal and associated address/port filters, profile and Plex/SMB observations at :307-326; AC-20 at :343; task row 7 at task:47. The human performs the elevated change; records precede and follow it. | fixed |
 | F-007 — manifest-template order | Plan:361 and task:45 create the template in WP-2 before AC-22's positive test. WP-3 adds the remaining run tests. | fixed |
 | F-008 — incomplete census dispositions | The second-pass log inventories all 71 original receipt hits by file/line and disposition. An independent set comparison found no missing or excess dispositions across all 27 original receipts. The second- and third-pass receipts and logs also cover all their hits. | fixed |
 
@@ -429,12 +429,12 @@ The offline fixture ages past its configured offline threshold (AC-9); POSIX tim
 | AC-1-4 | Invalid envelopes, exhaustive/unknown state pairs, direct SQL mutations and mutated source can fail their respective assertions. These are specifications for future tests, not tests run in this review. |
 | AC-5-8 | Wrong-pin byte capture includes an adverse oracle check. Missing/wrong/pending/revoked credentials, non-TTY/wrong-code approvals, duplicate names/capacity and prohibited senders/kinds/identities have concrete refusal observations. A member cannot submit work through the named hub task route; no approval HTTP route exists. |
 | AC-9-15 | Real hub/member subprocesses, concurrent/repeated claims, conflicting/idempotent statuses, offline/restart/stale-session conditions, secret-pattern inputs, stalled handshakes and oversized JSON can falsify the contracts. The transaction mechanism covers the relevant read-then-write decisions. |
-| AC-16-21 | Route enumeration includes every non-open route; traversal probes and served-byte hashes observe bootstrap boundaries. Missing tools, removed stop lines, malformed firewall records and live unauthorized access have named oracles. Human console/elevation/process-start steps are explicit and executable, with the row blocked until Mat reports completion. |
+| AC-16-21 | Route enumeration includes every non-open route; traversal probes and served-byte hashes observe bootstrap boundaries. Missing tools, removed stop lines, malformed firewall records and live unauthorized access have named oracles. Human console/elevation/process-start steps are explicit and executable, with the row blocked until the human reports completion. |
 | AC-22-24 | Malformed and forbidden manifests fail validation at publish/run/member boundaries. The snapshot fixture observes both what moved and what remained, including ignored contents, index and refs. Secret-path refusal occurs before uploads. Secret-path patterns are a likely-secret filter, not general credential discovery. |
 | AC-25-28 | Real marker/log/tree round-trip, nonzero exit, stop-on-first-failure, refusal sentinels, blob hash/size/access checks and detached/remote-free slot observations can fail. AC-28 establishes that the fleet does not return/import a slot commit; D-4 explicitly admits arbitrary effects of trusted project code. |
 | AC-29-32 | A delayed child sentinel tests timeout tree-killing; heartbeat freshness and environment canaries test their actual observables. Live av-kit checks reject pre-execution/malformed/wrong-tree results, while ordinary project-check failures may be returned. New-failure baseline mutation can fail package comparison; AC-name discovery alone is not treated as behavioral proof. |
 
-The no-commit/no-push assertion is read at the scope Mat accepted: no protocol operation grants either, and the fleet does not land a run's changes. Project code can invoke Git, a signed-in CLI or the network under D-4. The plan states that limitation consistently. This review does not reopen the ruling.
+The no-commit/no-push assertion is read at the scope the human accepted: no protocol operation grants either, and the fleet does not land a run's changes. Project code can invoke Git, a signed-in CLI or the network under D-4. The plan states that limitation consistently. This review does not reopen the ruling.
 
 ### Commands and Durable Evidence
 
@@ -467,7 +467,7 @@ Runtime behavior remains unverified because fleet code does not exist yet. Trust
 
 ### Verdict and Follow-up
 
-**approved** — the plan would deliver the registered P1-P3 objective under the accepted rulings. There are no open findings and no unresolved human design decision. Execution still waits for Mat's explicit proceed instruction, then pauses at the specified human rows. This review stops here.
+**approved** — the plan would deliver the registered P1-P3 objective under the accepted rulings. There are no open findings and no unresolved human design decision. Execution still waits for the human's explicit proceed instruction, then pauses at the specified human rows. This review stops here.
 
 **Canonical output:** `P:/agentic-framework/.agent/context/handoffs/2026-11-03-fleet-mvp-plan-critical-review.md`.
 

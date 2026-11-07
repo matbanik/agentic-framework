@@ -19,7 +19,7 @@ template_version: "2.4"
 ## Goal
 
 <hub host> should be able to start a Claude or Codex job on another machine, talk to it while it runs, get
-its question back, resume it with Mat's answer, and land its result, with no sign-in on that machine.
+its question back, resume it with the human's answer, and land its result, with no sign-in on that machine.
 
 The fleet MVP already moves code and runs named commands. The credits engine already runs Claude
 with mid-run messages, stop classes, budget caps and resume, and `Invoke-CodexDispatch.ps1` already
@@ -28,8 +28,8 @@ the hub. The member starts a detached scheduled task and answers at once, so it 
 short tasks call scripts that already exist.
 
 It is done when, from <hub host>, a Claude run on <member host> answers a mid-run `query`, stops on a question,
-finishes after a resume on Mat's words, the same job finishes on Codex, a remote Claude run gets a Codex
-answer, and one result from each CLI lands on <hub host> on Mat's word.
+finishes after a resume on the human's words, the same job finishes on Codex, a remote Claude run gets a Codex
+answer, and one result from each CLI lands on <hub host> on the human's word.
 
 ## Context Tool Decision
 
@@ -73,14 +73,14 @@ precedent plan `docs/execution/plans/2026-11-03-fleet-mvp/` ran on the main tree
 
 > [!IMPORTANT]
 > **Run parameters:** `manual`. They are disabled in this repo (`policy_missing`). Execution starts only
-> when Mat says proceed after the plan is approved. Every commit needs Mat's word, and nothing is pushed.
+> when the human says proceed after the plan is approved. Every commit needs the human's word, and nothing is pushed.
 >
 > **Review limits:** `repo` (no `review_limits` block). Plan loop 3 rounds and 10,500,000 tokens,
 > execution loop 6 rounds and 21,000,000 tokens, from `core/.agent/review-limits.json`.
 >
-> **Rows that change <member host> run when Mat asks.** They are rows 3, 8, 12, 15 and 17. Mat can name them all
-> in one message when saying proceed. Live starts and resumes use Mat's own words as the quote, so rows 12,
-> 15 and 17 need those words. Row 8 also needs Mat to read the plan usage meter and the Console balance.
+> **Rows that change <member host> run when the human asks.** They are rows 3, 8, 12, 15 and 17. The human can name them all
+> in one message when saying proceed. Live starts and resumes use the human's own words as the quote, so rows 12,
+> 15 and 17 need those words. Row 8 also needs the human to read the plan usage meter and the Console balance.
 >
 > **Eight things planning found that the rulings did not cover. Each is reversible, and each can be
 > overruled here:**
@@ -136,7 +136,7 @@ precedent plan `docs/execution/plans/2026-11-03-fleet-mvp/` ran on the main tree
 >   and agent CLIs by first word, and that is all it can do).
 > - A Codex job can still run bare `codex exec` inside its sandbox, which the job lock doesn't see (AC-31).
 > - The result snapshot's secret check reads paths, not file contents (AC-34). This is why a result lands
->   only on Mat's word, into a non-branch ref.
+>   only on the human's word, into a non-branch ref.
 >
 > **Existing tests this plan changes, by name:**
 >
@@ -149,8 +149,8 @@ precedent plan `docs/execution/plans/2026-11-03-fleet-mvp/` ran on the main tree
 > - The `Interactive` pins at `Register-CreditsRun.Tests.ps1:256,268` and `CreditsTaskReadback.Tests.ps1:18,60`
 >   are unchanged (D-2). The member route gets its own cases.
 >
-> **D-1 departs from a handoff rule, and Mat ruled on it.** "Logins and keys are created by a human at each
-> member's console, never copied" gives way for Mat's own account on Mat's own machines only. "No secrets
+> **D-1 departs from a handoff rule, and the human ruled on it.** "Logins and keys are created by a human at each
+> member's console, never copied" gives way for the human's own account on the human's own machines only. "No secrets
 > in a message or a brief" stands: credentials never go through the hub, and the hub log is permanent.
 
 ---
@@ -241,7 +241,7 @@ a bump on <hub host>. It stops if that reviewer binding is missing. A member has
 different hash refuses nothing. `setup-report.json` records the copy's `isolated_worker` slug on `codex-cli`.
 
 Each step tests and then acts: install `claude`, `codex`, `pwsh` and `uv` if missing, from the URLs already
-used by the local `<member host>-agents.ps1` and `<member host>-tools.ps1`; set Codex's `cli_auth_credentials_store="file"` and
+used by the local `member-agents.ps1` and `member-tools.ps1`; set Codex's `cli_auth_credentials_store="file"` and
 `windows.sandbox`; run a real write test of each CLI under a one-shot S4U task; write
 `setup-report.json` with `changed`, the versions, `sandbox`, `elevated_tried` and each write test's result. It
 never reads `auth.json` or a token's value into its own output, and it never parses `auth.json`
@@ -282,7 +282,7 @@ the way a Codex job runs, and its failure exits `1` with `codex_no_write`.
 | What setup installs and what's published | Human-approved | Outline §3 A1, D-6 |
 | Sandbox selection | Human-approved | D-4 |
 | How `elevated` gets its setup | Research-backed | A-8: `codex sandbox --help` and the Codex Windows doc name no setup command |
-| Install URLs | Local Canon | The local `<member host>-agents.ps1` and `<member host>-tools.ps1` that ran on <member host> |
+| Install URLs | Local Canon | The local `member-agents.ps1` and `member-tools.ps1` that ran on <member host> |
 
 #### Files Modified
 
@@ -374,7 +374,7 @@ publish` and `fleet.py run <member host> kit-install`, so the kit moves by bundl
 | AC-13 | integration | Resume on this route. Chain: `Start-CreditsRun.ps1` → `Invoke-ClaudeCredits.ps1 -Subscription -Resume <source>` → `-LaunchHook` → stub `claude`. Observable: the stub's argv and env names. A resumed launch gets the token and the scrub. | Human-approved (D-1, D-3) | With no key file it still launches on this route. Without `-Subscription`, a missing key file still stops with `key file not found` |
 | AC-14 | integration | `member_kit.py install`. Chain: `C-KIT` from `main`, with `FLEET_HOME` and `CLAUDE_CONFIG_DIR` in a temp folder. Observable: the kit's files, `config.json`, `settings.json` and exit code. No placeholder remains, the filled project root is `FLEET_HOME`, the policy is `agent-on-user-chat`, the task path is `\Fleet\Credits\`, and the merge keeps other keys. | Human-approved (D-3, outline §3 A2) | A run's task `Running`, by a `pwsh` shim, gives `run_active` and leaves `kit/` byte-identical. `\Fleet\Credits\Monitor` running doesn't block. A retained stopped run folder doesn't block: the install succeeds and the folder is intact. A failing `--verify` leaves the old `kit/`. A rename failing on a held file restores the old `kit/` and gives `kit_busy`. A second install adds no duplicate hook. The real `~/.claude/settings.json` is untouched, by its hash |
 | AC-15 | integration | `member_kit.py gate`. Chain: `C-KIT` with a stub `run_gate.py` and a fake token. Observable: stub's env names, stdout, exit code, and every file under `receipts/gate/` and `gate-project/`. Present: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. Absent: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, with both set in the parent. A clean stub leaves the receipt and exits 0. | Human-approved (D-1, D-2) | A missing or empty token file exits non-zero with `token_missing`. A stub that writes the fake token into `gate-result.json` exits non-zero with `gate_token_leak`, no receipt is left, and no persisted file holds the value. A stub that echoes the token has it redacted in the output |
-| AC-16 | integration | **Live, human row 8.** On <member host>: install, gate, then a credits run started locally under S4U with the subscription token, finishing with `Status: DONE`, a hook firing under the scrub (an `info` message is acknowledged), and `--max-budget-usd` in the argv. P-3 replaces Mat's plan usage and Console readings with Mat's ruling and a stream test of the token. Observable: `check_live.py credits`. | Human-approved (D-2, outline §3 A2 done-when) | `--selftest` feeds a view with no acknowledged message, and one with `auth_mode: api_key_file`, and each must fail. If Mat sees a Console charge, stop condition 3 applies |
+| AC-16 | integration | **Live, human row 8.** On <member host>: install, gate, then a credits run started locally under S4U with the subscription token, finishing with `Status: DONE`, a hook firing under the scrub (an `info` message is acknowledged), and `--max-budget-usd` in the argv. P-3 replaces the human's plan usage and Console readings with the human's ruling and a stream test of the token. Observable: `check_live.py credits`. | Human-approved (D-2, outline §3 A2 done-when) | `--selftest` feeds a view with no acknowledged message, and one with `auth_mode: api_key_file`, and each must fail. If the human sees a Console charge, stop condition 3 applies |
 
 #### Spec Sufficiency Table
 
@@ -427,7 +427,7 @@ token file). Then:
    The commit it received is written to `agent/<run>/base`, outside the slot.
 2. Add `.fleet-run/` to the slot's `.git/info/exclude`, so a snapshot's `git add -A` skips it.
 3. Write `.fleet-run/task.md` with `stop_gate: "armed"` and one open row, and
-   `receipts/fleet-briefs/<run>/brief-1.md`: a fleet header, then the orchestrator's brief. The header gives Mat's words, makes `python <kit>/tools/credits_msg.py authority --quote
+   `receipts/fleet-briefs/<run>/brief-1.md`: a fleet header, then the orchestrator's brief. The header gives the human's words, makes `python <kit>/tools/credits_msg.py authority --quote
    "<words>"` the first action, and says: on a question, write `stop_gate: "released:human-gate"` and end
    `Status: STOPPED:decision`; on finishing, end `Status: DONE`. It also says to leave changes uncommitted, because `collect` makes the commit. Paths
    use forward slashes, for Git Bash.
@@ -459,7 +459,7 @@ again with `reason: output_withheld`.
 
 **`fleet watch <member> <run>`.** Sends `status` every `WATCH_POLL_S`, prints one JSON line when `run_state` isn't
 `running`, and exits: `0` done, `7` stopped, `1` unknown, `3` rejected, `5` member offline. The orchestrator runs it
-in a background shell, whose exit wakes the orchestrator. The orchestrator asks Mat, and Mat's words start the
+in a background shell, whose exit wakes the orchestrator. The orchestrator asks the human, and the human's words start the
 resume. Nothing in the fleet answers a question by itself (D-3).
 
 #### Boundary Inventory
@@ -487,7 +487,7 @@ resume. Nothing in the fleet answers a question by itself (D-3).
 | AC-25 | integration | Resume. Chain: `C-AGENT-MEMBER` with the shim. Observable: `receipts/fleet-briefs/<run>/brief-2.md`, `stop_gate`, argv, and the slot's files. The slot isn't fetched again, and files a run left there survive. | Human-approved (D-3) | A shim exit of 3 → `credits_refused:start:3`. An unknown run → `run_unknown`. A retained receipt with an old `kit_revision`, against a newer `receipts/gate/gate-result.json`, through the real `--check-receipt` → `receipt_stale`, with no brief written, `stop_gate` unchanged and no shim call, and `collect` on that run still works. The hub's quote rule is AC-18 |
 | AC-26 | integration | A secret-shaped status doesn't end the member. Chain: `execute_task` → `post_status` → `C-HTTP`. Observable: the status row, the member's process, and its next task. | Local Canon | A `final_text` holding a fake secret → the row has `reason: output_withheld`, no `final_text`, no value in `hub.db` bytes, and a following `ping` completes. Oracle check: without the catch, the same input ends the member process |
 | AC-27 | integration | `fleet watch`. Chain: `fleet.py watch` → `cmd_watch` → `cmd_agent` logic → `C-HTTP`, with `--poll` overriding `WATCH_POLL_S`. Observable: exit code and its last line. | Human-approved (D-3) | Done → `0`. Stopped → `7`, with `stop_class`. Unknown → `1`. Rejected → `3`. Member offline → `5`. While `running` it doesn't exit |
-| AC-28 | integration | **Live, human row 12.** From <hub host> on <member host>, with Mat's words: `agent start` on a throwaway repo; `agent message --kind query` is answered in `outbox` during the run; the run stops with `stop_class: decision` and `fleet watch` exits `7`; `agent resume` with Mat's answer, same session and slot, finishes with `run_state: done`. Observable: `check_live.py agent`. | Human-approved (outline §3 A3 done-when) | `--selftest` feeds a transcript where the session id changed on resume, and one with no query reply, and each must fail. A live start with no quote is refused with `quote_required` |
+| AC-28 | integration | **Live, human row 12.** From <hub host> on <member host>, with the human's words: `agent start` on a throwaway repo; `agent message --kind query` is answered in `outbox` during the run; the run stops with `stop_class: decision` and `fleet watch` exits `7`; `agent resume` with the human's answer, same session and slot, finishes with `run_state: done`. Observable: `check_live.py agent`. | Human-approved (outline §3 A3 done-when) | `--selftest` feeds a transcript where the session id changed on resume, and one with no query reply, and each must fail. A live start with no quote is refused with `quote_required` |
 
 #### Spec Sufficiency Table
 
@@ -564,7 +564,7 @@ without the flag, and `FORBIDDEN_COMMANDS` doesn't change.
 | AC-30 | unit | `normalize_codex` is total. Observable: its result. | Human-approved (D-4) | Every case: running; `DONE`; `STOPPED:decision`; no `Status:` line, with an exit code of 0 → `stopped` / `no_status_line`, never `done`; `Status: done` in the wrong case isn't `DONE`; a malformed class → `stopped` / `no_status_line` |
 | AC-31 | integration | The lock and the override refusal. Chain: `C-CODEX` with a stub `codex` on `PATH`. Observable: exit code, stub call count, and the lock file. | Human-approved (D-5); Local Canon (A-6) | A second wrapper while the first holds the lock → exit `11`, `codex_job_busy`, and the stub isn't called. With the lock set, `-CodexExecutable x` → `codex_executable_refused`, and `x` isn't run. A stub job that calls the wrapper gets `11`. With the variable unset: no lock file, and `-CodexExecutable` works as today, by the existing `-CodexExecutable` suites |
 | AC-32 | integration | `allow_codex`. Chain: `C-AGENT-HUB`, then `C-AGENT-MEMBER`. Observable: `manifest.json`'s `allowed_tools`. | Human-approved (D-5) | Without the flag, no rule mentions `codex`. With it, exactly the two rules, and neither contains `FullAccess`. `FORBIDDEN_COMMANDS` is unchanged, by a value check |
-| AC-33 | integration | **Live, human row 15.** On <member host>, with Mat's words: the AC-28 job finishes on Codex under `workspace-write` (under `FullAccess` after P-4), judged by the file written and the status line; a stopped Codex run resumes between turns. A remote Claude run with `allow_codex` gets a Codex answer, and its attempt with `-Mode FullAccess` appears in `permission_denials`. Observable: `check_live.py codex`. | Human-approved (outline §3 A4 done-when) | `--selftest` feeds an exit-0 job with no file, and a Claude run with no denial, and each must fail |
+| AC-33 | integration | **Live, human row 15.** On <member host>, with the human's words: the AC-28 job finishes on Codex under `workspace-write` (under `FullAccess` after P-4), judged by the file written and the status line; a stopped Codex run resumes between turns. A remote Claude run with `allow_codex` gets a Codex answer, and its attempt with `-Mode FullAccess` appears in `permission_denials`. Observable: `check_live.py codex`. | Human-approved (outline §3 A4 done-when) | `--selftest` feeds an exit-0 job with no file, and a Claude run with no denial, and each must fail |
 | AC-40 | integration | The installed kit accepts the member layout. Chain: real `member_kit.py install` into a temp `FLEET_HOME`, then the installed `tools/Invoke-ClaudeDispatch.ps1` and `tools/Invoke-CodexDispatch.ps1`, with stub `claude` and `codex` on `PATH` and a fixture registry holding P-1's binding. Observable: exit code, stub call count and the stub's working directory. Cases: Claude with a brief under `receipts/fleet-briefs/<run>/` and the slot as working directory; a Codex start with `CODEX_MODEL_CLASS`, then a resume of it; D-5's call from a slot with a prompt file in that slot. | Local Canon (A-13, P-1) | A brief outside both roots, and a Codex working directory outside `FLEET_HOME`, are refused and the stub isn't called. A registry without the binding gives `unresolvable_on_harness` and the stub isn't called. A resume on the default class still gives `resume_refused_review_class` |
 
 #### Spec Sufficiency Table
@@ -613,7 +613,7 @@ verify`, fetches into a temporary ref, checks `^{tree}`, refuses `identity_misma
 has an author or committer name or address other than `snapshot_identity(R)`, which makes the same refusals, and sets
 `refs/fleet/result/<run>` with the zero old-value form.
 It prints the commit, the tree and a `git diff --stat` against the run's base, and creates no branch. Landing it on a
-branch is a separate step on Mat's word, and the fleet has no code for that. `route_get_blob` already lets the orchestrator
+branch is a separate step on the human's word, and the fleet has no code for that. `route_get_blob` already lets the orchestrator
 fetch any blob.
 
 `agent drop` calls `fleet-tasks.ps1 -Action Remove` and deletes the run folder and `receipts/fleet-briefs/<run>/`. Credits
@@ -634,7 +634,7 @@ rows stay as the audit record.
 | AC-34 | integration | `collect`. Chain: `C-AGENT-MEMBER` → `make_snapshot`. Observable: the bundle's contents, status, and the slot's index and HEAD. Includes a new and a changed file. The commit's author and committer equal the `base` commit's. | Human-approved (outline §3 A5, global commit identity rule) | `.fleet-run/` isn't in the tree. A secret-named file → `snapshot_secret_risk:<path>` and no blob. A running or `unknown` run → `run_active`. Slot's HEAD and index are unchanged. A `base` commit whose address fails the suffix check, such as the old `fleet.invalid` identity, → `identity_mismatch`. A job's commit in the slot under another name or address → `identity_mismatch`. `agent start` in a repo that `snapshot_identity` refuses → the same refusal. In each of those, the commit count of the object store shows no new commit and no blob is sent |
 | AC-35 | integration | `result`. Chain: `fleet.py result` → `cmd_result` → `C-HTTP`, against a real repo. Observable: refs, tree id, branch list, and exit code. | Human-approved (outline §3 A5) | Tampered blob → `bundle_bad`, no ref. A wrong tree in the status → `tree_mismatch`, no ref. An existing ref → `result_exists`, unchanged. A commit since the base with another author or committer name or address → `identity_mismatch`, no ref. A repo that `snapshot_identity` refuses → the same refusal, no ref. The branch list and `HEAD` are unchanged in every case. No code path in `fleet.py` runs `merge`, `push` or `checkout` against the orchestrator's repo, by a source check |
 | AC-36 | integration | `drop`. Chain: `C-AGENT-MEMBER`. Observable: run folder, brief folder, `Remove` call and status. | Human-approved (outline §3 A5) | Before `collect` → `not_collected`. On a running or `unknown` run, or a `cancelled` one with an unfinished segment → `run_active`. Each leaves both folders in place |
-| AC-37 | integration | **Live, human row 17.** On Mat's word, one Claude and one Codex result land at `refs/fleet/result/<run>` on <hub host>, with their diff shown to Mat and no branch created, and each slot is then dropped. Observable: `check_live.py result`. | Human-approved (outline §3 A5 done-when) | `--selftest` feeds a result with a new branch, one whose tree differs, and one whose commit has an identity other than <hub host>'s global git identity, and each must fail |
+| AC-37 | integration | **Live, human row 17.** On the human's word, one Claude and one Codex result land at `refs/fleet/result/<run>` on <hub host>, with their diff shown to the human and no branch created, and each slot is then dropped. Observable: `check_live.py result`. | Human-approved (outline §3 A5 done-when) | `--selftest` feeds a result with a new branch, one whose tree differs, and one whose commit has an identity other than <hub host>'s global git identity, and each must fail |
 | AC-41 | integration | The <hub host> half of commit identity, built in row 7a. Chain: `make_snapshot` → `snapshot_identity`, directly and through `fleet.py run`. Observable: the commit's author and committer, the object store's commit count, refs, and blobs on the hub. Each test sets `GIT_CONFIG_GLOBAL` to its own file, so the test machine's config can't decide the result. The commit carries the repo's name and address, also when the environment sets `GIT_AUTHOR_*` and `GIT_COMMITTER_*` to other values, and `fleet.py` holds no `SNAPSHOT_IDENTITY` and no person's address. | Human-approved (P-2, global commit identity rule) | No global `user.email` or `user.name`, with the repo's set → `identity_missing`. No repo or global value → `identity_missing`. Repo address differing from the global one, both noreply → `identity_mismatch`. Same address with a different name → `identity_mismatch`. Global and repo agreeing on an address that fails the suffix check → `identity_mismatch`. Each leaves no new commit, no ref and no blob. An empty repo still gets `no_head` |
 
 #### Spec Sufficiency Table
@@ -642,7 +642,7 @@ rows stay as the audit record.
 | Behavior | Classification | Resolution |
 |----------|---------------|------------|
 | Temporary index, bundle, non-branch ref, then drop | Human-approved | Outline §1, §3 A5 |
-| Landing on a branch | Human-approved | Handoff binding constraint: only on Mat's word. Out of scope here |
+| Landing on a branch | Human-approved | Handoff binding constraint: only on the human's word. Out of scope here |
 | `collect` and `drop` as added actions | Local Canon | A-11: outline §3 A5 needs them, and they use the same task path |
 | Snapshot commit identity | Human-approved | Global commit identity rule. P-2 rules <hub host>'s check, and A-14 records the member's half |
 
@@ -659,7 +659,7 @@ rows stay as the audit record.
 - `.agent/fleet/bootstrap.md` is relabelled (D-6): the human steps are `BOOTSTRAP_STOPS`. Lines 15-16 change to D-1's wording. The sentence "must never read `member.json`" stays. Setup is
   described as a script run from the orchestrator machine over a local connection, with no host in the file.
 - `core/.agent/skills/claude-credits/SKILL.md`: a section on the member route (`launch.auth`, S4U, `gate_project`,
-  the hooks limit), which keeps lines 340-343 verbatim, and adds that `CLAUDE_CODE_OAUTH_TOKEN` is a sign-in on Mat's own
+  the hooks limit), which keeps lines 340-343 verbatim, and adds that `CLAUDE_CODE_OAUTH_TOKEN` is a sign-in on the human's own
   machines, not a misrepresentation of billing (D-1).
 - `core/.agent/skills/cli-dispatch/SKILL.md`: `FLEET_CODEX_LOCK`, `CODEX_BUSY_EXIT`, the `-CodexExecutable` refusal,
   `CODEX_MODEL_CLASS` and D-5's route.
@@ -703,11 +703,11 @@ No external input surface: this package changes documents and a manifest. `templ
 
 ### Stop conditions
 
-Execution stops and asks Mat when:
+Execution stops and asks the human when:
 
 1. The M-1 gate fails on the token (D-2 says A2 stops).
 2. Registering or running a task as S4U from the member's own process fails. This is untested, so it's tested first, in row 8.
-3. Mat sees a Console charge, or a run shows `auth_mode: api_key_file`. P-3 removed "no plan usage movement".
+3. The human sees a Console charge, or a run shows `auth_mode: api_key_file`. P-3 removed "no plan usage movement".
 4. The inbox hook doesn't fire under `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`.
 5. The write test fails under both Codex sandboxes.
 6. A step seems to need `CLAUDE_CODE_ENTRYPOINT`, `CLAUDECODE`, `cswap`, a read of `member.json`, or a printed token.
@@ -733,10 +733,10 @@ Execution stops and asks Mat when:
 | A separate low-privilege account for agent runs | out-of-scope | — | Human-approved: outline §3 |
 | `bypassPermissions` on a member | out-of-scope | — | Human-approved: D-4 |
 | A full `/execution-session` on a member, and projects with their own hooks | deferred | — | Human-approved: D-4, "Bounded jobs first". A-3 records the receipt limit |
-| Landing a result on a branch | out-of-scope | — | Handoff constraint: only on Mat's word, outside the fleet's code |
+| Landing a result on a branch | out-of-scope | — | Handoff constraint: only on the human's word, outside the fleet's code |
 | Revoking a Claude token | out-of-scope | — | Human-approved: D-1 records that no revoke route is documented |
-| Blob and credits-run retention | out-of-scope | — | Human-approved: MVP plan's Out of Scope and Mat's simplicity rule |
-| Pushing `main` or `fleet-mvp`, the MVP's H1-6b refusal, GitHub email settings, D-7's av-kit manifest commit | out-of-scope | — | Each awaits Mat's separate word (handoff) |
+| Blob and credits-run retention | out-of-scope | — | Human-approved: MVP plan's Out of Scope and the human's simplicity rule |
+| Pushing `main` or `fleet-mvp`, the MVP's H1-6b refusal, GitHub email settings, D-7's av-kit manifest commit | out-of-scope | — | Each awaits the human's separate word (handoff) |
 | Fixing the existing `refcheck` and `sanitize` failures | out-of-scope | — | MVP plan A-20. Row 0 records them |
 
 ---
@@ -809,7 +809,7 @@ decision_log:
     question: "How does a member get its logins?"
     resolution: human
     class: source-conflict
-    chosen: "Issue on <hub host> on Mat's browser approval, store on the member over WinRM in a user-only file, nothing through the hub, for Mat's own account on Mat's own machines only. Claude's token goes through -LaunchHook with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1. Codex gets a new login per machine. The credential script stays local"
+    chosen: "Issue on <hub host> on the human's browser approval, store on the member over WinRM in a user-only file, nothing through the hub, for the human's own account on the human's own machines only. Claude's token goes through -LaunchHook with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1. Codex gets a new login per machine. The credential script stays local"
     source_tag: Human-approved
     precedents: ["docs/proposals/2026-11-04-fleet-agents-outline.md §4 D-1"]
     research: { engine: tavily, sources: ["outline §4 D-1"] }
@@ -820,7 +820,7 @@ decision_log:
     question: "What runs a Claude job on a member?"
     resolution: human
     class: governance-value
-    chosen: "The credits engine on the subscription token: launch.auth subscription, S4U, one home install per member. The key route stays the default, and <hub host> is unchanged. A2's acceptance includes Mat seeing plan usage move and the Console balance unchanged"
+    chosen: "The credits engine on the subscription token: launch.auth subscription, S4U, one home install per member. The key route stays the default, and <hub host> is unchanged. A2's acceptance includes the human seeing plan usage move and the Console balance unchanged"
     source_tag: Human-approved
     precedents: ["outline §4 D-2"]
     research: { engine: tavily, sources: ["outline §4 D-2"] }
@@ -831,7 +831,7 @@ decision_log:
     question: "Who starts and resumes, and what happens on a question?"
     resolution: human
     class: governance-value
-    chosen: "Only the orchestrator, only on Mat's chat words. Members use agent-on-user-chat, and <hub host> stays human-only. The hub refuses start and resume with no quote. A question stops the run, fleet watch wakes the orchestrator, it asks Mat, and the answer goes in a resume brief, same session and slot"
+    chosen: "Only the orchestrator, only on the human's chat words. Members use agent-on-user-chat, and <hub host> stays human-only. The hub refuses start and resume with no quote. A question stops the run, fleet watch wakes the orchestrator, it asks the human, and the answer goes in a resume brief, same session and slot"
     source_tag: Human-approved
     precedents: ["outline §4 D-3"]
     research: { engine: tavily, sources: ["outline §4 D-3"] }
@@ -879,7 +879,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["2026-11-03-fleet-mvp AC-22 to AC-30 — hash-checked bundles and named commands"]
     research: { engine: none, sources: [] }
-    reasoning: "No WinRM copy and no new hub route, and it carries an uncommitted tree. Flagged to Mat because a snapshot also carries untracked local plan files"
+    reasoning: "No WinRM copy and no new hub route, and it carries an uncommitted tree. Flagged to the human because a snapshot also carries untracked local plan files"
   - id: A-2
     stage: planning
     question: "The M-1 receipt binds to one project path, and each run has its own slot. How does a receipt apply?"
@@ -889,7 +889,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["run_gate.py:207-237", "Register-CreditsRun.ps1:261 Assert-Receipt", "Start-CreditsRun.ps1:209 Test-RunReceipt"]
     research: { engine: none, sources: [] }
-    reasoning: "A gate per run would cost plan usage on every start. CLI version, user hooks and kit revision are still compared, and the slot's hook digests must equal the gate project's. Flagged to Mat as a control change"
+    reasoning: "A gate per run would cost plan usage on every start. CLI version, user hooks and kit revision are still compared, and the slot's hook digests must equal the gate project's. Flagged to the human as a control change"
   - id: A-3
     stage: planning
     question: "What about a slot that carries its own .claude/settings.json hooks?"
@@ -899,7 +899,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["outline §4 D-4 — bounded jobs first", "run_gate.py check_profile:176-204"]
     research: { engine: none, sources: [] }
-    reasoning: "The refusal is what the gate already does. Allowing it would need one gate per hook set, which isn't needed for bounded jobs. A settings file with no hooks is refused too, because its digest differs from a missing file's. Flagged to Mat"
+    reasoning: "The refusal is what the gate already does. Allowing it would need one gate per hook set, which isn't needed for bounded jobs. A settings file with no hooks is refused too, because its digest differs from a missing file's. Flagged to the human"
   - id: A-4
     stage: planning
     question: "Monitor classes need a task.md, and DONE needs preflight, capture and seal, none of which exist in a slot"
@@ -909,7 +909,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["Watch-CreditsRuns.ps1 Get-RunClass:565-684"]
     research: { engine: none, sources: [] }
-    reasoning: "It reuses the classifier and states plainly that the evidence is the result bundle. A done_unverified run can't be resumed, so a follow-up is a new run. Flagged to Mat"
+    reasoning: "It reuses the classifier and states plainly that the evidence is the result bundle. A done_unverified run can't be resumed, so a follow-up is a new run. Flagged to the human"
   - id: A-5
     stage: planning
     question: "Which hooks go at user level on a member?"
@@ -939,7 +939,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["credits_state.py:2310-2313 — lane_busy"]
     research: { engine: none, sources: [] }
-    reasoning: "Simplest, and it shares one plan's limits. Parallel runs can come later by changing one value. Flagged to Mat"
+    reasoning: "Simplest, and it shares one plan's limits. Parallel runs can come later by changing one value. Flagged to the human"
   - id: A-8
     stage: planning
     question: "D-4 asks for one elevated try after setup, and the CLI has no setup command"
@@ -949,7 +949,7 @@ decision_log:
     source_tag: Research-backed
     precedents: ["codex sandbox --help on 0.166.0 — only uninstall"]
     research: { engine: native, sources: ["https://learn.chatgpt.com/docs/windows/windows-sandbox.md", "https://github.com/openai/codex/issues/34961"] }
-    reasoning: "It's D-4's one try, by the only route the CLI offers. It makes machine-wide accounts and network rules, so it's flagged to Mat and reversed on failure"
+    reasoning: "It's D-4's one try, by the only route the CLI offers. It makes machine-wide accounts and network rules, so it's flagged to the human and reversed on failure"
   - id: A-9
     stage: planning
     question: "BOOTSTRAP_STOPS names steps D-6 no longer makes human"
@@ -1009,7 +1009,7 @@ decision_log:
     source_tag: Human-approved
     precedents: ["Global commit identity rule", "fleet.py:93-96,1065"]
     research: { engine: none, sources: [] }
-    reasoning: "A member has no identity of its own, and a job can move HEAD, so the commit <hub host> sent is the only trustworthy source. A base under the old fixed identity could never be collected, so the order matters and needs no migration. Flagged to Mat"
+    reasoning: "A member has no identity of its own, and a job can move HEAD, so the commit <hub host> sent is the only trustworthy source. A base under the old fixed identity could never be collected, so the order matters and needs no migration. Flagged to the human"
   - id: A-15
     stage: planning
     question: "A kit update must happen while a finished run waits to be collected, and a stopped run may wait across a CLI change"
@@ -1019,7 +1019,7 @@ decision_log:
     source_tag: Local Canon
     precedents: ["task row 15 and row 17 order", "the credits store lives under receipts, outside the kit", "Register-CreditsRun.ps1:355-360", "Register-CreditsRun.ps1:337-340", "Start-CreditsRun.ps1:431-447,698-705", "run_gate.py:230-235"]
     research: { engine: none, sources: [] }
-    reasoning: "A live task is what a swap can break. A held file also fails the rename, which restores the old kit. Refreshing a retained receipt would bypass what registration checks, so a stated limit with an early refusal is simpler. Flagged to Mat"
+    reasoning: "A live task is what a swap can break. A held file also fails the rename, which restores the old kit. Refreshing a retained receipt would bypass what registration checks, so a stated limit with an early refusal is simpler. Flagged to the human"
   - id: P-1
     stage: planning
     question: "Which class runs a fleet Codex job, and where is its Codex binding?"
@@ -1029,7 +1029,7 @@ decision_log:
     source_tag: Human-approved
     precedents: ["Invoke-CodexDispatch.ps1:595-600", "ModelRegistry.psm1 Import-CompiledOverlay", "scratch-copy probe: zorivest and av-kit refuse with overlay_not_validated on a changed registry"]
     research: { engine: none, sources: [] }
-    reasoning: "Mat first chose editing <hub host>'s file on a brief that said it touched nothing on <hub host>. The probe then showed 9 projects would refuse dispatch and 8 repos would need a commit, and Mat changed the ruling"
+    reasoning: "The human first chose editing <hub host>'s file on a brief that said it touched nothing on <hub host>. The probe then showed 9 projects would refuse dispatch and 8 repos would need a commit, and the human changed the ruling"
     human_message_reference: "USER_EXPLICIT 2026-11-04 'Member-only (Recommended)', changing 'add 60M tokens, P-1 (a)'"
   - id: P-2
     stage: planning
@@ -1055,7 +1055,7 @@ decision_log:
     human_message_reference: "USER_EXPLICIT 2026-11-05 'i don't mind this since the guardrails and other instructions are very explicit about read actions and write only into temp', then 'I agree and approve, proceed'"
 ```
 
-D-1 to D-6 and P-1 to P-4 are ruled. A-1 to A-15 passed the obviousness test. Each is two-way, so Mat can reverse any of them at the
+D-1 to D-6 and P-1 to P-4 are ruled. A-1 to A-15 passed the obviousness test. Each is two-way, so the human can reverse any of them at the
 plan gate, and the ones a reader might want to change are flagged in User Review Required.
 
 **P-1 is ruled: member-only.** Rejected: editing <hub host>'s registry, which stops dispatch in 9 projects until each
@@ -1067,16 +1067,16 @@ puts it in the public repo and needs a field in each repo; and the suffix check 
 noreply address. The limit: a global config changed to another noreply address passes.
 
 **P-3 is ruled during execution: no meter proof on the Ultra account.** Row 8's jobs came to about $11.66 at list price,
-and the weekly meter still showed 27%. Mat's words: "1% takes few hours of agentic work so we will drop proving that on the Ultra account. Free accounts do not offer claude code so we will just accept what we have with pretty high degree of certenty that everything works as it should." In place of the
+and the weekly meter still showed 27%. The human's words: "1% takes few hours of agentic work so we will drop proving that on the Ultra account. Free accounts do not offer claude code so we will just accept what we have with pretty high degree of certenty that everything works as it should." In place of the
 readings, row 8 rests on a one-turn stream test of <member host>'s token: `apiKeySource: none`, a `seven_day` window at `0.27`
-resetting Sunday Nov 8 at 6:00 AM, as on Mat's Usage page, and `isUsingOverage: false`. The limit: nobody saw the meter
+resetting Sunday Nov 8 at 6:00 AM, as on the human's Usage page, and `isUsingOverage: false`. The limit: nobody saw the meter
 move, and the Console wasn't read again after the runs, so a later Console charge still fires stop condition 3.
 
 **P-4 is ruled during execution: fleet Codex jobs run with full access.** Stop condition 5 fired on row 3's rerun.
 Under the S4U task, every sandboxed `pwsh` exits `0xC0000142` and `apply_patch` reports "Failed to write file", in
 both sandboxes and since the first run. Only a `cmd` redirect writes, so the 13:42 pass came from how the model quoted
 one command, and the reboot changed nothing. One write under `danger-full-access` and the same task passed
-(`fa-codex-fullaccess-probe.txt`). Mat's words: "i don't mind this since the guardrails and other instructions are
+(`fa-codex-fullaccess-probe.txt`). The human's words: "i don't mind this since the guardrails and other instructions are
 very explicit about read actions and write only into temp", then "I agree and approve, proceed". Rejected: Codex jobs
 on <hub host> only, which drops outline A4 on members, and keeping `cmd` as the only writer. The limit: no sandbox enforces
 the write scope. Only the brief does, and a job can read anything the member's user can, including the stored token.
