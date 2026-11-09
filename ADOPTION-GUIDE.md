@@ -346,6 +346,72 @@ worker session never emails. To stop all email at once, create an empty `notify.
 
 ---
 
+## 1M context switch (optional, Claude Code)
+
+This part is optional and applies to Claude Code only. Skip it if you never need to change the
+context window. The skill `.agent/skills/context-1m/SKILL.md` gives the human one command,
+`/context-1m on|off|status`. It sets or removes `env.CLAUDE_CODE_DISABLE_1M_CONTEXT` in
+`~/.claude/settings.json`:
+
+- **on** (key absent): models that offer a native 1M window use it.
+- **off** (`"1"`): every model runs with the 200K window.
+
+Turn it `off` when long sessions cost more than they gain, or when you need the 200K window's
+earlier compaction. Turn it back `on` for work that needs a large context.
+
+Claude Code finds slash-command skills in `~/.claude/skills/` (every project) or
+`<project>/.claude/skills/` (one project). The setting applies to the whole machine, so install
+the skill once per OS user account, in `~/.claude/skills/`. The project copy under `.agent/skills/`
+is the source you install from and update from.
+
+1. **Check for an earlier copy.** If `~/.claude/skills/context-1m/` exists, compare it with the
+   package copy before you replace it. Keep any local change you still want.
+2. **Copy the skill and its script** (from the project root, after Step 2). The tests stay in
+   the project.
+
+   Windows (PowerShell):
+
+   ```powershell
+   $dest = "$HOME/.claude/skills/context-1m"
+   New-Item -ItemType Directory -Force "$dest/scripts" | Out-Null
+   Copy-Item .agent/skills/context-1m/SKILL.md "$dest/"
+   Copy-Item .agent/skills/context-1m/scripts/toggle_1m.py "$dest/scripts/"
+   ```
+
+   macOS / Linux:
+
+   ```bash
+   dest="$HOME/.claude/skills/context-1m"
+   mkdir -p "$dest/scripts"
+   cp .agent/skills/context-1m/SKILL.md "$dest/"
+   cp .agent/skills/context-1m/scripts/toggle_1m.py "$dest/scripts/"
+   ```
+
+3. **Test the script** in the project. The tests use temp files and never touch your real
+   settings:
+   `python -m pytest -q .agent/skills/context-1m/scripts/tests` must pass (8 tests).
+4. **Check the install.** Start a new Claude Code session and run `/context-1m status`. It
+   prints `1M context: on` or `off` and the settings path. If `/context-1m` is not offered,
+   check the folder is `~/.claude/skills/context-1m/` and that `SKILL.md` is directly inside it.
+5. **Use it.** `/context-1m off` or `/context-1m on`. The script backs up the file to
+   `settings.json.1m-backup` before it writes, and keeps every other key.
+
+What to know before you switch:
+
+- Running sessions have been seen to pick up the change within minutes. Switching `off` while
+  sessions are above 200K makes each of them compact at once, so switch between sessions when
+  you can.
+- `CLAUDE_CODE_DISABLE_1M_CONTEXT` in the shell environment overrides the file. A process that
+  sets it (a scheduled task, a wrapper) ignores the switch.
+- Each OS account has its own `~/.claude/settings.json`. A scheduled run or a fleet member
+  under another account needs the switch set in that account.
+- Only the human toggles it. The skill tells agents not to switch it from a headless or
+  scheduled run, because it changes every session on the machine.
+- To uninstall, delete `~/.claude/skills/context-1m/`. Run `/context-1m on` first if you want
+  the key removed; deleting the skill leaves the setting as it is.
+
+---
+
 ## Scheduled credits runs (optional, Windows-only)
 
 This part is optional. Skip it if you do not run headless Claude sessions on an API key from the

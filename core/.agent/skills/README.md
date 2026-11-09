@@ -45,5 +45,11 @@ applies_to: [paths or concerns this skill covers]
 | `skill-optimizer/SKILL.md` | instruction docs | Bounded cross-vendor-judge edits (human adopts) |
 | `session-meta-review/SKILL.md` | reflections | Friction taxonomy → Next Session Design Rules |
 | `deep-research-prompting/SKILL.md` | `/inspiration-research`, deep-research prompts | Pomera preflight gate, capability snapshots, D1/D2/D3 prompt templates |
+| `context-1m/SKILL.md` | `~/.claude/settings.json` (Claude Code only) | `/context-1m on\|off\|status`: the machine-wide 1M context switch. User-level: install it into `~/.claude/skills/` (`ADOPTION-GUIDE.md` §1M context switch) |
+
+Most skills here are read by path from `AGENTS.md` and the workflows. A skill that the human
+calls as a Claude Code slash command must also sit where Claude Code looks for skills:
+`~/.claude/skills/<name>/` for every project, or `.claude/skills/<name>/` for one project.
+Install from the copy here, and update that copy first.
 
 See `.agent/docs/triage-meu-loop.md` for how `issue-triage` + `meu-status` feed planning.

@@ -132,6 +132,9 @@ recopy of this package. How to copy, fill, compile, and check: `.agent/INSTANTIA
 - `meu-status/SKILL.md` — Query/update/render MEU completion status via `tools/meu_status.py` and `.agent/context/meu-status.yaml`.
 - `agent-notify/SKILL.md` — Opt-in stop notifier: one short email each time a session stops (done, decision, approval, waiting, blocked, error). Settings home and lookup order, the six `tools/agent_notify.py` actions, three off switches, privacy rules, Gmail setup summary, and per-harness wiring keyed by `stop_notify`.
 - `deep-research-prompting/SKILL.md` — Pomera MCP preflight gate, provider capability recon, and portal-ready deep-research prompt templates; driven by `/inspiration-research`. **Manual adopter edit required** if Pomera is not your search surface (see `ADOPTION-GUIDE.md` §Provider substitution).
+- `context-1m/SKILL.md` — Claude Code only, optional. `/context-1m on|off|status` sets or removes `env.CLAUDE_CODE_DISABLE_1M_CONTEXT` in `~/.claude/settings.json`, which turns the 1M context window on or off for every session on the machine. A user-level skill: the adopter copies it into `~/.claude/skills/context-1m/` (`ADOPTION-GUIDE.md` §1M context switch). It names no model; it describes models by whether they offer a native 1M window.
+- `context-1m/scripts/toggle_1m.py` — The only writer of that key. Backs up the file to `settings.json.1m-backup`, keeps every other key, writes two-space JSON. A missing file reads as `on`, and `off` creates it. Exit 2 on unreadable or invalid JSON or a non-object `env`, with the file unchanged.
+- `context-1m/scripts/tests/test_toggle_1m.py` — Eight pytest arms that run the script on temp files through `--settings`, so no arm touches the real settings file.
 
 ## 5b. `core/.claude/agents/` (in-harness subagents)
 
