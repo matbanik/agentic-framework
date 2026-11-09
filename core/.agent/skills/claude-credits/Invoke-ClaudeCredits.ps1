@@ -139,6 +139,12 @@ param(
     # The token file of -Subscription. Read only by the launch hook.
     [string]$TokenFile,
 
+    # PE21-D2: the operator policy that the CLI gets with --append-system-prompt-file. Only with
+    # -Scheduled, and both together: Start-CreditsRun.ps1 passes the file and its SHA-256
+    # (64 lowercase hex characters), and this script checks the hash again before any process starts.
+    [string]$SystemPromptFile,
+    [string]$SystemPromptSha256,
+
     # Check the arguments, the brief, the key file (presence and ACL; its contents
     # are not read) and any continuation source, print dispatch_args_ok and exit 0. Starts no process and writes no run
     # directory. Allowed inside a Claude Code session.
@@ -209,6 +215,21 @@ if ($Subscription) {
     $tokenInfo = Get-Item -LiteralPath $TokenFile -ErrorAction SilentlyContinue
     if ($null -eq $tokenInfo -or $tokenInfo.PSIsContainer -or $tokenInfo.Length -eq 0) { Fail 2 "token_missing: no subscription token at $TokenFile" }
     $tokenPath = $tokenInfo.FullName
+}
+if (($SystemPromptFile -or $SystemPromptSha256) -and -not $Scheduled) { Fail 2 '-SystemPromptFile is used only with -Scheduled.' }
+if ([bool]$SystemPromptFile -ne [bool]$SystemPromptSha256) { Fail 2 'pass -SystemPromptFile and -SystemPromptSha256 together.' }
+if ($SystemPromptSha256 -and $SystemPromptSha256 -cnotmatch '^[0-9a-f]{64}$') { Fail 2 '-SystemPromptSha256 must be 64 lowercase hex characters.' }
+$policyChars = 0
+if ($SystemPromptFile) {
+    if (-not (Test-Path -LiteralPath $SystemPromptFile -PathType Leaf)) { Fail 2 "policy file not found: $SystemPromptFile" }
+    try {
+        $policyBytes = [System.IO.File]::ReadAllBytes($SystemPromptFile)
+    } catch {
+        Fail 2 "policy file not readable: $SystemPromptFile ($($_.Exception.Message))"
+    }
+    $policyHash = [System.Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($policyBytes)).ToLowerInvariant()
+    if ($policyHash -cne $SystemPromptSha256) { Fail 2 "policy file hash $policyHash is not $SystemPromptSha256" }
+    $policyChars = ([System.Text.UTF8Encoding]::new($false)).GetString($policyBytes).Length
 }
 $scheduledEnv = $null
 if ($Scheduled -and -not $ValidateOnly) {
@@ -372,6 +393,10 @@ if ($RunId) {
 if ($null -ne $scheduledEnv) {
     $scheduledContext = $scheduledEnv
     $subscriptionTokenPath = if ($Subscription) { $tokenPath } else { $null }
+    $hookFolder = Join-Path $OutputDir $DispatchId
+    $hookPolicy = $SystemPromptFile
+    $hookSha = $SystemPromptSha256
+    $hookChars = $policyChars
     $dispatchArgs.LaunchHook = {
         param($StartInfo)
         foreach ($name in $scheduledContext.Keys) { $StartInfo.Environment[$name] = $scheduledContext[$name] }
@@ -382,6 +407,32 @@ if ($null -ne $scheduledEnv) {
             $StartInfo.Environment['CLAUDE_CODE_SUBPROCESS_ENV_SCRUB'] = '1'
             foreach ($name in @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')) { $null = $StartInfo.Environment.Remove($name) }
         }
+        $hookUtf8 = [System.Text.UTF8Encoding]::new($false)
+        if ($hookPolicy) {
+            # PE21-D2: the policy reaches the CLI through two names that cmd.exe expands from the
+            # child environment, the way the dispatcher passes the stdin path, so the path needs no
+            # quoting rules of its own. A command line without exactly one stdin marker starts
+            # nothing. policy.json goes into the dispatch folder that the dispatcher made (R1-F1).
+            $stdinMark = ' < "%{{PROJECT_NAME_UPPER}}_DISPATCH_STDIN%"'
+            $count = [regex]::Matches($StartInfo.Arguments, [regex]::Escape($stdinMark)).Count
+            if ($count -ne 1) { throw "policy_inject_failed: $count stdin markers" }
+            $StartInfo.Environment['{{PROJECT_NAME_UPPER}}_CREDITS_POLICY_ARG0'] = '--append-system-prompt-file'
+            $StartInfo.Environment['{{PROJECT_NAME_UPPER}}_CREDITS_POLICY_ARG1'] = $hookPolicy
+            $StartInfo.Arguments = $StartInfo.Arguments.Replace($stdinMark, ' "%{{PROJECT_NAME_UPPER}}_CREDITS_POLICY_ARG0%" "%{{PROJECT_NAME_UPPER}}_CREDITS_POLICY_ARG1%" --system-prompt-snapshot on' + $stdinMark)
+            $policyRecord = [ordered]@{ path = $hookPolicy; sha256 = $hookSha; chars = $hookChars } | ConvertTo-Json -Compress
+            [System.IO.File]::WriteAllText((Join-Path $hookFolder 'policy.json'), $policyRecord, $hookUtf8)
+        }
+        # PE21-D12 (CLI_START_MARKER): cli-start.json is written through to the disk immediately
+        # before Process.Start, and CreateNew throws on a failed write, with no start. So a
+        # launch_failed segment with no marker started no CLI (--cli-start absent, 0 USD).
+        $startRecord = [ordered]@{
+            segment_id = $scheduledContext['CREDITS_SEGMENT']
+            utc        = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
+        } | ConvertTo-Json -Compress
+        $startBytes = $hookUtf8.GetBytes($startRecord)
+        $stream = [System.IO.FileStream]::new((Join-Path $hookFolder 'cli-start.json'), [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough)
+        try { $stream.Write($startBytes, 0, $startBytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
         [System.Diagnostics.Process]::Start($StartInfo)
     }.GetNewClosure()
     [Console]::Error.WriteLine("claude-credits: scheduled segment $($scheduledEnv['CREDITS_SEGMENT']) of run $($scheduledEnv['CREDITS_RUN_ID'])")

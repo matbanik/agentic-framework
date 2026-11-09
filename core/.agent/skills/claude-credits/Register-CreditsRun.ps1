@@ -8,6 +8,8 @@
       1. Check the manifest against schemas/credits-run.v1.json and the local-path rule (every
          path is an absolute local path: no UNC path, no relative path, no '..' segment).
          project_root and launch.working_directory must be one directory (project_mismatch).
+         A chain block names the typed message that set up the chain (chain_source_missing), and
+         its quote must be the whole text of that message (chain_quote_mismatch).
       2. Check the messaging switches (the manifest and .agent/credits/config.json). A switch on
          (ruling_enabled true or gate_wait_max_min above 0) needs the approved governance text
          of report sections 7.6 and 7.7 in the project tree: each anchor line must be in its
@@ -100,7 +102,8 @@ function Test-JsonType($Value, [string]$Type) {
 # any other keyword is an error, so the schema cannot grow a rule that this check skips.
 function Test-SchemaNode($Value, [System.Collections.IDictionary]$Node, [string]$Path) {
     $known = @('$schema', '$id', 'title', 'description', 'type', 'const', 'enum', 'pattern', 'minLength',
-        'minimum', 'exclusiveMinimum', 'required', 'additionalProperties', 'properties', 'items', 'minItems')
+        'minimum', 'exclusiveMinimum', 'required', 'additionalProperties', 'properties', 'patternProperties',
+        'items', 'minItems')
     foreach ($k in $Node.Keys) { if ($k -notin $known) { throw "the schema uses an unsupported keyword at ${Path}: $k" } }
     if ($Node.Contains('const') -and -not ($Value -is [string] -and $Value -ceq $Node['const'])) { Stop-Refused 'manifest_invalid' "$Path must be '$($Node['const'])'" }
     if ($Node.Contains('enum') -and -not ($Value -is [string] -and @($Node['enum']) -ccontains $Value)) { Stop-Refused 'manifest_invalid' "$Path must be one of: $(@($Node['enum']) -join ', ')" }
@@ -120,9 +123,16 @@ function Test-SchemaNode($Value, [System.Collections.IDictionary]$Node, [string]
         foreach ($req in @($Node['required'] | Where-Object { $_ })) {
             if (-not $Value.Contains($req)) { Stop-Refused 'manifest_invalid' "$Path.$req is required" }
         }
+        # A key that no property names may match a patternProperties pattern (case-sensitive, as
+        # in JSON Schema); a key that matches neither is unknown when additionalProperties is false.
+        $patterns = if ($Node.Contains('patternProperties')) { $Node['patternProperties'] } else { @{} }
         foreach ($key in @($Value.Keys)) {
-            if ($props.Contains($key)) { Test-SchemaNode $Value[$key] $props[$key] "$Path.$key" }
-            elseif ($Node.Contains('additionalProperties') -and $Node['additionalProperties'] -eq $false) { Stop-Refused 'manifest_invalid' "$Path has an unknown key: $key" }
+            if ($props.Contains($key)) { Test-SchemaNode $Value[$key] $props[$key] "$Path.$key"; continue }
+            $matched = $false
+            foreach ($pattern in @($patterns.Keys)) {
+                if ([string]$key -cmatch $pattern) { Test-SchemaNode $Value[$key] $patterns[$pattern] "$Path.$key"; $matched = $true }
+            }
+            if (-not $matched -and $Node.Contains('additionalProperties') -and $Node['additionalProperties'] -eq $false) { Stop-Refused 'manifest_invalid' "$Path has an unknown key: $key" }
         }
     }
     if ((Test-JsonType $Value 'array') -and $Node.Contains('type') -and $Node['type'] -eq 'array') {
@@ -132,6 +142,13 @@ function Test-SchemaNode($Value, [System.Collections.IDictionary]$Node, [string]
             foreach ($item in $Value) { Test-SchemaNode $item $Node['items'] "$Path[$i]"; $i++ }
         }
     }
+}
+
+# The chain block's quote must be the typed text of the message that it names (AC-894.3).
+function Assert-ChainSource($Chain) {
+    $res = Test-CreditsChainSource -Session ([string]$Chain['session']) -Message ([string]$Chain['message_uuid']) -Quote ([string]$Chain['quote'])
+    if ($res.Code -eq 3 -and $null -ne $res.Payload) { Stop-Refused ([string]$res.Payload.error) ([string]$res.Payload.message) }
+    if ($res.Code -ne 0) { throw "credits_msg.py chain_source failed: $(Format-CreditsStateError $res)" }
 }
 
 function Read-Manifest([string]$Path) {
@@ -144,9 +161,24 @@ function Read-Manifest([string]$Path) {
     } catch {
         Stop-Refused 'manifest_invalid' "the manifest is not UTF-8 JSON: $($_.Exception.Message)"
     }
+    # A chain block with no message gets its own reason, not the schema's manifest_invalid.
+    $chain = if ($doc -is [System.Collections.IDictionary] -and $doc.Contains('chain')) { $doc['chain'] } else { $null }
+    $hasChain = $chain -is [System.Collections.IDictionary]
+    if ($hasChain -and (-not $chain.Contains('session') -or -not $chain.Contains('message_uuid'))) {
+        Stop-Refused 'chain_source_missing' 'the chain block must name the session and the message_uuid of the typed message that set up the chain'
+    }
+    # PE21-D15: the launch.env channel gets its own reasons (env_name_refused, env_value_refused),
+    # so it is checked before the schema, which would give manifest_invalid for the same name.
+    # Start-CreditsRun.ps1 runs the same check again on the stored manifest at each launch.
+    $launch = if ($doc -is [System.Collections.IDictionary] -and $doc.Contains('launch')) { $doc['launch'] } else { $null }
+    if ($launch -is [System.Collections.IDictionary] -and $launch.Contains('env')) {
+        $envRefusal = Get-CreditsLaunchEnvRefusal $launch['env']
+        if ($null -ne $envRefusal) { Stop-Refused $envRefusal.Reason $envRefusal.Message }
+    }
     $schemaPath = Join-Path $PSScriptRoot 'schemas/credits-run.v1.json'
     $schema = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($schemaPath)) -AsHashtable -Depth 32 -ErrorAction Stop
     Test-SchemaNode $doc $schema '$'
+    if ($hasChain) { Assert-ChainSource $chain }
     $sha = [System.Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
     return [pscustomobject]@{ Doc = $doc; Sha256 = $sha }
 }
@@ -328,6 +360,14 @@ try {
     $doc = $manifestInfo.Doc
     $script:RunId = [string]$doc['run_id']
     Assert-ManifestPaths $doc
+    # PE21-D9 (AC-895.13): launch.max_budget_usd only lowers the CLI's own budget stop, so a value
+    # above segment_cap_usd could never apply and is refused. With no segment_cap_usd (token_budgets
+    # "off") the field is the one CLI stop, so there is nothing to compare.
+    $maxBudget = $doc['launch']['max_budget_usd']
+    $segmentCap = $doc['launch']['segment_cap_usd']
+    if ($null -ne $maxBudget -and $null -ne $segmentCap -and [double]$maxBudget -gt [double]$segmentCap) {
+        Stop-Refused 'max_budget_above_cap' "launch.max_budget_usd $maxBudget is above segment_cap_usd $segmentCap"
+    }
     $config = Read-CreditsConfig $ConfigPath
     Assert-MessagingLocked $doc $config
     Assert-CacheTtl $config $ProbeRecord

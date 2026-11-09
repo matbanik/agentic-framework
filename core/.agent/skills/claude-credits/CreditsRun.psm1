@@ -32,6 +32,7 @@ Set-StrictMode -Version Latest
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $script:StateTool = Join-Path $script:RepoRoot 'tools/credits_state.py'
+$script:MsgTool = Join-Path $script:RepoRoot 'tools/credits_msg.py'
 $script:JobNamePrefix = 'Local\{{PROJECT_NAME_UPPER}}Credits-'
 # Store times have second precision; a recorded creation time matches a process whose real
 # creation time is less than this many seconds away.
@@ -625,26 +626,18 @@ function Get-CreditsPython {
     return $found.Source
 }
 
-function Invoke-CreditsState {
-    <#
-    .SYNOPSIS
-        Run one credits_state.py verb. Returns Code, Payload (the parsed JSON line, or $null), Out
-        and Err. It does not throw on a non-zero exit; the caller reads Code.
-    #>
-    param(
-        [Parameter(Mandatory = $true)][string]$StateDb,
-        [Parameter(Mandatory = $true)][ValidatePattern('^[a-z_]+$')][string]$Verb,
-        [string[]]$Arguments = @(),
-        [ValidateRange(1, 3600)][int]$TimeoutSec = 180,
-        # The store clock (--now-utc), for the verbs whose result depends on an age.
-        [Nullable[datetime]]$NowUtc
-    )
-    # PowerShell unwraps a [Nullable[datetime]] parameter to a plain [datetime]; it has no .Value.
-    $clock = if ($null -ne $NowUtc) { @('--now-utc', (Format-CreditsUtc ([datetime]$NowUtc))) } else { @() }
+# Run one Python tool of the store. Returns Code, Payload (the parsed JSON line, or $null), Out and
+# Err. It throws only when the process does not end by its deadline. With $Console the child shares
+# the caller's console: standard input stays with the human, and the child can open CONIN$. Each
+# name of $Environment is set in the child's environment only (it starts from this process's).
+function Invoke-CreditsPythonTool([string[]]$ToolArguments, [string]$Label, [int]$TimeoutSec, [bool]$Console, [hashtable]$Environment) {
     $psi = [System.Diagnostics.ProcessStartInfo]::new((Get-CreditsPython))
-    foreach ($a in @('-X', 'utf8', $script:StateTool, '--db', $StateDb) + $clock + @($Verb) + @($Arguments)) { $psi.ArgumentList.Add([string]$a) }
+    foreach ($a in @('-X', 'utf8') + $ToolArguments) { $psi.ArgumentList.Add([string]$a) }
+    if ($null -ne $Environment) {
+        foreach ($key in $Environment.Keys) { $psi.Environment[[string]$key] = [string]$Environment[$key] }
+    }
     $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
+    $psi.CreateNoWindow = -not $Console
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $proc = [System.Diagnostics.Process]::Start($psi)
@@ -652,8 +645,8 @@ function Invoke-CreditsState {
         $outTask = $proc.StandardOutput.ReadToEndAsync()
         $errTask = $proc.StandardError.ReadToEndAsync()
         if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-            try { $proc.Kill($true) } catch { [Console]::Error.WriteLine("credits_state.py kill failed: $($_.Exception.Message)") }
-            throw "credits_state.py $Verb did not end in $TimeoutSec s"
+            try { $proc.Kill($true) } catch { [Console]::Error.WriteLine("$Label kill failed: $($_.Exception.Message)") }
+            throw "$Label did not end in $TimeoutSec s"
         }
         $proc.WaitForExit()
         $out = $outTask.Result
@@ -666,6 +659,69 @@ function Invoke-CreditsState {
     } finally {
         $proc.Dispose()
     }
+}
+
+function Invoke-CreditsState {
+    <#
+    .SYNOPSIS
+        Run one credits_state.py verb. Returns Code, Payload (the parsed JSON line, or $null), Out
+        and Err. It does not throw on a non-zero exit; the caller reads Code.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$StateDb,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[a-z_]+$')][string]$Verb,
+        [string[]]$Arguments = @(),
+        [ValidateRange(1, 3600)][int]$TimeoutSec = 180,
+        # The store clock (--now-utc), for the verbs whose result depends on an age.
+        [Nullable[datetime]]$NowUtc,
+        # The verb reads the human's console: the console attestation of a human-command start.
+        [switch]$Console
+    )
+    # PowerShell unwraps a [Nullable[datetime]] parameter to a plain [datetime]; it has no .Value.
+    $clock = if ($null -ne $NowUtc) { @('--now-utc', (Format-CreditsUtc ([datetime]$NowUtc))) } else { @() }
+    $toolArguments = @($script:StateTool, '--db', $StateDb) + $clock + @($Verb) + @($Arguments)
+    return Invoke-CreditsPythonTool $toolArguments "credits_state.py $Verb" $TimeoutSec ([bool]$Console)
+}
+
+function Test-CreditsChainSource {
+    <#
+    .SYNOPSIS
+        Check a chain block's quote against the typed message that it names (credits_msg.py
+        chain_source). Reads the transcript only. Returns Code, Payload, Out and Err; exit 3 is a
+        refusal, with chain_source_missing or chain_quote_mismatch in the payload.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Session,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [Parameter(Mandatory = $true)][string]$Quote,
+        [ValidateRange(1, 3600)][int]$TimeoutSec = 60
+    )
+    $toolArguments = @($script:MsgTool, 'chain_source', '--session', $Session, '--message', $Message, '--quote', $Quote)
+    return Invoke-CreditsPythonTool $toolArguments 'credits_msg.py chain_source' $TimeoutSec $false
+}
+
+function Invoke-CreditsAuthority {
+    <#
+    .SYNOPSIS
+        Run credits_msg.py authority for one segment (PE21-D4). Reads the store only.
+    .DESCRIPTION
+        The tool reads the run, the segment and the store from CREDITS_RUN_ID, CREDITS_SEGMENT and
+        CREDITS_STATE_DB, which this call sets in the child environment only. With -Quote it also
+        checks the words against the quote of the start request. Returns Code, Payload, Out and
+        Err; exit 0 is the check passed, and any other exit is a refusal with the error in the
+        payload. Throws when the tool does not end by its deadline.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$StateDb,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')][string]$RunId,
+        [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$SegmentId,
+        [AllowEmptyString()][string]$Quote = '',
+        [ValidateRange(1, 3600)][int]$TimeoutSec = 180
+    )
+    $toolArguments = @($script:MsgTool, 'authority')
+    if ($Quote) { $toolArguments += @('--quote', $Quote) }
+    $environment = @{ CREDITS_RUN_ID = $RunId; CREDITS_SEGMENT = $SegmentId; CREDITS_STATE_DB = $StateDb }
+    return Invoke-CreditsPythonTool $toolArguments 'credits_msg.py authority' $TimeoutSec $false $environment
 }
 
 function Format-CreditsStateError($Result) {
@@ -690,9 +746,11 @@ function Complete-CreditsSegment {
         [Parameter(Mandatory = $true)][ValidateSet('launcher', 'monitor', 'wrapper')][string]$FinalizedBy,
         [Parameter(Mandatory = $true)][ValidatePattern('^[a-z][a-z0-9_]{0,63}$')][string]$Class,
         [Nullable[double]]$SessionTotalUsd,
-        [Nullable[int]]$ExitCode
+        [Nullable[int]]$ExitCode,
+        [ValidateSet('absent', 'present')][string]$CliStart
     )
     $argsList = @('--segment-id', $SegmentId, '--finalized-by', $FinalizedBy, '--class', $Class)
+    if ($CliStart) { $argsList += @('--cli-start', $CliStart) }
     if ($null -ne $SessionTotalUsd) { $argsList += @('--session-total-usd', ([double]$SessionTotalUsd).ToString('R', [System.Globalization.CultureInfo]::InvariantCulture)) }
     if ($null -ne $ExitCode) { $argsList += @('--exit-code', [string][int]$ExitCode) }
     $res = Invoke-CreditsState -StateDb $StateDb -Verb complete_segment -Arguments $argsList
@@ -1155,11 +1213,133 @@ function Test-CreditsSameDirectory {
     return [string]::Equals($a, $b, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+# PE21-D15 (MEU-895 Constant Classification): the launch.env channel of a manifest. A name is
+# allowed when it is AGENT_MODEL_REGISTRY_HOME or {{PROJECT_NAME_UPPER}}_[A-Z0-9_]+, and not a refused name.
+$script:EnvMaxNames = 32
+$script:EnvMaxValue = 1024
+$script:EnvNameAllow = '^(AGENT_MODEL_REGISTRY_HOME|{{PROJECT_NAME_UPPER}}_[A-Z0-9_]+)$'
+$script:EnvNameRefused = @(
+    '(?i)^({{PROJECT_NAME_UPPER}}_DISPATCH_|{{PROJECT_NAME_UPPER}}_CREDITS_|CREDITS_|ANTHROPIC_|CLAUDE|DISABLE_PROMPT_CACHING)',
+    '(?i)^PATH$',
+    '(?i)KEY|TOKEN|SECRET|PASSWORD'
+)
+
+function Get-CreditsLaunchEnvRefusal {
+    <#
+    .SYNOPSIS
+        The refusal of a manifest launch.env as Reason and Message, or $null when the map is
+        absent or allowed (PE21-D15).
+    .DESCRIPTION
+        launch.env is an object of string to string with at most 32 names. Each name matches
+        $script:EnvNameAllow (case-sensitive) and no pattern of $script:EnvNameRefused. Each value
+        is a string of at most 1024 characters with no NUL, CR or LF. A name that fails is
+        env_name_refused, and a value that fails is env_value_refused. Register-CreditsRun.ps1 and
+        Start-CreditsRun.ps1 both call this check. The message names the name and never the value.
+    #>
+    param($LaunchEnv)
+    if ($null -eq $LaunchEnv) { return $null }
+    $pairs = [System.Collections.Generic.List[object[]]]::new()
+    if ($LaunchEnv -is [System.Collections.IDictionary]) {
+        foreach ($key in $LaunchEnv.Keys) { $pairs.Add(@([string]$key, $LaunchEnv[$key])) }
+    } elseif ($LaunchEnv -is [System.Management.Automation.PSCustomObject]) {
+        foreach ($prop in $LaunchEnv.PSObject.Properties) { $pairs.Add(@([string]$prop.Name, $prop.Value)) }
+    } else {
+        return [pscustomobject]@{ Reason = 'env_name_refused'; Message = 'launch.env must be an object of string to string' }
+    }
+    if ($pairs.Count -gt $script:EnvMaxNames) {
+        return [pscustomobject]@{ Reason = 'env_name_refused'; Message = "launch.env has $($pairs.Count) names; at most $($script:EnvMaxNames)" }
+    }
+    foreach ($pair in $pairs) {
+        $name = [string]$pair[0]
+        $allowed = $name -cmatch $script:EnvNameAllow
+        foreach ($pattern in $script:EnvNameRefused) {
+            if ($name -match $pattern) { $allowed = $false }
+        }
+        if (-not $allowed) { return [pscustomobject]@{ Reason = 'env_name_refused'; Message = "launch.env name refused: $name" } }
+        $value = $pair[1]
+        if ($value -isnot [string] -or $value.Length -gt $script:EnvMaxValue -or $value -match '[\x00\r\n]') {
+            return [pscustomobject]@{ Reason = 'env_value_refused'; Message = "launch.env value refused for $name (a string of at most $($script:EnvMaxValue) characters, no NUL, CR or LF)" }
+        }
+    }
+    return $null
+}
+
+function Get-CreditsTranscriptPath {
+    <#
+    .SYNOPSIS
+        The CLI transcript of a session (credits_state.py transcript_path, report section 4.6.3
+        step 2): <CLAUDE_CONFIG_DIR, else ~/.claude>/projects/<project root with each character
+        other than A-Z, a-z and 0-9 as '-'>/<session>.jsonl. $null when either input is empty.
+    #>
+    param([AllowEmptyString()][string]$ProjectRoot, [AllowEmptyString()][string]$SessionId)
+    if (-not $ProjectRoot -or -not $SessionId) { return $null }
+    $base = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else {
+        $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
+        Join-Path $homeDir '.claude'
+    }
+    return Join-Path (Join-Path (Join-Path $base 'projects') ($ProjectRoot -replace '[^A-Za-z0-9]', '-')) "$SessionId.jsonl"
+}
+
+function Get-CreditsModelRegistryPath {
+    <#
+    .SYNOPSIS
+        The model registry that prices a cost estimate, in the locate order of
+        .agent/INSTANTIATE.md section 1 (LOCATE_ORDER): AGENT_MODEL_REGISTRY, then
+        $AGENT_MODEL_REGISTRY_HOME/model-registry.json, then ~/.agent/model-registry.json. $null
+        when none exists. An AGENT_MODEL_REGISTRY or AGENT_MODEL_REGISTRY_HOME that is set but
+        names no file gives $null: no fall back to another registry (fail-closed).
+    #>
+    if ($env:AGENT_MODEL_REGISTRY) {
+        if (Test-Path -LiteralPath $env:AGENT_MODEL_REGISTRY -PathType Leaf) { return $env:AGENT_MODEL_REGISTRY }
+        return $null
+    }
+    if ($env:AGENT_MODEL_REGISTRY_HOME) {
+        $candidate = Join-Path $env:AGENT_MODEL_REGISTRY_HOME 'model-registry.json'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        return $null
+    }
+    $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
+    if ($homeDir) {
+        $candidate = Join-Path $homeDir '.agent/model-registry.json'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return $null
+}
+
+function Update-CreditsCostEstimate {
+    <#
+    .SYNOPSIS
+        Run cost_reconcile for a finalized segment with no trusted total (PE21-D11). Returns the
+        store payload: cost_estimate_usd when the transcript was priced, else cost_unknown.
+        Throws when the store refuses or fails.
+    .DESCRIPTION
+        The estimate is information only: the exposure stays open at its full reservation and the
+        cap check does not read it (report section 4.1). A missing transcript files the notice
+        cost_unknown once. With no -Registry and no registry on the locate path the call throws
+        registry_not_found, and the store is not called.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$StateDb,
+        [Parameter(Mandatory = $true)][string]$SegmentId,
+        [Parameter(Mandatory = $true)][string]$Transcript,
+        [string]$Registry,
+        [Nullable[datetime]]$NowUtc
+    )
+    if (-not $Registry) { $Registry = Get-CreditsModelRegistryPath }
+    if (-not $Registry) { throw "cost_reconcile failed for ${SegmentId}: registry_not_found: no model registry on the locate path" }
+    $stateArgs = @{ StateDb = $StateDb; Verb = 'cost_reconcile'; Arguments = @('--segment-id', $SegmentId, '--transcript', $Transcript, '--registry', $Registry) }
+    if ($null -ne $NowUtc) { $stateArgs.NowUtc = $NowUtc }
+    $res = Invoke-CreditsState @stateArgs
+    if ($res.Code -ne 0) { throw "cost_reconcile failed for ${SegmentId}: $(Format-CreditsStateError $res)" }
+    return $res.Payload
+}
+
 Export-ModuleMember -Function @(
+    'Get-CreditsLaunchEnvRefusal', 'Get-CreditsTranscriptPath', 'Get-CreditsModelRegistryPath', 'Update-CreditsCostEstimate',
     'Get-CreditsJobName', 'New-CreditsJob', 'Get-CreditsJobActiveCount', 'Start-CreditsJobProcess', 'Resume-CreditsJobProcess',
     'Stop-CreditsJob', 'Close-CreditsJob', 'Get-CreditsBootId', 'Format-CreditsUtc', 'Get-CreditsJobProof',
     'Stop-CreditsJobByName', 'Get-CreditsProcessState',
-    'Get-CreditsPython', 'Invoke-CreditsState', 'Format-CreditsStateError', 'Complete-CreditsSegment', 'Start-CreditsManualChild',
+    'Get-CreditsPython', 'Invoke-CreditsState', 'Test-CreditsChainSource', 'Invoke-CreditsAuthority', 'Format-CreditsStateError', 'Complete-CreditsSegment', 'Start-CreditsManualChild',
     'Get-CreditsConstants', 'New-CreditsTaskDefinition', 'New-CreditsMonitorTaskDefinition', 'Get-CreditsTaskDefinitionHash',
     'New-CreditsSchedulerAdapter', 'Enter-CreditsKeepAwake', 'Exit-CreditsKeepAwake', 'Read-CreditsLauncherEnv',
     'Resolve-CreditsPhysicalPath', 'Test-CreditsSameDirectory'

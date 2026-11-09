@@ -1181,7 +1181,7 @@ def test_vec_v6_045_records_and_derived_view(tmp_path: Path) -> None:
     assert _state(fx, run_id=other) == {"state": "plan:active", "seq": 0}
 
     cs = _cs()
-    assert cs.SCHEMA_VERSION == 7
+    assert cs.SCHEMA_VERSION == 8
     db = tmp_path / "store" / "state.db"
     db.parent.mkdir()
     assert _cli(db, "init").code == 0

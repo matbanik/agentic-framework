@@ -59,6 +59,7 @@ against the prerequisite set D (``base_carry_mismatch``) are S5.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -182,6 +183,17 @@ def _arg_payload(text: str) -> dict[str, Any]:
     return {str(k): v for k, v in loaded.items()}  # pyright: ignore[reportUnknownVariableType]
 
 
+def _arg_quote_b64(text: str) -> str:
+    """The user's words as base64 of UTF-8 (R1-F2): no shell quoting changes them."""
+    try:
+        words = base64.b64decode(text, validate=True).decode("utf-8")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--quote-b64 must be base64 of UTF-8 text"
+        ) from exc
+    return cs._arg_text(words)  # pyright: ignore[reportPrivateUsage]
+
+
 def build_parser() -> _Parser:
     """Return the parser of every verb."""
     parser = _Parser(prog="credits_msg.py", description=__doc__)
@@ -226,13 +238,23 @@ def build_parser() -> _Parser:
     p = verbs.add_parser(
         "authority", help="show the start record of this segment (read-only)"
     )
-    p.add_argument("--quote", type=cs._arg_text)  # pyright: ignore[reportPrivateUsage]
+    words = p.add_mutually_exclusive_group()
+    words.add_argument("--quote", type=cs._arg_text)  # pyright: ignore[reportPrivateUsage]
+    words.add_argument("--quote-b64", dest="quote_b64", type=_arg_quote_b64)
 
     p = verbs.add_parser(
         "locate", help="propose the transcript uuid of a quoted entry (read-only)"
     )
     p.add_argument("--session", required=True, type=cs._arg_key)  # pyright: ignore[reportPrivateUsage]
     p.add_argument("--quote", required=True, type=cs._arg_text)  # pyright: ignore[reportPrivateUsage]
+
+    p = verbs.add_parser(
+        "chain_source",
+        help="check a chain block's quote against the typed message (read-only)",
+    )
+    p.add_argument("--session", required=True, type=cs._arg_start_uuid)  # pyright: ignore[reportPrivateUsage]
+    p.add_argument("--message", required=True, type=cs._arg_start_uuid)  # pyright: ignore[reportPrivateUsage]
+    p.add_argument("--quote", required=True)
     return parser
 
 
@@ -992,10 +1014,13 @@ def verb_tree(ctx: cs.Context, env: dict[str, str], path: str) -> cs.Outcome:
     doc = cs.manifest_doc(found)
     if found["base_fixed"] == 1 and found["start_tree"] is not None:
         return tree_continue(ctx, env, found, doc, repo, base)
+    after_removal = doc.get("executor_worktree") is True and removal_after(
+        repo, doc, run_id
+    )
     try:
         main = repo
         links: list[str] = []
-        if doc.get("executor_worktree") is True:
+        if doc.get("executor_worktree") is True and not after_removal:
             main, helper = worktree_facts(repo)
             if helper is None:
                 raise cs.Refusal(
@@ -1072,6 +1097,7 @@ def verb_tree(ctx: cs.Context, env: dict[str, str], path: str) -> cs.Outcome:
                 "active_tree": str(repo),
                 "start_tree": kept or start,
                 "carry_manifest": manifest,
+                **({"tree_kind": "main_after_removal"} if after_removal else {}),
             },
         )
 
@@ -1081,6 +1107,39 @@ def verb_tree(ctx: cs.Context, env: dict[str, str], path: str) -> cs.Outcome:
     except GitError as exc:
         raise cs.Refusal("git_failed", str(exc)) from exc
     return cs.transact(ctx, body)
+
+
+def removal_after(repo: Path, doc: Mapping[str, object], run_id: str) -> bool:
+    """True when ``repo`` is the main tree of a run whose executor worktree was removed.
+
+    AC-895.11 (PE21-D16): after the land removes the run's lane worktree, a later
+    segment runs in the main tree. ``verb_tree`` and ``tree_continue`` accept that
+    tree, with ``tree_kind: main_after_removal``, only when ``repo`` is a main tree
+    (no helper manifest) and ``run_parameters.phase_removals`` holds a removal record
+    of ``run_id`` for the plan. Every other case is False, so the caller keeps its
+    ``worktree_required`` refusal. A git call or a record read that fails is logged as
+    ``removal_check_failed`` and is also False; the caller's own git calls then
+    report the git fault.
+    """
+    try:
+        main, helper = worktree_facts(repo)
+    except GitError as exc:
+        cs.log("removal_check_failed", run_id=run_id, step="worktree", error=str(exc))
+        return False
+    if helper is not None or not same_path(repo, main):
+        return False
+    plan = Path(str(doc.get("plan_folder") or "").rstrip("/\\")).name
+    if not plan:
+        cs.log(
+            "removal_check_failed", run_id=run_id, step="plan", error="no plan_folder"
+        )
+        return False
+    rp = run_parameters_module()
+    try:
+        return bool(rp.phase_removals(repo, plan=plan, run_id=run_id))
+    except (rp.Refusal, rp.NonAuthorizing, rp.GitError, OSError) as exc:
+        cs.log("removal_check_failed", run_id=run_id, step="record", error=str(exc))
+        return False
 
 
 def same_path(path: Path, recorded: object) -> bool:
@@ -1116,9 +1175,12 @@ def tree_continue(
     fixed = str(found["base_commit"])
     start = str(found["start_tree"])
     ref = f"refs/credits/{run_id}/start"
+    after_removal = doc.get("executor_worktree") is True and removal_after(
+        repo, doc, run_id
+    )
     try:
         main = repo
-        if doc.get("executor_worktree") is True:
+        if doc.get("executor_worktree") is True and not after_removal:
             main, helper = worktree_facts(repo)
             if helper is None:
                 raise cs.Refusal(
@@ -1130,13 +1192,14 @@ def tree_continue(
                     "base_required",
                     "an executor-worktree run needs CREDITS_BASE_COMMIT",
                 )
-        if not same_path(repo, found["active_tree"]) or not same_path(
-            main, found["main_tree"]
-        ):
+        # After the governed removal of its executor worktree, the run continues in
+        # its recorded main tree, and the binding moves there (R1-F3).
+        bound = found["main_tree"] if after_removal else found["active_tree"]
+        if not same_path(repo, bound) or not same_path(main, found["main_tree"]):
             raise cs.Refusal(
                 "active_tree_mismatch",
-                f"run {run_id} works in {found['active_tree']}, not {repo}",
-                active_tree=found["active_tree"],
+                f"run {run_id} works in {bound}, not {repo}",
+                active_tree=bound,
             )
         try:
             want = git_text(
@@ -1178,7 +1241,15 @@ def tree_continue(
     except GitError as exc:
         raise cs.Refusal("git_failed", str(exc)) from exc
 
-    return carry_continue(ctx, run_id, segment_id, repo, start)
+    return carry_continue(
+        ctx,
+        run_id,
+        segment_id,
+        repo,
+        start,
+        sets={"active_tree": str(repo)} if after_removal else None,
+        extra={"tree_kind": "main_after_removal"} if after_removal else None,
+    )
 
 
 def carry_continue(
@@ -1759,6 +1830,59 @@ def chain_authorization(run: sqlite3.Row) -> dict[str, Any] | None:
     return {key: chain.get(key) for key in ("chain_id", "quote", "given_at")}
 
 
+def check_attestation(ctx: cs.Context, request: sqlite3.Row) -> None:
+    """A console start needs its attestation; the file seam counts only off production."""
+    channel = request["attest_channel"]
+    seam_ok = bool(os.environ.get(cs.ATTEST_FILE_ENV)) and not cs.is_production_db(
+        ctx.db
+    )
+    if request["attested_utc"] is None or not (
+        channel == "console" or (channel == "file" and seam_ok)
+    ):
+        raise cs.Refusal(
+            "authority_attest_untrusted",
+            f"the start request {request['request_id']} has no trusted attestation"
+            f" (channel {channel})",
+        )
+
+
+def recheck_start_source(
+    ctx: cs.Context, run: sqlite3.Row, request: sqlite3.Row
+) -> str:
+    """Check the start source of the request again and return its ``source_check``.
+
+    A row with no source, or with a source that is not the one of its starter, was not
+    verified (PE21-D8): the human starts the run again. The check only reads.
+    """
+    source = request["source_check"]
+    if source is None or source != cs.SOURCE_BY_STARTER.get(str(request["started_by"])):
+        raise cs.Refusal(
+            "authority_source_unverified",
+            f"the start request {request['request_id']} has no verified start source;"
+            " start the run again",
+        )
+    if source == cs.SOURCE_TRANSCRIPT:
+        session, message = request["start_session"], request["start_message"]
+        if not session or not message:
+            raise cs.Refusal(
+                "authority_source_unverified",
+                f"the start request {request['request_id']} names no typed message",
+            )
+        cs.verify_typed_quote(str(session), str(message), str(request["start_quote"]))
+    elif source == cs.SOURCE_CHAIN:
+        try:
+            doc = cs.as_dict(json.loads(str(run["manifest_json"] or "{}")))
+        except ValueError as exc:
+            raise cs.Refusal(
+                "manifest_invalid", f"the run's manifest is not JSON: {exc}"
+            ) from exc
+        chain = None if doc is None else cs.as_dict(doc.get("chain"))
+        cs.verify_chain_source({} if chain is None else chain)
+    else:
+        check_attestation(ctx, request)
+    return str(source)
+
+
 def authority_record(
     tx: cs.Tx, run_id: str, segment_id: str, quote: str | None
 ) -> dict[str, Any]:
@@ -1813,16 +1937,20 @@ def authority_record(
             "authority_no_quote",
             "an agent-on-user-chat start request carries no quote of the user's words",
         )
+    chain = chain_authorization(run) if started_by == "monitor-chain" else None
+    # A chain start records no quote: the user's words are the quote of its chain (R1-F1).
+    words = recorded
+    if words is None and chain is not None:
+        words = chain["quote"]
     checked = False
     if quote is not None:
-        if recorded is None or cs.normalize_text(str(recorded)) != cs.normalize_text(
-            quote
-        ):
+        if words is None or cs.normalize_text(str(words)) != cs.normalize_text(quote):
             raise cs.Refusal(
                 "authority_quote_mismatch",
                 "the given words are not the quote of the start request",
             )
         checked = True
+    source_check = recheck_start_source(tx.ctx, run, request)
     return {
         "authorized": True,
         "run_id": run_id,
@@ -1833,9 +1961,10 @@ def authority_record(
         "attempt_id": str(segment["attempt_id"]),
         "dispatch_id": attempt["dispatch_id"],
         "started_by": started_by,
+        "source_check": source_check,
         "quote": recorded,
         "requested_by": request["requested_by"],
-        "chain": chain_authorization(run) if started_by == "monitor-chain" else None,
+        "chain": chain,
         "resume": bool(request["resume"]),
         "resume_mode": request["resume_mode"],
         "brief": request["brief"],
@@ -1868,18 +1997,13 @@ def verb_authority(
 
 def claude_dir() -> Path:
     """The CLI's config folder: ``CLAUDE_CONFIG_DIR``, else ``~/.claude`` (as the verifier)."""
-    config = os.environ.get("CLAUDE_CONFIG_DIR")
-    if config:
-        return Path(config)
-    home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
-    return (Path(home) if home else Path.home()) / ".claude"
+    return cs.claude_config_dir()
 
 
 def session_transcript(session: str) -> Path:
     """Return the one ``projects/<slug>/<session>.jsonl``, or refuse."""
     projects = claude_dir() / "projects"
-    found = sorted(projects.glob(f"*/{session}.jsonl")) if projects.is_dir() else []
-    found = [path for path in found if path.is_file()]
+    found = cs.session_transcripts(session)
     if not found:
         raise cs.Refusal(
             "transcript_missing",
@@ -1946,6 +2070,17 @@ def verb_locate(session: str, quote: str) -> cs.Outcome:
     return cs.Outcome(
         "ok", {"session": session, "transcript": str(path), **candidates[0]}
     )
+
+
+def main_chain_source(args: argparse.Namespace) -> int:
+    """Run ``chain_source`` for the register script: no ``CREDITS_*`` value and no store."""
+    try:
+        cs.verify_chain_source(
+            {"session": args.session, "message_uuid": args.message, "quote": args.quote}
+        )
+    except cs.Refusal as exc:
+        return cs.emit({**exc.payload(), "verb": "chain_source"}, cs.EXIT_REFUSED)
+    return cs.emit({"result": "ok", "verb": "chain_source"}, cs.EXIT_OK)
 
 
 def main_locate(args: argparse.Namespace) -> int:
@@ -2232,7 +2367,7 @@ def start_message_ok(pr: PhaseRun, payload: Mapping[str, Any]) -> bool:
             continue
         text = pr.rp.typed_human_text(pr.tree, session, uid)
         if text is not None:
-            return not quote or str(quote) in text
+            return not quote or cs.normalize_text(str(quote)) in cs.normalize_text(text)
     return False
 
 
@@ -2410,7 +2545,9 @@ def run_verb(
             return verb_capture(ctx, env, args.changed_files, args.closeout)
         return verb_seal(ctx, env)
     if verb == "authority":
-        return verb_authority(ctx, env, args.quote)
+        return verb_authority(
+            ctx, env, args.quote if args.quote is not None else args.quote_b64
+        )
     if verb == "phase":
         return verb_phase(
             ctx, env, args.event, dict(args.payload or {}), args.op, args.by
@@ -2435,6 +2572,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         check_landing_args(args)
         if args.verb == "locate":
             return main_locate(args)
+        if args.verb == "chain_source":
+            return main_chain_source(args)
         env = require_env()
         crash_at = parse_msg_crash(os.environ.get("CREDITS_TEST_CRASH_AT"))
         busy_ms = cs.busy_timeout_ms("cli")

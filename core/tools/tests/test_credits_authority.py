@@ -281,6 +281,9 @@ def chain_manifest(st: Store, run_id: str) -> Path:
         "given_at": at(-100),
         "chain_cap_usd": 50.0,
     }
+    doc["chain"].update(
+        st.chain_start_transcript(doc["chain"], str(doc["project_root"]))
+    )
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
     return path
 

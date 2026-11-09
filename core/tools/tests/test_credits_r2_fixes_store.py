@@ -78,6 +78,10 @@ def chain_manifest(st: Store, run_id: str, block: dict[str, Any]) -> Path:
     path = write_manifest(st, run_id, lane=f"tree:X:/fixture-tree/{run_id}")
     doc = json.loads(path.read_text(encoding="utf-8"))
     doc["chain"] = block
+    doc["chain"] = {
+        **st.chain_start_transcript(block, str(doc["project_root"])),
+        **block,
+    }
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
     return path
 

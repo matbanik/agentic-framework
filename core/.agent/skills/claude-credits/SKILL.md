@@ -184,20 +184,42 @@ watches every run and mails you when one stops. The agent rules are in `create-p
    pwsh -NoProfile -File .agent/skills/claude-credits/Start-CreditsRunTask.ps1 -RunId <run-id> -StartedBy human-command
    ```
 
-   An agent starts a run only when you tell it to in chat, and it passes your words:
-   `-StartedBy agent-on-user-chat -StartQuote "<your words>"`. Exit 0 is launched. Exit 4 is
-   accepted with the outcome still pending; the monitor settles it. Exit 1 is not started and
-   exit 3 is refused.
+   The script shows a one-use code on that console. Type it and press Enter within 120 s
+   (`CREDITS_ATTEST_TIMEOUT_S`, 1 to 600). The store files the request only after that. This proves
+   a console with live input, so a start from a scheduled task or a script gets `attest_no_console`
+   or `attest_timeout`.
+
+   An agent starts a run only when you tell it to in chat. It passes your words and the message
+   that holds them:
+   `-StartedBy agent-on-user-chat -StartQuote "<your words>" -StartSession <session id> -StartMessage <message uuid>`.
+   `tools/credits_msg.py locate --session <id> --quote "<your words>"` proposes the uuid. The store
+   reads the transcript: the quote must be the whole typed text of that message, after white space
+   is normalized (`start_quote_mismatch`), and one message starts one segment of a run
+   (`start_message_reused`). A launch that fails before the CLI starts gives the message back.
+
+   A chain block in a manifest names its message in the same way, with `session` and
+   `message_uuid`. `Register-CreditsRun.ps1` refuses a block with no message
+   (`chain_source_missing`) and a quote that is not the whole typed text
+   (`chain_quote_mismatch`).
+
+   Exit 0 is launched. Exit 4 is accepted with the outcome still pending; the monitor settles it.
+   Exit 1 is not started and exit 3 is refused.
 
    The agent also writes your words into the brief, exactly as it passed them. The run's first
    act is `credits_msg.py authority --quote "<your words>"` (no `--quote` for a run that you
-   start yourself). The verb reads the start record from the run store and changes nothing. A
-   missing record or other words stop the run with `STOPPED:decision`.
+   start yourself). When your words hold a quotation mark, `$`, a backtick, a backslash or `!`,
+   the Start record names `--quote-b64 <the UTF-8 words in base64>` in place of `--quote`, so
+   that no shell changes the words. A chain start checks the quote of its chain. The verb reads
+   the start record from the run store, checks its start source again (`source_check` in its
+   output) and changes nothing. A missing record, other words or a
+   source that fails the check stop the run with `STOPPED:decision`. A request filed before this
+   check existed gets `authority_source_unverified`: start the run again.
 4. Check a run with `Get-CreditsRun.ps1`. With no run id it lists every run. With a run id it
    shows the segments, the messages, the open gate, the cost, the `task.md` stop gate and the
    final status. The check is read-only.
 5. Resume a stopped run with `Start-CreditsRunTask.ps1 -RunId <run-id> -Resume -Brief <path>` and
-   the same `-StartedBy` rule. Fill the brief from
+   the same `-StartedBy` rule. An agent resume needs new words from you: it passes
+   `-StartSession` and `-StartMessage` of the new message. Fill the brief from
    `.agent/skills/claude-credits/templates/resume-brief.md`; its §Start authority holds your
    resume words for the `credits_msg.py authority --quote` check. Only a human
    resumes a run; the monitor never does.
@@ -351,6 +373,55 @@ a workflow such as `/execution-session` on a plan, or a follow-up to an earlier 
 - `Credit balance is too low` from a terminal run means the grant is used up or expired (or
   the key belongs to an org without credits), not a script fault. From a Claude Code launch,
   the wrapper adds a hint to `error_summary`.
+- A segment that ends with no trusted total (a killed CLI or a crash) gets an estimate from its
+  transcript. The monitor sums the usage records of that segment only and prices them with
+  `price_per_mtok` of the model in the model registry and the prompt-cache multipliers.
+  `Get-CreditsRun.ps1` shows the estimate next to the open exposure. The estimate is a lower
+  bound: the transcript has no output of a crashed turn and no subagent spend. So the exposure
+  stays open at its full reservation until `Get-CreditsRun.ps1 -Settle` releases it. With no
+  transcript, no start time or no named model, the store files the notice `cost_unknown` once.
+- `launch.max_budget_usd` lowers the CLI's own budget stop of each segment when it is below the
+  reservation. The reservation and the cap rules do not change. `Register-CreditsRun.ps1`
+  refuses a value above a given `segment_cap_usd` (`max_budget_above_cap`).
+
+## Launch environment
+
+- `launch.env` in a manifest sets extra environment names for the CLI. A name is
+  `AGENT_MODEL_REGISTRY_HOME` or `{{PROJECT_NAME_UPPER}}_[A-Z0-9_]+`. The prefixes `{{PROJECT_NAME_UPPER}}_DISPATCH_`,
+  `{{PROJECT_NAME_UPPER}}_CREDITS_`, `CREDITS_`, `ANTHROPIC_`, `CLAUDE` and `DISABLE_PROMPT_CACHING`, the name
+  `PATH` and a name with `KEY`, `TOKEN`, `SECRET` or `PASSWORD` are refused (`env_name_refused`).
+  At most 32 names. Each value is a string of at most 1024 characters with no NUL, CR or LF
+  (`env_value_refused`). `Register-CreditsRun.ps1` checks the map, and the launcher checks it
+  again at each launch. The launcher log records the names, never the values.
+- The config `cache_ttl` sets the prompt-cache TTL of each segment: `1h` sets
+  `ENABLE_PROMPT_CACHING_1H=1`, and `5m` sets `FORCE_PROMPT_CACHING_5M=1`. A config that the
+  launcher cannot read, or another value, gives `5m` and `WARN credits_cache_ttl_default`.
+
+## Resume
+
+The launcher passes the operator policy
+(`.agent/skills/claude-credits/templates/operator-policy.md`) to each segment with
+`--append-system-prompt-file` and `--system-prompt-snapshot on`. The launcher refuses a start
+when the file does not have the hash in the launcher (`policy_hash_mismatch`). The CLI records the
+system prompt when a session opens, and it keeps that prompt on `--resume` until a compaction.
+
+- A session resume keeps the policy of the segment that opened the session. When that policy
+  has another hash, the launcher logs `WARN policy_snapshot_differs` and goes on.
+- A session resume of a run that started before the policy logs `WARN policy_snapshot_absent`.
+  That session has no policy until a compaction. Use `-ResumeMode fresh` for such a run.
+- A fresh resume (`-ResumeMode fresh`) starts a new session, so it gets the current policy.
+
+## Briefs
+
+The launcher puts a Start record above each brief. The record states who started the segment,
+which source check passed, the user's words and the scope of the run. Before the launcher starts
+the CLI, it runs `tools/credits_msg.py authority` for the segment. A refusal closes the segment
+`launch_failed` at 0 USD, and no CLI starts. The session can run the read-only check command that
+the record names again. A refusal of that command is a stop: the session writes
+`stop_gate: "released:human-gate"` and ends with `STOPPED:decision`.
+
+A brief does not hold the text of `AGENTS.md` or `GUARDRAILS.md`. The project instructions load
+from the repository as usual.
 
 ## Fleet member route
 

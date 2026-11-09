@@ -99,6 +99,8 @@ $script:TaskStarter = Join-Path $PSScriptRoot 'Start-CreditsRunTask.ps1'
 # Start-CreditsRunTask.ps1 waits up to REQUEST_ACCEPT_TIMEOUT_S (120 s) for accepted; the default
 # chain starter gives it that wait and a margin.
 $script:ChainChildTimeoutMs = 150000
+# The segments that the current pass recorded a sleep for (the slept fact of scan_monitor).
+$script:SleptSegments = [System.Collections.Generic.HashSet[string]]::new()
 $script:RpTool = if ($RunParametersTool) { $RunParametersTool } else { Join-Path $script:RepoRoot 'tools/run_parameters.py' }
 $script:PhaseTool = if ($PhaseTool) { $PhaseTool } else { Join-Path $script:RepoRoot 'tools/credits_msg.py' }
 
@@ -243,6 +245,11 @@ function Get-SegmentProof($Segment) {
     $supervisor = if ([string](Get-Prop $Segment 'supervision') -eq 'manual') { $wrapper } else { $launcher }
     $supervisorState = if ($sameBoot) { Get-IdentityState $supervisor.pid $supervisor.created } else { 'dead' }
     if ($supervisorState -eq 'alive') {
+        # R§4.7: a sleep with the pid alive is not a stop; the segment gets a slept note (PE21 Design 7).
+        if (@(Get-IntervalEventKinds $Segment) -contains 'sleep') {
+            $null = Invoke-Store 'slept' @('--segment-id', $segmentId)
+            $null = $script:SleptSegments.Add($segmentId)
+        }
         $null = Invoke-Store 'alive' @('--segment-id', $segmentId)
         return $null
     }
@@ -475,12 +482,32 @@ function Get-PlanSlug($Run) {
 function Get-SegmentTranscript($Run, $Segment) {
     $root = [string](Get-Prop (Get-Prop $Run 'manifest') 'project_root')
     $session = [string](Get-Prop $Segment 'expected_session_id')
-    if (-not $root -or -not $session) { return $null }
-    $base = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else {
-        $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
-        Join-Path $homeDir '.claude'
+    return Get-CreditsTranscriptPath -ProjectRoot $root -SessionId $session
+}
+
+# PE21-D11: the information-only cost estimate of each segment that this pass finalized with no
+# trusted total (a killed run). $Segments are the monitor_view rows from before the finalize. A
+# store failure is logged; the estimate never blocks the pass.
+function Update-FinalizedCostEstimates([string[]]$SegmentIds, [object[]]$Segments) {
+    $runs = @{}
+    foreach ($segmentId in $SegmentIds) {
+        if (-not $segmentId) { continue }
+        $segment = @($Segments | Where-Object { $null -ne $_ -and [string](Get-Prop $_ 'segment_id') -eq $segmentId }) | Select-Object -First 1
+        if ($null -eq $segment) { continue }
+        $runId = [string](Get-Prop $segment 'run_id')
+        try {
+            if (-not $runs.ContainsKey($runId)) { $runs[$runId] = Invoke-Store 'run_status' @('--run-id', $runId) }
+            $transcript = Get-SegmentTranscript $runs[$runId] $segment
+            if (-not $transcript) {
+                Write-MonitorLog 'WARN' 'cost_estimate_skipped' @{ segment_id = $segmentId; reason = 'no_transcript_path' }
+                continue
+            }
+            $estimate = Update-CreditsCostEstimate -StateDb $script:Db -SegmentId $segmentId -Transcript $transcript -NowUtc $script:Clock
+            Write-MonitorLog 'INFO' 'cost_estimate' @{ segment_id = $segmentId; cost_estimate_usd = (Get-Prop $estimate 'cost_estimate_usd') }
+        } catch {
+            Write-MonitorLog 'WARN' 'cost_estimate_failed' @{ segment_id = $segmentId; error = $_.Exception.Message }
+        }
     }
-    return Join-Path (Join-Path (Join-Path $base 'projects') ($root -replace '[^A-Za-z0-9]', '-')) "$session.jsonl"
 }
 
 # R§4.4 V6-049: the authoritative E9 record of a phased run that died with no Status. The tool
@@ -878,9 +905,35 @@ function Invoke-TranscriptScans {
     return $scanned
 }
 
+# The facts of scan_monitor (PE21 Design 7): for each running segment, the UTC time of the last
+# transcript write ($null when there is no transcript), whether its CLI pid is alive, and whether
+# this pass recorded a sleep for it. Reads run_status once per run.
+function Get-MonitorFacts {
+    $facts = @{}
+    $runs = @{}
+    foreach ($open in @(Get-Prop (Invoke-Store 'monitor_view') 'segments')) {
+        if ($null -eq $open -or [string](Get-Prop $open 'state') -ne 'running') { continue }
+        $segmentId = [string](Get-Prop $open 'segment_id')
+        $runId = [string](Get-Prop $open 'run_id')
+        if (-not $runs.ContainsKey($runId)) { $runs[$runId] = Invoke-Store 'run_status' @('--run-id', $runId) }
+        $path = Get-SegmentTranscript $runs[$runId] $open
+        $mtime = $null
+        if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+            $mtime = (Get-Item -LiteralPath $path).LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        $facts[$segmentId] = @{
+            transcript_mtime_utc = $mtime
+            pid_alive = ((Get-IdentityState (Get-Prop $open 'pid') (Get-Prop $open 'created')) -eq 'alive')
+            slept = $script:SleptSegments.Contains($segmentId)
+        }
+    }
+    return $facts
+}
+
 # --- one pass ---------------------------------------------------------------------------------
 
 function Invoke-MonitorPass {
+    $script:SleptSegments = [System.Collections.Generic.HashSet[string]]::new()
     $limit = (Get-CreditsConstants).ORPHAN_REQUEST_S
     $requests = Invoke-Store 'scan_requests'
     foreach ($requestId in @(Get-Prop $requests 'orphaned')) {
@@ -909,7 +962,10 @@ function Invoke-MonitorPass {
         $proof = Get-SegmentProof $segment
         if ($proof) { $segmentProofs[$segmentId] = $proof }
     }
-    if ($segmentProofs.Count -gt 0) { $null = Invoke-Store 'scan_segments' @('--proofs-json', ($segmentProofs | ConvertTo-Json -Compress)) }
+    if ($segmentProofs.Count -gt 0) {
+        $scanned = Invoke-Store 'scan_segments' @('--proofs-json', ($segmentProofs | ConvertTo-Json -Compress))
+        Update-FinalizedCostEstimates @(Get-Prop $scanned 'finalized') @(Get-Prop $view 'segments')
+    }
 
     $view = Invoke-Store 'monitor_view'
     $classified = 0
@@ -925,6 +981,15 @@ function Invoke-MonitorPass {
     $chains = Start-ReadyChains
 
     $transcripts = Invoke-TranscriptScans
+
+    # PE21 Design 7: the duty notices, before the outbox (R§4.4 steps 1 and 3). A refusal is a
+    # defect of the facts; it is logged and the outbox still runs.
+    $facts = Get-MonitorFacts
+    $scan = Invoke-CreditsState -StateDb $script:Db -Verb scan_monitor -Arguments @('--alive-json', ($facts | ConvertTo-Json -Compress -Depth 4)) -NowUtc $script:Clock
+    if ($scan.Code -ne 0) {
+        $level = if ($scan.Code -eq 3) { 'WARN' } else { 'ERROR' }
+        Write-MonitorLog $level 'scan_monitor_refused' @{ segments = $facts.Count; error = (Format-CreditsStateError $scan) }
+    }
 
     $null = Invoke-Store 'outbox_scan'
     $sent = Send-DueNotices

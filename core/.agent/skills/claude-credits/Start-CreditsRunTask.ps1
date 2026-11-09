@@ -11,8 +11,11 @@
          human-command start and a monitor-chain start are allowed under both values;
       1. reads the run's task back through the scheduler adapter (a missing task is refused);
       2. files the start request (store verb request), which moves the run to requested. A
-         human-command start records the OS user and the host; an agent-on-user-chat start needs
-         the user's quote; a resume needs a stopped run;
+         human-command start records the OS user and the host and shows a one-use code on the
+         console: the store files the request only after the human types the code. An
+         agent-on-user-chat start needs the user's quote and the message that holds it
+         (-StartSession and -StartMessage): the store checks that the quote is the whole typed
+         text of that message. A resume needs a stopped run;
       3. starts the task (Start-ScheduledTask through the adapter);
       4. waits up to REQUEST_ACCEPT_TIMEOUT_S (120 s) for the launcher to accept the request. With
          no accept it marks the request not_started (caller_timeout) only when it is still pending
@@ -27,12 +30,27 @@
       1  not_started, rejected or launch_failed;
       3  refused (the store refused the request, the run has no task, -ResumeMode or -Brief
          without -Resume, a -Brief file that does not exist, an unusable credits config
-         (config_invalid), or the start policy (start_policy));
+         (config_invalid), the start policy (start_policy), an agent-on-user-chat start with
+         a quote and without -StartSession and -StartMessage, or CREDITS_ATTEST_TIMEOUT_S
+         outside 1 to 600);
       4  accepted_pending (accepted, the outcome is not known yet);
       9  an unexpected error.
 
+    A human-command start waits CREDITS_ATTEST_TIMEOUT_S seconds for the code (default 120, range 1
+    to 600). The script reads this value once and passes it to the store.
+
+.PARAMETER StartSession
+    agent-on-user-chat: the session id of the chat where the human typed the start words.
+
+.PARAMETER StartMessage
+    agent-on-user-chat: the uuid of the typed message. One message starts one segment of a run, so
+    a resume needs new words. tools/credits_msg.py locate --session <id> --quote "<words>" proposes it.
+
 .EXAMPLE
     pwsh -NoProfile -File .agent/skills/claude-credits/Start-CreditsRunTask.ps1 -RunId my-plan-exec -StartedBy human-command
+
+.EXAMPLE
+    pwsh -NoProfile -File .agent/skills/claude-credits/Start-CreditsRunTask.ps1 -RunId my-plan-exec -StartedBy agent-on-user-chat -StartQuote "<the words>" -StartSession <session id> -StartMessage <message uuid>
 #>
 [CmdletBinding()]
 param(
@@ -68,6 +86,10 @@ param(
     # Default: New-CreditsSchedulerAdapter (the real Task Scheduler).
     [hashtable]$Scheduler,
 
+    # The chat session and the typed message that hold -StartQuote. Needed for agent-on-user-chat.
+    [ValidatePattern('^[0-9a-f-]{36}$', Options = 'None')][string]$StartSession,
+    [ValidatePattern('^[0-9a-f-]{36}$', Options = 'None')][string]$StartMessage,
+
     # The wait for accepted. The value can only lower REQUEST_ACCEPT_TIMEOUT_S: the script uses
     # min(value, 120000).
     [ValidateRange(1, 2147483647)][int]$AcceptTimeoutMs = 120000,
@@ -86,6 +108,11 @@ Import-Module -Name (Join-Path $PSScriptRoot 'CreditsRun.psm1') -Force -DisableN
 
 # Report section 4.2: the caller waits 180 s for an outcome after the accept.
 $OutcomeWaitCapMs = 180000
+# The console attestation (credits_state.py ATTEST_*): the wait and the margin of the caller's deadline.
+$AttestDefaultS = 120
+$AttestMinS = 1
+$AttestMaxS = 600
+$AttestCallerMarginS = 60
 $TaskPath = '\{{PROJECT_NAME_TITLE}}\Credits\'
 $FinalStates = @('launched', 'rejected', 'launch_failed', 'not_started')
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -203,6 +230,19 @@ try {
         exit 3
     }
 
+    # The start source: nothing reaches the store for a call that cannot pass its check.
+    if ($StartedBy -eq 'agent-on-user-chat' -and $StartQuote -and (-not $StartSession -or -not $StartMessage)) {
+        Write-Result ([ordered]@{ outcome = 'refused'; run_id = $RunId; reason = 'start_source_missing'; message = 'an agent-on-user-chat start needs -StartSession and -StartMessage' }) 3
+        exit 3
+    }
+    $attestTimeoutS = $AttestDefaultS
+    if ($StartedBy -eq 'human-command' -and -not [string]::IsNullOrEmpty($env:CREDITS_ATTEST_TIMEOUT_S)) {
+        if (-not [int]::TryParse($env:CREDITS_ATTEST_TIMEOUT_S, [ref]$attestTimeoutS) -or $attestTimeoutS -lt $AttestMinS -or $attestTimeoutS -gt $AttestMaxS) {
+            Write-Result ([ordered]@{ outcome = 'refused'; run_id = $RunId; reason = 'attest_timeout_out_of_range'; message = "CREDITS_ATTEST_TIMEOUT_S must be $AttestMinS to $AttestMaxS" }) 3
+            exit 3
+        }
+    }
+
     # --- step 1: the run's task must exist; nothing is filed for a run that cannot start
     if ($null -eq (& $Scheduler['Get'] $TaskPath $RunId)) {
         Write-Result ([ordered]@{ outcome = 'refused'; run_id = $RunId; reason = 'task_missing'; message = "no task $TaskPath$RunId; run Register-CreditsRun.ps1" }) 3
@@ -215,8 +255,16 @@ try {
     if ($ChainId) { $requestArgs += @('--chain-id', $ChainId) }
     if ($Resume) { $requestArgs += @('--resume', '--resume-mode', $(if ($ResumeMode) { $ResumeMode } else { 'session' })) }
     if ($briefPath) { $requestArgs += @('--brief', $briefPath) }
-    if ($StartedBy -eq 'human-command') { $requestArgs += @('--requested-by', "$([Environment]::UserName)@$([Environment]::MachineName)") }
-    $res = Invoke-CreditsState -StateDb $StateDb -Verb request -Arguments $requestArgs
+    if ($StartSession) { $requestArgs += @('--start-session', $StartSession) }
+    if ($StartMessage) { $requestArgs += @('--start-message', $StartMessage) }
+    $requestCall = @{ StateDb = $StateDb; Verb = 'request' }
+    if ($StartedBy -eq 'human-command') {
+        $requestArgs += @('--requested-by', "$([Environment]::UserName)@$([Environment]::MachineName)", '--attest-timeout-s', [string]$attestTimeoutS)
+        # The human types on this console. The caller's deadline never ends a valid wait.
+        $requestCall.Console = $true
+        $requestCall.TimeoutSec = $attestTimeoutS + $AttestCallerMarginS
+    }
+    $res = Invoke-CreditsState @requestCall -Arguments $requestArgs
     if ($res.Code -eq 3) {
         $errorCode = [string](Get-Field $res.Payload 'error')
         $message = [string](Get-Field $res.Payload 'message')

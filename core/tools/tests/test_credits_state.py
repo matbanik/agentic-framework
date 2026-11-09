@@ -193,6 +193,7 @@ class Store:
         return self.root / "effects.jsonl"
 
     def env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        extra = {**self.attest_env(), **(extra or {})}
         return {"CREDITS_TEST_EFFECT_LOG": str(self.effect_log), **(extra or {})}
 
     def cli(
@@ -203,6 +204,7 @@ class Store:
         profile: str | None = None,
         env: dict[str, str] | None = None,
     ) -> Out:
+        args = self.with_start_transcript(verb, args)
         return run_cli(
             self.db, verb, *args, now=now, profile=profile, env=self.env(env)
         )
@@ -241,6 +243,173 @@ class Store:
             return []
         lines = self.effect_log.read_text(encoding="utf-8").splitlines()
         return [str(json.loads(line)["key"]) for line in lines if line.strip()]
+
+    def attest_env(self) -> dict[str, str]:
+        """The test attestation file (CREDITS_ATTEST_FILE) and, once written, the start transcript config (CLAUDE_CONFIG_DIR)."""
+        attest_file = self.root.with_name(f"{self.root.name}-attest-code.txt")
+        if attest_file.parent.is_dir() and not attest_file.exists():
+            attest_file.write_text("ABCDEF\n", encoding="utf-8", newline="\n")
+        attest_vars = {"CREDITS_ATTEST_FILE": str(attest_file)}
+        if self.start_transcript_config().is_dir():
+            attest_vars["CLAUDE_CONFIG_DIR"] = str(self.start_transcript_config())
+        return attest_vars
+
+    def start_transcript_config(self) -> Path:
+        """The CLAUDE_CONFIG_DIR of this store's start transcripts, beside the store folder."""
+        return self.root.with_name(f"{self.root.name}-start-transcript")
+
+    def start_transcript_root(self, transcript_run: str) -> str:
+        """The project_root of a run's stored manifest (the transcript project folder), else the fixture root."""
+        transcript_rows = (
+            self.rows(
+                "SELECT manifest_json FROM runs WHERE run_id = ?", (transcript_run,)
+            )
+            if self.db.exists()
+            else []
+        )
+        transcript_doc = (
+            json.loads(str(transcript_rows[0][0]))
+            if transcript_rows and transcript_rows[0][0]
+            else {}
+        )
+        return (
+            str(transcript_doc.get("project_root") or "X:/fixture-project")
+            if isinstance(transcript_doc, dict)
+            else "X:/fixture-project"
+        )
+
+    def start_transcript_file(self, transcript_root: str, start_session: str) -> Path:
+        """``<CLAUDE_CONFIG_DIR>/projects/<slug of project_root>/<start session>.jsonl`` (the CM, CS and RP transcript rule)."""
+        import re as transcript_re
+
+        transcript_slug = transcript_re.sub(r"[^A-Za-z0-9]", "-", transcript_root)
+        return (
+            self.start_transcript_config()
+            / "projects"
+            / transcript_slug
+            / f"{start_session}.jsonl"
+        )
+
+    def start_transcript_record(
+        self,
+        transcript_root: str,
+        start_session: str,
+        start_message: str,
+        transcript_text: str,
+    ) -> None:
+        """Append one typed human record (is_human_entry, is_typed_turn, V-2) to a start transcript, once per start message."""
+        transcript_file = self.start_transcript_file(transcript_root, start_session)
+        transcript_file.parent.mkdir(parents=True, exist_ok=True)
+        transcript_old = (
+            transcript_file.read_text(encoding="utf-8")
+            if transcript_file.exists()
+            else ""
+        )
+        transcript_record: dict[str, Any] = {
+            "type": "user",
+            "sessionId": start_session,
+            "uuid": start_message,
+        }
+        transcript_record.update(
+            parentUuid=None, isSidechain=False, userType="external"
+        )
+        transcript_record.update(
+            origin={"kind": "human"}, turnOrigin="human", promptSource="typed"
+        )
+        transcript_record.update(
+            promptId=f"prompt-{start_message}", timestamp="2026-10-16T09:00:00.000Z"
+        )
+        transcript_record.update(message={"role": "user", "content": transcript_text})
+        if f'"uuid": "{start_message}"' not in transcript_old:
+            transcript_file.write_text(
+                transcript_old + json.dumps(transcript_record) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+    def with_start_transcript(
+        self, verb: str, transcript_args: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Give an agent-on-user-chat request a typed start message (--start-session, --start-message) of its quote."""
+        transcript_words = list(transcript_args)
+        if (
+            verb != "request"
+            or "agent-on-user-chat" not in transcript_words
+            or "--start-session" in transcript_words
+        ):
+            return transcript_args
+        transcript_quote = (
+            transcript_words[transcript_words.index("--quote") + 1]
+            if "--quote" in transcript_words
+            else "fixture start words"
+        )
+        transcript_run = (
+            transcript_words[transcript_words.index("--run-id") + 1]
+            if "--run-id" in transcript_words
+            else "fixture-run"
+        )
+        transcript_root = self.start_transcript_root(transcript_run)
+        start_session = start_transcript_uuid(f"start-session|{transcript_root}")
+        transcript_file = self.start_transcript_file(transcript_root, start_session)
+        transcript_count = (
+            len(transcript_file.read_text(encoding="utf-8").splitlines())
+            if transcript_file.exists()
+            else 0
+        )
+        start_message = start_transcript_uuid(
+            f"start-message|{transcript_run}|{transcript_quote}|{transcript_count}"
+        )
+        self.start_transcript_record(
+            transcript_root, start_session, start_message, transcript_quote
+        )
+        return (
+            *transcript_args,
+            "--start-session",
+            start_session,
+            "--start-message",
+            start_message,
+        )
+
+    def chain_start_transcript(
+        self,
+        transcript_block: dict[str, Any],
+        transcript_root: str = "X:/fixture-project",
+    ) -> dict[str, str]:
+        """A chain block's ``session`` and ``message_uuid``; writes the typed record of its quote (start transcript)."""
+        transcript_keys = chain_start_transcript_keys(transcript_block, transcript_root)
+        transcript_quote = transcript_block.get("quote")
+        if isinstance(transcript_quote, str) and transcript_quote.strip():
+            self.start_transcript_record(
+                transcript_root,
+                transcript_keys["session"],
+                transcript_keys["message_uuid"],
+                transcript_quote,
+            )
+        return transcript_keys
+
+
+def start_transcript_uuid(transcript_seed: str) -> str:
+    """A lower-case uuid (the --start-session and --start-message form) fixed by a transcript seed."""
+    import uuid as transcript_uuid
+
+    return str(
+        transcript_uuid.uuid5(
+            transcript_uuid.NAMESPACE_URL,
+            f"{{PROJECT_NAME}}-start-transcript:{transcript_seed}",
+        )
+    )
+
+
+def chain_start_transcript_keys(
+    transcript_block: dict[str, Any] | None = None,
+    transcript_root: str = "X:/fixture-project",
+) -> dict[str, str]:
+    """The chain block's ``session`` and ``message_uuid``, fixed by the project root, chain_id and quote (one transcript per session)."""
+    transcript_seed = f"{transcript_root}|{(transcript_block or {}).get('chain_id')}|{(transcript_block or {}).get('quote')}"
+    return {
+        "session": start_transcript_uuid(f"chain-session|{transcript_seed}"),
+        "message_uuid": start_transcript_uuid(f"chain-message|{transcript_seed}"),
+    }
 
 
 def dump(db: Path) -> dict[str, list[tuple[Any, ...]]]:

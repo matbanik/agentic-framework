@@ -122,6 +122,12 @@ $script:LogPath = $null
 $script:Job = $null
 $script:KeepAwake = $null
 $script:WrapperProcess = $null
+# PE21-D2 (MEU-895 Constant Classification): the SHA-256 of templates/operator-policy.md. The
+# launcher refuses a start when the file has another hash (policy_hash_mismatch), so a change
+# of the policy text needs a change of this constant in the same commit.
+$script:OperatorPolicySha256 = 'dec292f98dfe1a2c36cf9a1c5a980275e3c5bf3db04616cd16eb67ba479a0716'
+# POLICY_MAX_CHARS (PE21-D2; R1-F7): the policy text is at most 4000 characters.
+$script:PolicyMaxChars = 4000
 
 function New-Result([string]$Outcome, [int]$Code, [hashtable]$Fields = @{}) {
     $payload = [ordered]@{ outcome = $Outcome; run_id = $RunId }
@@ -292,11 +298,131 @@ function Get-RunParametersReason($Call) {
     return "exit_$($Call.Code)"
 }
 
+# PE21-D2 (AC-895.1): the operator policy file as the launcher checks it before admit. Returns
+# $null when the file is readable, its SHA-256 is $script:OperatorPolicySha256 and its text is LF
+# text of at most $script:PolicyMaxChars characters; else the reason, which the caller refuses as
+# policy_hash_mismatch.
+function Test-OperatorPolicy([string]$PolicyFile) {
+    if (-not (Test-Path -LiteralPath $PolicyFile -PathType Leaf)) { return "no policy file at '$PolicyFile'" }
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($PolicyFile)
+    } catch {
+        return "the policy file '$PolicyFile' is not readable: $($_.Exception.Message)"
+    }
+    $hash = [System.Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    if ($hash -cne $script:OperatorPolicySha256) { return "the policy file hash $hash is not the launcher's constant $($script:OperatorPolicySha256)" }
+    $text = $script:Utf8.GetString($bytes)
+    if ($text.Length -gt $script:PolicyMaxChars -or $text.Contains("`r")) {
+        return "the policy file is not LF text of at most $($script:PolicyMaxChars) characters"
+    }
+    return $null
+}
+
+# PE21-D14: the prompt-cache TTL of the config (cache_ttl), from the file that
+# Register-CreditsRun.ps1 reads: CREDITS_CONFIG, else .agent/credits/config.json. With no file
+# or no cache_ttl the TTL is '5m'. A file that is not JSON, or a value other than '5m' or '1h',
+# also gives '5m' with WARN credits_cache_ttl_default: the registration checked the value, so the
+# config changed after it, and 5m is the cheaper TTL.
+function Get-CacheTtl([string]$SegmentId) {
+    $path = if ($env:CREDITS_CONFIG) { $env:CREDITS_CONFIG } else { Join-Path $PSScriptRoot '../../credits/config.json' }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return '5m' }
+    try {
+        $config = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-LauncherLog 'WARN' 'credits_cache_ttl_default' @{ segment_id = $SegmentId; config = $path; message = "the config is not readable JSON: $($_.Exception.Message)" }
+        return '5m'
+    }
+    $ttl = Get-Field $config 'cache_ttl'
+    if ($null -eq $ttl) { return '5m' }
+    if ($ttl -is [string] -and $ttl -cin @('5m', '1h')) { return $ttl }
+    Write-LauncherLog 'WARN' 'credits_cache_ttl_default' @{ segment_id = $SegmentId; config = $path; message = "cache_ttl '$ttl' is not 5m or 1h" }
+    return '5m'
+}
+
+# PE21-D12 (CLI_START_MARKER): 'present' when the scheduled hook of the wrapper wrote
+# <OutputDir>/<dispatch>/cli-start.json. The hook writes it through to the disk immediately
+# before Process.Start, so 'absent' proves that no CLI started. Read only on a launch_failed path
+# with an empty job.
+function Get-CliStartFact([string]$DispatchId) {
+    if (Test-Path -LiteralPath (Join-Path $OutputDir "$DispatchId/cli-start.json") -PathType Leaf) { return 'present' }
+    return 'absent'
+}
+
+# PE21-D4 (AC-895.3): credits_msg.py authority for the segment, with the stored quote. Returns
+# Code, Payload and Output. A tool that does not start or does not end in time is Code -1 with
+# the error authority_failed, so the caller closes the segment as for a refusal.
+function Invoke-AuthorityCheck([string]$SegmentId, [string]$Quote) {
+    try {
+        $res = Invoke-CreditsAuthority -StateDb $StateDb -RunId $RunId -SegmentId $SegmentId -Quote $Quote
+    } catch {
+        $message = $_.Exception.Message
+        return [pscustomobject]@{ Code = -1; Payload = [pscustomobject]@{ error = 'authority_failed'; message = $message }; Output = $message }
+    }
+    return [pscustomobject]@{ Code = $res.Code; Payload = $res.Payload; Output = ([string]$res.Out + [string]$res.Err).Trim() }
+}
+
+# PE21-D4 (AC-895.3): the Start record that goes above the brief (implementation plan, Design 2).
+# $Request is the admitted request row of run_status, $Authority the payload of the passed
+# authority check. The fixed lines are exact: the tests and the resume-brief template name them.
+# Throws when the request names a starter or a source check that the record has no line for.
+function New-StartRecord($Request, $Authority, $Manifest, [string]$SegmentId, [string]$Kind) {
+    if ($null -eq $Request) { throw "no admitted request for segment $SegmentId" }
+    $quote = [string](Get-Field $Authority 'quote')
+    $chain = Get-Field $Authority 'chain'
+    $starter = [string](Get-Field $Request 'started_by')
+    $startedBy = switch ($starter) {
+        'human-command' { 'the human at the console' }
+        'agent-on-user-chat' { "the agent, on the user's chat message" }
+        'monitor-chain' { "the monitor, on the chain set up in the user's chat message" }
+        default { throw "the admitted request of segment $SegmentId has the unknown started_by '$starter'" }
+    }
+    $sourceCheck = [string](Get-Field $Request 'source_check')
+    $source = switch ($sourceCheck) {
+        'console_attested' { "console_attested at $(Get-Field $Request 'attested_utc')" }
+        'transcript_verified' { "transcript_verified: session ``$(Get-Field $Request 'start_session')``, message ``$(Get-Field $Request 'start_message')``" }
+        'chain_verified' {
+            $manifestChain = Get-Field $Manifest 'chain'
+            "chain_verified: chain ``$(Get-Field $chain 'chain_id')``, session ``$(Get-Field $manifestChain 'session')``, message ``$(Get-Field $manifestChain 'message_uuid')``"
+        }
+        default { throw "the admitted request of segment $SegmentId has the unknown source_check '$sourceCheck'" }
+    }
+    # A console start has no words of the user; the record says so in place of a quote.
+    # A chain start records no quote of its own: its words are the quote of the chain (R1-F1).
+    if ($sourceCheck -eq 'console_attested') { $quote = '' }
+    elseif (-not $quote -and $sourceCheck -eq 'chain_verified') { $quote = [string](Get-Field $chain 'quote') }
+    $words = if ($quote) { """$quote""" } else { 'none, a console start' }
+    # R1-F2: words that a shell or a code span can change go in as base64 of their UTF-8 bytes,
+    # so the command runs as written in PowerShell and in bash.
+    $check = if (-not $quote) { 'uv run python tools/credits_msg.py authority' }
+    elseif ($quote -match '["$`\\!\u2018-\u201E\p{Cc}]') {
+        "uv run python tools/credits_msg.py authority --quote-b64 $([System.Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($quote)))"
+    } else { "uv run python tools/credits_msg.py authority --quote ""$quote""" }
+    $cap = ([double](Get-Field (Get-Field $Manifest 'budget') 'run_cap_usd')).ToString('R', [System.Globalization.CultureInfo]::InvariantCulture)
+    $lines = @(
+        '## Start record (launcher)', '',
+        'I am the {{PROJECT_NAME_TITLE}} credits launcher. I started this session. Before I started it, I ran',
+        '`tools/credits_msg.py authority` for this segment, and it exited 0.', '',
+        "- Run ``$RunId``, segment ``$SegmentId``, a $Kind.",
+        "- Started by: $startedBy.",
+        "- Source check: $source.",
+        "- The user's words: $words.",
+        "- Scope: the brief below, inside the manifest of this run (plan folder ``$(Get-Field $Manifest 'plan_folder')``, run cap USD $cap).", '',
+        "To check this record again (it only reads the store): ``$check``."
+    )
+    return ($lines -join "`n")
+}
+
 # The environment block of the wrapper (report section 4.3 step 7). It starts from this process's
 # environment; the dispatch wrapper later removes CREDITS_* from the CLI and the -Scheduled hook
 # puts back the names below. CREDITS_BASE_COMMIT is set only when admission recorded a base
-# commit B (report section 4.3 step 4; section 5.4).
+# commit B (report section 4.3 step 4; section 5.4). Throws when launch.env fails its check.
 function New-ChildEnvironment($Launch, [string]$SegmentId, [string]$BaseCommit) {
+    # PE21-D15: Register-CreditsRun.ps1 checked launch.env; the stored manifest is checked again
+    # here, so that a store row that changed after registration sets nothing.
+    $launchEnv = Get-Field $Launch 'env'
+    $envRefusal = Get-CreditsLaunchEnvRefusal $launchEnv
+    if ($null -ne $envRefusal) { throw "$($envRefusal.Reason): $($envRefusal.Message)" }
+    $cacheTtl = Get-CacheTtl $SegmentId
     $environment = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
         $name = [string]$entry.Key
@@ -316,6 +442,26 @@ function New-ChildEnvironment($Launch, [string]$SegmentId, [string]$BaseCommit) 
         $path = if ($environment.ContainsKey('PATH')) { $environment['PATH'] } else { '' }
         $first = $launcherEnv.PathPrepend -join ';'
         $environment['PATH'] = if ($path) { "$first;$path" } else { $first }
+    }
+    # PE21-D14: the CLI changelog names of the two TTLs; the dispatch wrapper keeps both names.
+    if ($cacheTtl -eq '1h') {
+        $environment['ENABLE_PROMPT_CACHING_1H'] = '1'
+        $null = $environment.Remove('FORCE_PROMPT_CACHING_5M')
+    } else {
+        $environment['FORCE_PROMPT_CACHING_5M'] = '1'
+        $null = $environment.Remove('ENABLE_PROMPT_CACHING_1H')
+    }
+    # PE21-D15: launch.env goes after the strip lines and before the CREDITS_* lines, so it cannot
+    # replace them. The log records the names only, never the values.
+    if ($null -ne $launchEnv) {
+        $names = [System.Collections.Generic.List[string]]::new()
+        if ($launchEnv -is [System.Collections.IDictionary]) {
+            foreach ($key in $launchEnv.Keys) { $names.Add([string]$key) }
+        } else {
+            foreach ($prop in $launchEnv.PSObject.Properties) { $names.Add($prop.Name) }
+        }
+        foreach ($name in $names) { $environment[$name] = [string](Get-Field $launchEnv $name) }
+        Write-LauncherLog 'INFO' 'credits_launch_env' @{ segment_id = $SegmentId; names = @($names) }
     }
     $environment['CREDITS_RUN_ID'] = $RunId
     $environment['CREDITS_STATE_DB'] = $StateDb
@@ -351,7 +497,7 @@ function Register-Launched([string]$SegmentId, [string]$BootId, $Wrapper) {
     $created = ConvertFrom-UtcText $Wrapper.CreationUtc
     if ($null -eq $created) { throw "the wrapper creation time is not a UTC time: $($Wrapper.CreationUtc)" }
     $res = Invoke-CreditsState -StateDb $StateDb -Verb launched -Arguments @(
-        '--segment-id', $SegmentId, '--pid', [string][int]$Wrapper.ProcessId, '--created', (Format-CreditsUtc $created), '--boot-id', $BootId)
+        '--segment-id', $SegmentId, '--pid', [string][int]$Wrapper.ProcessId, '--created', (Format-CreditsUtc $created), '--boot-id', $BootId, '--policy-sha256', $script:OperatorPolicySha256)
     if ($res.Code -ne 0) { throw "credits_state.py launched failed: $(Format-CreditsStateError $res)" }
     Write-LauncherLog 'INFO' 'credits_segment_launched' @{ segment_id = $SegmentId; pid = [int]$Wrapper.ProcessId }
 }
@@ -431,6 +577,18 @@ function Invoke-Launcher {
         $message = "launch.working_directory '$workDir' is not the project_root '$projectRoot'; both must be the same directory"
         Write-LauncherLog 'ERROR' 'credits_project_mismatch' @{ project_root = $projectRoot; working_directory = $workDir; message = $message }
         return New-Result 'start_refused' 1 @{ reason = 'project_mismatch'; message = $message }
+    }
+
+    $policyFile = Join-Path $PSScriptRoot 'templates/operator-policy.md'
+    $policyProblem = Test-OperatorPolicy $policyFile
+    if ($null -ne $policyProblem) {
+        Write-LauncherLog 'ERROR' 'policy_hash_mismatch' @{ message = $policyProblem }
+        return New-Result 'start_refused' 1 @{ reason = 'policy_hash_mismatch'; message = $policyProblem }
+    }
+    $envRefusal = Get-CreditsLaunchEnvRefusal (Get-Field $launch 'env')
+    if ($null -ne $envRefusal) {
+        Write-LauncherLog 'ERROR' $envRefusal.Reason @{ message = $envRefusal.Message }
+        return New-Result 'start_refused' 1 @{ reason = $envRefusal.Reason; message = $envRefusal.Message }
     }
 
     # --- step 2: the M-1 receipt, before the request is taken
@@ -565,6 +723,64 @@ function Invoke-Launcher {
         Write-LauncherLog 'INFO' 'credits_admission_bound' @{ plan = $planSlug; session_id = $sessionId }
     }
 
+    # PE21-D4 (AC-895.3): the authority check, then the prompt file = the Start record, a blank
+    # line and the brief, in the launcher's own folder next to the store (never in the dispatch
+    # folder, which the dispatcher must make itself, R1-F1). No CLI has started yet, so a refusal
+    # or a failure here closes the segment launch_failed with --cli-start absent (0 USD).
+    $afterAdmit = $null
+    $authority = $null
+    $promptPath = $null
+    $startFailure = $null
+    try {
+        $afterAdmit = Get-RunStatus
+        $requestRow = @(Get-Field $afterAdmit 'requests') | Where-Object { $null -ne $_ -and $_.state -eq 'admitted' } | Select-Object -Last 1
+        if ($null -eq $requestRow) { throw "run_status shows no admitted request for segment $segmentId" }
+        $authority = Invoke-AuthorityCheck $segmentId ([string](Get-Field $requestRow 'start_quote'))
+        if ($authority.Code -eq 0) {
+            $startKind = if (-not $isResume) { 'first start' } elseif ($isFresh) { 'fresh resume' } else { 'session resume' }
+            $record = New-StartRecord $requestRow $authority.Payload $manifest $segmentId $startKind
+            $briefSource = $promptFile
+            if (-not [System.IO.Path]::IsPathRooted($briefSource)) { $briefSource = Join-Path $workDir $briefSource }
+            if (-not (Test-Path -LiteralPath $briefSource -PathType Leaf)) { throw "the brief '$briefSource' does not exist" }
+            $briefText = [System.IO.File]::ReadAllText($briefSource, [System.Text.Encoding]::UTF8)
+            $promptPath = Join-Path $storeFolder "prompts/$RunId/$segmentId.md"
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $promptPath) | Out-Null
+            [System.IO.File]::WriteAllText($promptPath, $record + "`n`n" + $briefText, $script:Utf8)
+            $promptFile = $promptPath
+        }
+    } catch {
+        $startFailure = $_.Exception.Message
+    }
+    if ($null -ne $startFailure) {
+        Write-LauncherLog 'ERROR' 'credits_start_record_failed' @{ segment_id = $segmentId; message = $startFailure }
+        if ($promptPath -and (Test-Path -LiteralPath $promptPath -PathType Leaf)) {
+            try { Remove-Item -LiteralPath $promptPath -Force -ErrorAction Stop }
+            catch { Write-LauncherLog 'WARN' 'credits_prompt_remove_failed' @{ segment_id = $segmentId; prompt = $promptPath; message = $_.Exception.Message } }
+        }
+        $null = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class launch_failed -CliStart absent
+        return New-Result 'launch_failed' 1 @{ segment_id = $segmentId; reason = 'start_record_failed'; message = $startFailure }
+    }
+    if ($authority.Code -ne 0) {
+        $authorityReason = [string](Get-Field $authority.Payload 'error')
+        if (-not $authorityReason) { $authorityReason = 'authority_failed' }
+        Write-LauncherLog 'ERROR' 'credits_authority_refused' @{ segment_id = $segmentId; reason = $authorityReason; output = $authority.Output }
+        $null = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class launch_failed -CliStart absent
+        return New-Result 'launch_failed' 1 @{ segment_id = $segmentId; reason = $authorityReason }
+    }
+
+    # PE21-D3 (AC-895.4): a session resume keeps the prompt that the CLI recorded when the session
+    # opened. A policy of another hash, or none (a run from before the policy), is a WARN only.
+    if ($isResume -and -not $isFresh) {
+        $opener = @(Get-Field $afterAdmit 'segments') | Where-Object {
+            $null -ne $_ -and [string]$_.segment_id -ne $segmentId -and [string]$_.expected_session_id -eq $sessionId
+        } | Select-Object -First 1
+        if ($null -ne $opener) {
+            $openerHash = [string](Get-Field $opener 'policy_sha256')
+            if (-not $openerHash) { Write-LauncherLog 'WARN' 'policy_snapshot_absent' @{ segment_id = $segmentId; session_id = $sessionId } }
+            elseif ($openerHash -cne $script:OperatorPolicySha256) { Write-LauncherLog 'WARN' 'policy_snapshot_differs' @{ segment_id = $segmentId; session_id = $sessionId } }
+        }
+    }
+
     # From here the segment is open; every path finalizes it or leaves it to the monitor.
     try {
         $script:KeepAwake = Enter-CreditsKeepAwake -Reason "{{PROJECT_NAME_TITLE}} credits run $RunId"
@@ -595,6 +811,8 @@ function Invoke-Launcher {
         }
     }
 
+    # PE21-D12 names the three marker paths (the step-5 catch, the no-running.json path and
+    # step 7); a refused job or resume source is not one of them, so it keeps the failed path.
     if ($null -ne $failure) {
         Write-LauncherLog 'ERROR' 'credits_launch_failed' @{ segment_id = $segmentId; message = $failure }
         $null = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class launch_failed
@@ -603,10 +821,17 @@ function Invoke-Launcher {
 
     # --- step 5: the wrapper inside the job
     $authArgs = if ($subscription) { @('-Subscription', '-TokenFile', $TokenFile) } else { @('-KeyFile', $KeyFile) }
+    # PE21-D9 (AC-895.13): the CLI's own budget stop is min(reservation, launch.max_budget_usd).
+    # The reservation and the store cap rules stay; the field only lowers the CLI stop. An
+    # uncapped admission has no reservation, so there the field is the one CLI stop.
+    $cliBudget = $maxBudget
+    $budgetLimit = Get-Field $launch 'max_budget_usd'
+    if ($null -ne $budgetLimit -and ($uncapped -or [double]$budgetLimit -lt $cliBudget)) { $cliBudget = [double]$budgetLimit }
     $wrapperArgs = @('-NoProfile', '-NonInteractive', '-File', $WrapperScript, '-Scheduled',
-        '-PromptFile', $promptFile) + $authArgs + @(
+        '-PromptFile', $promptFile,
+        '-SystemPromptFile', $policyFile, '-SystemPromptSha256', $script:OperatorPolicySha256) + $authArgs + @(
         '-ClaudeExecutable', [string](Get-Field $launch 'claude_exe'),
-        '-MaxBudgetUsd', $maxBudget.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture),
+        '-MaxBudgetUsd', $cliBudget.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture),
         '-DispatchId', $dispatchId, '-OutputDir', $OutputDir,
         '-WorkingDirectory', [string](Get-Field $launch 'working_directory'),
         '-TimeoutSec', [string][int](Get-Field $launch 'timeout_sec'),
@@ -632,6 +857,8 @@ function Invoke-Launcher {
     $pwsh = Join-Path $PSHOME 'pwsh.exe'
     $child = $null
     try {
+        # Inside the try: a launch.env that fails its second check closes the segment launch_failed.
+        $environment = New-ChildEnvironment $launch $segmentId $baseCommit
         $child = Start-CreditsJobProcess -Job $script:Job -FilePath $pwsh -CommandLine $commandLine `
             -WorkingDirectory ([string](Get-Field $launch 'working_directory')) -Environment $environment
         # Open the Process while the child is suspended, so its exit code stays readable.
@@ -643,7 +870,7 @@ function Invoke-Launcher {
         $message = "the wrapper did not start: $($_.Exception.Message)"
         if ($null -ne $child) { [ClaudeCredits.JobNative]::Abandon($child) }
         Write-LauncherLog 'ERROR' 'credits_launch_failed' @{ segment_id = $segmentId; message = $message }
-        $null = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class launch_failed
+        $null = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class launch_failed -CliStart (Get-CliStartFact $dispatchId)
         return New-Result 'launch_failed' 1 @{ segment_id = $segmentId; message = $message }
     }
     Write-LauncherLog 'INFO' 'credits_wrapper_started' @{ segment_id = $segmentId; dispatch_id = $dispatchId; wrapper_pid = $child.ProcessId }
@@ -673,7 +900,7 @@ function Invoke-Launcher {
             if ($remaining -gt 0 -and -not (Wait-PendingTermination $segmentId $remaining)) {
                 return New-Result 'termination_pending' 1 @{ segment_id = $segmentId; active_processes = $remaining }
             }
-            $null = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class launch_failed
+            $null = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class launch_failed -CliStart (Get-CliStartFact $dispatchId)
             return New-Result 'launch_failed' 1 @{ segment_id = $segmentId; message = "no running.json in $LaunchWaitMs ms" }
         }
         Start-Sleep -Milliseconds 200
@@ -698,10 +925,26 @@ function Invoke-Launcher {
         Write-LauncherLog 'WARN' 'credits_status_missing' @{ segment_id = $segmentId; dispatch_id = $dispatchId }
     }
     if (-not $runningSeen) { $class = 'launch_failed' }
-    $done = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class $class -SessionTotalUsd $total -ExitCode $exitCode
+    $completeArgs = @{}
+    if ($class -eq 'launch_failed') { $completeArgs.CliStart = Get-CliStartFact $dispatchId }
+    $done = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class $class -SessionTotalUsd $total -ExitCode $exitCode @completeArgs
     $finalClass = [string](Get-Field $done 'stop_class')
     if (-not $finalClass) { $finalClass = $class }
-    Write-LauncherLog 'INFO' 'credits_segment_finalized' @{ segment_id = $segmentId; class = $finalClass; exit_code = $exitCode; session_total_usd = $total }
+    $finalized = @{ segment_id = $segmentId; class = $finalClass; exit_code = $exitCode; session_total_usd = $total }
+    if ($null -ne $done -and -not [bool](Get-Field $done 'cost_known')) {
+        # PE21-D11: no trusted total. The log names the transcript estimate in place of 0 USD; the
+        # exposure stays open at the full reservation until Get-CreditsRun.ps1 -Settle.
+        try {
+            $transcript = Get-CreditsTranscriptPath -ProjectRoot ([string](Get-Field $manifest 'project_root')) -SessionId $sessionId
+            if ($transcript) {
+                $estimate = Update-CreditsCostEstimate -StateDb $StateDb -SegmentId $segmentId -Transcript $transcript
+                $finalized.cost_estimate_usd = Get-Field $estimate 'cost_estimate_usd'
+            }
+        } catch {
+            Write-LauncherLog 'WARN' 'credits_cost_estimate_failed' @{ segment_id = $segmentId; message = $_.Exception.Message }
+        }
+    }
+    Write-LauncherLog 'INFO' 'credits_segment_finalized' $finalized
     return New-Result 'completed' 0 @{ segment_id = $segmentId; class = $finalClass; exit_code = $exitCode }
 }
 

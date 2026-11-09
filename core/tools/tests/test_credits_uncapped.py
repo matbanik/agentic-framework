@@ -52,6 +52,8 @@ CHAIN = {
     "chain_id": "chain-uncapped",
     "quote": "Run u-a, then u-b.",
     "given_at": "2026-10-20T01:00:00Z",
+    "session": "0f1e2d3c-4b5a-4968-8776-655443322110",
+    "message_uuid": "1a2b3c4d-5e6f-4a0b-9c1d-2e3f4a5b6c7d",
 }
 ALL_CAPS = ("segment", "run", "chain")
 

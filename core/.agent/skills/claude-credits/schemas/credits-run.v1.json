@@ -28,7 +28,14 @@
         "timeout_sec": { "type": "integer", "minimum": 1 },
         "auth": { "enum": ["key", "subscription"], "description": "How the CLI signs in. Absent means key. subscription is the fleet member route: an S4U task, no key file, and the subscription token in the CLI's environment only." },
         "allowed_tools": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\([^()\\r\\n]*\\))?$" }, "description": "Tools allowed without a prompt, in the dispatch wrapper's -AllowedTools form." },
-        "gate_project": { "type": "string", "minLength": 1, "description": "The project of the M-1 receipt when it is not the project_root. Only with auth subscription: a member gates once in a fixed empty folder." }
+        "gate_project": { "type": "string", "minLength": 1, "description": "The project of the M-1 receipt when it is not the project_root. Only with auth subscription: a member gates once in a fixed empty folder." },
+        "max_budget_usd": { "type": "number", "exclusiveMinimum": 0, "description": "The CLI's own budget stop of each segment, when it is below the reservation. The reservation and the cap rules stay. Register-CreditsRun.ps1 refuses a value above a given segment_cap_usd (max_budget_above_cap)." },
+        "env": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": { "^(AGENT_MODEL_REGISTRY_HOME|{{PROJECT_NAME_UPPER}}_[A-Z0-9_]+)$": { "type": "string" } },
+          "description": "Extra environment names for the CLI: at most 32 names, each AGENT_MODEL_REGISTRY_HOME or {{PROJECT_NAME_UPPER}}_[A-Z0-9_]+ and not a refused name, each value a string of at most 1024 characters with no NUL, CR or LF. Checked at registration and at each launch (env_name_refused, env_value_refused)."
+        }
       }
     },
     "budget": {
@@ -81,12 +88,14 @@
     "chain": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["chain_id", "quote", "given_at"],
+      "required": ["chain_id", "quote", "given_at", "session", "message_uuid"],
       "properties": {
         "chain_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
         "quote": { "type": "string", "minLength": 1, "description": "The user's own chat words that name the runs, their order and the cap." },
         "given_at": { "type": "string", "minLength": 1 },
-        "chain_cap_usd": { "type": "number", "exclusiveMinimum": 0, "description": "May be omitted only under token_budgets \"off\" (see launch.segment_cap_usd)." }
+        "chain_cap_usd": { "type": "number", "exclusiveMinimum": 0, "description": "May be omitted only under token_budgets \"off\" (see launch.segment_cap_usd)." },
+        "session": { "type": "string", "pattern": "^[0-9a-f-]{36}$", "description": "The chat session of the typed message that set up the chain." },
+        "message_uuid": { "type": "string", "pattern": "^[0-9a-f-]{36}$", "description": "The typed message whose whole text is the quote." }
       }
     }
   }

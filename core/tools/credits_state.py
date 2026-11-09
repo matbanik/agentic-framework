@@ -52,18 +52,20 @@ import json
 import math
 import os
 import re
+import secrets
 import sqlite3
 import subprocess
 import sys
+import time
 import unicodedata
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn, Protocol, cast
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 EXIT_OK = 0
 EXIT_CHECK_FAILED = 1
@@ -151,8 +153,54 @@ STOP_CLASSES = (
     "no_record",
     "ambiguous",
 )
-# The notices that the monitor files with the notice verb (R§7.2 manual proof).
-MONITOR_NOTICE_KINDS = ("manual_child_alive",)
+# The notices that the monitor files with the notice verb (R§7.2 manual proof) and the duty
+# notices that scan_monitor files (PE21-D13).
+MONITOR_NOTICE_KINDS = (
+    "manual_child_alive",
+    "possible_hang",
+    "termination_pending",
+    "delivery_slow",
+    "no_ack",
+    "not_applied",
+    "transcript_discontinuity",
+)
+# PE21-D13 monitor duty limits on the store clock. Each notice is filed once per key kind:ref.
+# report.md:799-801: a running segment with an alive child and no transcript write for 60
+# minutes is a possible hang. The monitor never kills it.
+HANG_AFTER_S = 3600
+# report.md:802-804: a segment in termination_pending for 5 minutes.
+TERMINATION_PENDING_AFTER_S = 300
+# report.md:843-844, :1250: an open message with no claimed delivery for 30 minutes.
+DELIVERY_SLOW_AFTER_S = 1800
+# report.md:1251: a delivered message with no ack after 3 fires and 10 minutes after the confirm.
+NO_ACK_FIRES = 3
+NO_ACK_AFTER_S = 600
+# report.md:1252: an acked message that needs an applied, with no applied for 30 minutes.
+NOT_APPLIED_AFTER_S = 1800
+# report.md:836-838: the message kinds whose delivery ends at applied, not at ack
+# (credits_msg.APPLIED_KINDS).
+APPLIED_MESSAGE_KINDS = frozenset({"ruling", "stop-after-row"})
+# The fields of one segment in the scan_monitor --alive-json map (PE21-D13).
+MONITOR_FACT_FIELDS = frozenset({"transcript_mtime_utc", "pid_alive", "slept"})
+# PE21-D11 cost estimate: the prompt-caching prices as multiples of the base input price, from
+# the Anthropic prompt-caching documentation, section Pricing
+# (https://platform.claude.com/docs/en/build-with-claude/prompt-caching). A 5-minute cache write
+# is 1.25x, a 1-hour cache write 2x, and a cache read 0.1x, except the models of
+# CACHE_READ_FACTOR_BY_MODEL. The model registry holds only the input and output prices. The
+# framework names no model (the AC-J.2 leak rule), so the table starts empty: an adopter adds
+# each model whose cache read is not 0.1x, from the same documentation section. A model without
+# its entry has its cache reads estimated above their real price.
+CACHE_WRITE_5M_FACTOR = 1.25
+CACHE_WRITE_1H_FACTOR = 2.0
+CACHE_READ_FACTOR = 0.1
+CACHE_READ_FACTOR_BY_MODEL: dict[str, float] = {}
+# The usage fields of a transcript record that the estimate counts.
+USAGE_TOKEN_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
 # R§4.4 step 2: the outbox kinds that open a notice; report, ack and applied do not.
 OUTBOX_NOTICE_KINDS = frozenset({"decision", "decision_resolved", "gate_expired"})
 OUTBOX_CURSOR = "outbox"
@@ -204,7 +252,42 @@ PHASE_VIEW_STATES: tuple[str, ...] = (
 PREDICATES = ("done_verified", "parked_verified", "landed", "committed")
 # R§5.4.3: a predecessor in one of these states makes every predicate false.
 HALTED_RUN_STATES = frozenset({"stopped", "done_unverified", "failed", "cancelled"})
-CHAIN_KEYS = frozenset({"chain_id", "quote", "given_at", "chain_cap_usd"})
+CHAIN_KEYS = frozenset(
+    {"chain_id", "quote", "given_at", "chain_cap_usd", "session", "message_uuid"}
+)
+# The start source of a request (PE21): what the store checked, by who started the run.
+SOURCE_TRANSCRIPT = "transcript_verified"
+SOURCE_CONSOLE = "console_attested"
+SOURCE_CHAIN = "chain_verified"
+SOURCE_BY_STARTER = {
+    "agent-on-user-chat": SOURCE_TRANSCRIPT,
+    "human-command": SOURCE_CONSOLE,
+    "monitor-chain": SOURCE_CHAIN,
+}
+START_UUID_RE = re.compile(r"^[0-9a-f-]{36}$")
+# One chat message, after normalization (R1-F7).
+QUOTE_MAX_CHARS = 4000
+# The wait for the console code: one source, ``--attest-timeout-s`` (R2-F2). The caller's
+# deadline for the ``request`` call is that wait plus the margin.
+ATTEST_TIMEOUT_S = 120
+ATTEST_TIMEOUT_MIN_S = 1
+ATTEST_TIMEOUT_MAX_S = 600
+ATTEST_CALLER_MARGIN_S = 60
+# About 30 bits and one try per request (PE21-D6); no 0, O, 1 or I.
+ATTEST_CODE_LEN = 6
+ATTEST_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+ATTEST_POLL_S = 0.05
+# The keys that ``getwch`` gives: Enter, Backspace, Ctrl-C, and the prefix of a function key.
+ATTEST_ENTER_KEYS = frozenset({"\r", "\n"})
+ATTEST_BACKSPACE_KEY = "\x08"
+ATTEST_CANCEL_KEY = "\x03"
+ATTEST_PREFIX_KEYS = frozenset({"\x00", "\xe0"})
+# The test seam: a file that holds the code, never read for the production store.
+ATTEST_FILE_ENV = "CREDITS_ATTEST_FILE"
+PRODUCTION_DB = "{{RECEIPTS_DIR}}/credits/state.db"
+# ``complete_segment --cli-start`` (PE21-D12): did the launcher see a CLI start?
+CLI_START_ABSENT = "absent"
+CLI_START_VALUES = (CLI_START_ABSENT, "present")
 # The landing blobs of a path that is not in the tree: a product row of a deleted
 # path and a closeout row of a missing file (credits_msg.py writes both).
 DELETED_BLOB = "deleted"
@@ -250,6 +333,9 @@ CRASH_POINTS: dict[str, tuple[str, ...]] = {
     "lease": BASE_POINTS,
     "lease_release": BASE_POINTS,
     "alive": BASE_POINTS,
+    "slept": BASE_POINTS,
+    "scan_monitor": EFFECT_POINTS,
+    "cost_reconcile": EFFECT_POINTS,
     "notice": EFFECT_POINTS,
     "notices_due": (),
     "monitor_view": (),
@@ -603,6 +689,25 @@ SCHEMA_V7: tuple[str, ...] = (
     "ALTER TABLE runs ADD COLUMN phase_seq INTEGER",
 )
 
+# Version 8 (PE21-D1, one migration): the start source of a request and the message it holds
+# (MEU-894), the launch policy, the killed-run estimate and the sleep note of a segment, and
+# the close time of a notice (MEU-895).
+SCHEMA_V8: tuple[str, ...] = (
+    "ALTER TABLE requests ADD COLUMN start_session TEXT",
+    "ALTER TABLE requests ADD COLUMN start_message TEXT",
+    "ALTER TABLE requests ADD COLUMN source_check TEXT",
+    "ALTER TABLE requests ADD COLUMN attested_utc TEXT",
+    "ALTER TABLE requests ADD COLUMN attest_channel TEXT",
+    "ALTER TABLE requests ADD COLUMN message_released_utc TEXT",
+    "CREATE UNIQUE INDEX requests_start_message_held ON requests (run_id, start_message)"
+    " WHERE start_message IS NOT NULL AND message_released_utc IS NULL",
+    "ALTER TABLE segments ADD COLUMN policy_sha256 TEXT",
+    "ALTER TABLE segments ADD COLUMN cost_estimate_usd REAL",
+    "ALTER TABLE segments ADD COLUMN cost_estimate_source TEXT",
+    "ALTER TABLE segments ADD COLUMN slept_utc TEXT",
+    "ALTER TABLE notices ADD COLUMN closed_utc TEXT",
+)
+
 # The statements that bring a store from version n - 1 to version n.
 SCHEMA_STEPS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
@@ -612,6 +717,7 @@ SCHEMA_STEPS: dict[int, tuple[str, ...]] = {
     5: SCHEMA_V5,
     6: SCHEMA_V6,
     7: SCHEMA_V7,
+    8: SCHEMA_V8,
 }
 
 
@@ -747,6 +853,12 @@ def _arg_int(text: str) -> int:
         raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from exc
 
 
+def _arg_start_uuid(text: str) -> str:
+    if not START_UUID_RE.match(text):
+        raise argparse.ArgumentTypeError(f"not a lower-case uuid: {text!r}")
+    return text
+
+
 def _arg_class(text: str) -> str:
     if not CLASS_RE.match(text):
         raise argparse.ArgumentTypeError(
@@ -811,6 +923,13 @@ def _arg_json_object(text: str) -> dict[str, Any]:
     return loaded
 
 
+def _arg_sha256(text: str) -> str:
+    """A SHA-256 digest as 64 lower-case hex characters (``segments.policy_sha256``)."""
+    if not re.fullmatch(r"[0-9a-f]{64}", text):
+        raise argparse.ArgumentTypeError("not 64 lower-case hex characters")
+    return text
+
+
 def _arg_ttl(text: str) -> int:
     value = _arg_int(text)
     if not 1 <= value <= 86400:
@@ -863,9 +982,13 @@ def build_parser() -> _Parser:
     p.add_argument("--resume", action="store_true")
     p.add_argument("--resume-mode", choices=RESUME_MODES)
     p.add_argument("--brief", type=_arg_text)
-    p.add_argument("--quote", type=_arg_text)
+    # The length of the quote is a refusal of the verb (quote_out_of_range), not a usage error.
+    p.add_argument("--quote")
     p.add_argument("--chain-id", type=_arg_key)
     p.add_argument("--requested-by", type=_arg_text)
+    p.add_argument("--start-session", type=_arg_start_uuid)
+    p.add_argument("--start-message", type=_arg_start_uuid)
+    p.add_argument("--attest-timeout-s", type=_arg_int)
     p = verb("not_started")
     p.add_argument("--request-id", required=True, type=_arg_key)
     p.add_argument("--reason", required=True, choices=("caller_timeout", "orphan"))
@@ -888,12 +1011,14 @@ def build_parser() -> _Parser:
     p.add_argument("--pid", required=True, type=_arg_pid)
     p.add_argument("--created", required=True, type=_arg_utc)
     p.add_argument("--boot-id", required=True, type=_arg_boot_id)
+    p.add_argument("--policy-sha256", type=_arg_sha256)
     p = verb("complete_segment")
     p.add_argument("--segment-id", required=True, type=_arg_key)
     p.add_argument("--finalized-by", required=True, choices=FINALIZERS)
     p.add_argument("--class", dest="stop_class", required=True, type=_arg_class)
     p.add_argument("--session-total-usd", type=_arg_money)
     p.add_argument("--exit-code", type=_arg_int)
+    p.add_argument("--cli-start", choices=CLI_START_VALUES)
     p = verb("classify")
     p.add_argument("--run-id", required=True, type=_arg_key)
     p.add_argument("--to", required=True, choices=CLASSIFY_TARGETS)
@@ -969,6 +1094,14 @@ def build_parser() -> _Parser:
     p.add_argument("--boot-id", required=True, type=_arg_boot_id)
     p = verb("alive")
     p.add_argument("--segment-id", required=True, type=_arg_key)
+    p = verb("slept")
+    p.add_argument("--segment-id", required=True, type=_arg_key)
+    p = verb("scan_monitor")
+    p.add_argument("--alive-json", required=True, type=_arg_json_object)
+    p = verb("cost_reconcile")
+    p.add_argument("--segment-id", required=True, type=_arg_key)
+    p.add_argument("--transcript", required=True, type=_arg_text)
+    p.add_argument("--registry", required=True, type=_arg_text)
     p = verb("notice")
     p.add_argument("--kind", required=True, choices=MONITOR_NOTICE_KINDS)
     p.add_argument("--ref", required=True, type=_arg_key)
@@ -1807,8 +1940,8 @@ def parse_chain(value: Any) -> tuple[str, float | None]:
     if not isinstance(value, dict) or set(value) | {"chain_cap_usd"} != CHAIN_KEYS:
         raise Refusal(
             "manifest_invalid",
-            "chain is exactly {chain_id, quote, given_at, chain_cap_usd}"
-            " (chain_cap_usd optional under token_budgets off)",
+            "chain is exactly {chain_id, quote, given_at, chain_cap_usd, session,"
+            " message_uuid} (chain_cap_usd optional under token_budgets off)",
         )
     chain_id = value["chain_id"]
     if not isinstance(chain_id, str) or not KEY_RE.match(chain_id):
@@ -1817,6 +1950,10 @@ def parse_chain(value: Any) -> tuple[str, float | None]:
         text = value[name]
         if not isinstance(text, str) or not text.strip():
             raise Refusal("manifest_invalid", f"chain.{name} must be a non-empty text")
+    for name in ("session", "message_uuid"):
+        text = value[name]
+        if not isinstance(text, str) or not START_UUID_RE.match(text):
+            raise Refusal("manifest_invalid", f"chain.{name} must be a lower-case uuid")
     return chain_id, _optional_cap(value, "chain_cap_usd", "chain.chain_cap_usd")
 
 
@@ -2066,11 +2203,13 @@ def verb_registration_failed(tx: Tx, run_id: str, reason: str) -> Outcome:
 # --- verbs: start ---------------------------------------------------------------------
 
 
-def verb_request(tx: Tx, args: argparse.Namespace) -> Outcome:
-    """Write a ``pending`` start request and move the run to ``requested`` (R§4.2).
+def check_request(tx: Tx, args: argparse.Namespace) -> str:
+    """Refuse a request that the run's state does not allow; return that state.
 
     A resume request carries its mode (``session`` unless ``fresh`` is named) and an optional
     brief, an absolute path to an existing file (R§5.3); neither belongs to a first start.
+    Both stages of ``request`` run this check: the precheck with no write lock, and the
+    transaction, because the run can change while the evidence is collected.
     """
     run = get_run(tx, args.run_id)
     state = str(run["state"])
@@ -2112,12 +2251,34 @@ def verb_request(tx: Tx, args: argparse.Namespace) -> Outcome:
             or chain.get("chain_id") != args.chain_id
         ):
             raise Refusal("no_chain", "the run's manifest has no such chain")
+    return state
+
+
+def verb_request(tx: Tx, args: argparse.Namespace, evidence: StartEvidence) -> Outcome:
+    """Write a ``pending`` start request and move the run to ``requested`` (R§4.2).
+
+    The evidence comes from ``prepare_request``. The run's state and the use of the start
+    message are checked again here, under the write lock, on the clock of the lock: a run
+    that changed during the prepare stage gets this refusal, and the evidence is not used.
+    """
+    state = check_request(tx, args)
+    if evidence.start_message is not None and tx.row(
+        "SELECT 1 FROM requests WHERE run_id = ? AND start_message = ?"
+        " AND message_released_utc IS NULL",
+        (args.run_id, evidence.start_message),
+    ):
+        raise Refusal(
+            "start_message_reused",
+            f"message {evidence.start_message} already started a segment of run"
+            f" {args.run_id}; a new segment needs new words from the human",
+        )
     request_id = args.request_id or str(uuid.uuid4())
     now = tx.ctx.now_utc
     tx.con.execute(
         "INSERT INTO requests (request_id, run_id, state, previous_state, started_by, start_quote,"
-        " chain_id, resume, resume_mode, brief, requested_by, created_utc, updated_utc)"
-        " VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " chain_id, resume, resume_mode, brief, requested_by, created_utc, updated_utc,"
+        " start_session, start_message, source_check, attested_utc, attest_channel)"
+        " VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             request_id,
             args.run_id,
@@ -2131,6 +2292,11 @@ def verb_request(tx: Tx, args: argparse.Namespace) -> Outcome:
             args.requested_by,
             now,
             now,
+            evidence.start_session,
+            evidence.start_message,
+            evidence.source_check,
+            evidence.attested_utc,
+            evidence.attest_channel,
         ),
     )
     tx.created("request", request_id, "pending")
@@ -2464,7 +2630,12 @@ def verb_launched(tx: Tx, args: argparse.Namespace) -> Outcome:
         args.segment_id,
         "launching",
         "running",
-        {"pid": args.pid, "created": args.created, "last_alive_utc": tx.ctx.now_utc},
+        {
+            "pid": args.pid,
+            "created": args.created,
+            "last_alive_utc": tx.ctx.now_utc,
+            "policy_sha256": args.policy_sha256,
+        },
     )
     for entity, key in (
         ("request", segment["request_id"]),
@@ -2487,8 +2658,14 @@ def finalize_segment(
     stop_class: str,
     total: float | None,
     exit_code: int | None,
+    cli_start: str | None = None,
 ) -> dict[str, Any]:
-    """Finalize a segment in the open transaction (R§4.7 ``Complete-CreditsSegment`` steps 1-6)."""
+    """Finalize a segment in the open transaction (R§4.7 ``Complete-CreditsSegment`` steps 1-6).
+
+    ``cli_start = 'absent'`` is a launch failure with no CLI start (PE21-D12): nothing was
+    spent, so the exposure is released at 0, the request gives back its start message and
+    the run returns to the state it had before the request.
+    """
     segment_id = str(segment["segment_id"])
     run_id = str(segment["run_id"])
     state = str(segment["state"])
@@ -2497,6 +2674,7 @@ def finalize_segment(
     launch_failed = state == "launching"
     if launch_failed:
         stop_class = "launch_failed"
+    unstarted = cli_start == CLI_START_ABSENT
 
     top = tx.row(
         "SELECT MAX(session_total_usd) AS top FROM segments WHERE run_id = ?"
@@ -2505,13 +2683,12 @@ def finalize_segment(
     )
     previous = 0.0 if top is None or top["top"] is None else float(top["top"])
     trusted = total is not None and total > 0 and total >= previous
+    delta = money(total - previous) if trusted and total is not None else None
     reservation = float(segment["reservation_usd"])
     sets: dict[str, Any] = {
         "session_total_usd": total,
-        "segment_delta_usd": money(total - previous)
-        if trusted and total is not None
-        else None,
-        "cost_known": 1 if trusted else 0,
+        "segment_delta_usd": 0.0 if unstarted else delta,
+        "cost_known": 1 if trusted or unstarted else 0,
         "reservation_released_utc": now,
         "finalized_utc": now,
         "finalized_by": by,
@@ -2519,7 +2696,14 @@ def finalize_segment(
         "exit_code": exit_code,
     }
     tx.move("segment", segment_id, state, "finalized", sets, owner=by)
-    if not trusted:
+    if unstarted:
+        tx.con.execute(
+            "INSERT INTO exposures (segment_id, run_id, exposed_usd, amount_usd, state, note,"
+            " settled_by, settled_utc, created_utc) VALUES (?, ?, ?, 0, 'released', ?, ?, ?, ?)",
+            (segment_id, run_id, reservation, "launch_failed_unstarted", by, now, now),
+        )
+        tx.created("exposure", segment_id, "released", owner=by)
+    elif not trusted:
         tx.con.execute(
             "INSERT INTO exposures (segment_id, run_id, exposed_usd, amount_usd, state, created_utc)"
             " VALUES (?, ?, ?, ?, 'open', ?)",
@@ -2552,6 +2736,10 @@ def finalize_segment(
             ),
         )
 
+    # A wrapper that fails after its registration leaves a ``launched`` request with no CLI.
+    open_states = (
+        ("accepted", "admitted", "launched") if unstarted else ("accepted", "admitted")
+    )
     for entity, key in (
         ("request", segment["request_id"]),
         ("attempt", segment["attempt_id"]),
@@ -2560,12 +2748,26 @@ def finalize_segment(
             continue
         table, key_col = ENTITY_TABLES[entity]
         current = tx.row(f"SELECT state FROM {table} WHERE {key_col} = ?", (key,))
-        if current is not None and current["state"] in ("accepted", "admitted"):
-            tx.move(entity, str(key), str(current["state"]), "launch_failed", owner=by)
+        if current is not None and current["state"] in open_states:
+            released = (
+                {"message_released_utc": now}
+                if unstarted and entity == "request"
+                else None
+            )
+            tx.move(
+                entity,
+                str(key),
+                str(current["state"]),
+                "launch_failed",
+                released,
+                owner=by,
+            )
 
     run = get_run(tx, run_id)
     run_state = str(run["state"])
-    if launch_failed and run_state == "launching":
+    if unstarted:
+        restore_unstarted_run(tx, run_id, run_state, segment, by)
+    elif launch_failed and run_state == "launching":
         resume = segment["resume"] is not None
         tx.move(
             "run",
@@ -2583,14 +2785,63 @@ def finalize_segment(
     tx.effect(f"rescan:{segment_id}", "rescan", segment_id)
     return {
         "segment_id": segment_id,
-        "cost_known": trusted,
-        "exposure_usd": None if trusted else reservation,
+        "cost_known": trusted or unstarted,
+        "exposure_usd": None if trusted or unstarted else reservation,
         "stop_class": stop_class,
     }
 
 
+def restore_unstarted_run(
+    tx: Tx, run_id: str, run_state: str, segment: sqlite3.Row, by: str
+) -> None:
+    """Return the run to the state before its request and write ``launch_failed_unstarted``."""
+    segment_id = str(segment["segment_id"])
+    request = tx.row(
+        "SELECT previous_state FROM requests WHERE request_id = ?",
+        (segment["request_id"],),
+    )
+    if request is None:
+        raise Refusal(
+            "cli_start_no_request",
+            f"the start request of segment {segment_id} is not in the store",
+        )
+    if run_state in ("launching", "running"):
+        tx.move("run", run_id, run_state, str(request["previous_state"]), owner=by)
+    tx.con.execute(
+        "INSERT OR IGNORE INTO outbox_events (run_id, kind, semantic_key, payload_json, created_utc)"
+        " VALUES (?, 'launch_failed_unstarted', ?, ?, ?)",
+        (
+            run_id,
+            f"launch_failed_unstarted:{segment_id}",
+            json.dumps({"segment_id": segment_id}),
+            tx.ctx.now_utc,
+        ),
+    )
+
+
+def check_cli_start(args: argparse.Namespace) -> None:
+    """``--cli-start`` is the launcher's fact about a ``launch_failed`` segment (PE21-D12).
+
+    A launcher that died reports nothing, so its segment takes the crash path, never the
+    release. A cost next to ``absent`` contradicts the fact that no CLI started.
+    """
+    if args.cli_start is None:
+        return
+    if args.stop_class != "launch_failed":
+        raise Refusal(
+            "cli_start_class", "--cli-start belongs to the class launch_failed"
+        )
+    if args.finalized_by != "launcher":
+        raise Refusal("wrong_owner", "only the launcher reports --cli-start")
+    if args.cli_start == CLI_START_ABSENT and args.session_total_usd is not None:
+        raise Refusal(
+            "cli_start_total", "--session-total-usd contradicts --cli-start absent"
+        )
+
+
 def verb_complete_segment(tx: Tx, args: argparse.Namespace) -> Outcome:
     """Finalize a segment once; a second call finds ``finalized_utc`` set and changes nothing."""
+    check_cli_start(args)
     segment = get_segment(tx, args.segment_id)
     if segment["finalized_utc"] is not None:
         return Outcome(
@@ -2604,6 +2855,11 @@ def verb_complete_segment(tx: Tx, args: argparse.Namespace) -> Outcome:
         )
     if args.finalized_by == "launcher" and supervision != "job":
         raise Refusal("wrong_owner", "a manual segment has no launcher")
+    if args.cli_start == CLI_START_ABSENT and segment["request_id"] is None:
+        raise Refusal(
+            "cli_start_no_request",
+            f"segment {args.segment_id} has no start request to give back",
+        )
     payload = finalize_segment(
         tx,
         segment,
@@ -2611,6 +2867,7 @@ def verb_complete_segment(tx: Tx, args: argparse.Namespace) -> Outcome:
         args.stop_class,
         args.session_total_usd,
         args.exit_code,
+        args.cli_start,
     )
     return Outcome("changed", payload)
 
@@ -3289,6 +3546,9 @@ def verb_run_status(tx: Tx, run_id: str) -> Outcome:
         {
             "segment_id": str(s["segment_id"]),
             "state": str(s["state"]),
+            "expected_session_id": s["expected_session_id"],
+            "dispatch_id": s["dispatch_id"],
+            "policy_sha256": s["policy_sha256"],
             "cancel_requested_utc": s["cancel_requested_utc"],
             "finalized_utc": s["finalized_utc"],
             "finalized_by": s["finalized_by"],
@@ -3306,6 +3566,12 @@ def verb_run_status(tx: Tx, run_id: str) -> Outcome:
             "reason": q["reason"],
             "resume": bool(q["resume"]),
             "created_utc": q["created_utc"],
+            "started_by": q["started_by"],
+            "start_quote": q["start_quote"],
+            "source_check": q["source_check"],
+            "attested_utc": q["attested_utc"],
+            "start_session": q["start_session"],
+            "start_message": q["start_message"],
         }
         for q in tx.rows(
             "SELECT * FROM requests WHERE run_id = ? ORDER BY created_utc, rowid",
@@ -3689,6 +3955,545 @@ def verb_alive(tx: Tx, segment_id: str) -> Outcome:
     )
 
 
+def verb_slept(tx: Tx, segment_id: str) -> Outcome:
+    """Record a host sleep while the segment's child was alive (PE21-D13, report.md:1592-1594).
+
+    Sets ``segments.slept_utc`` to the store clock (the time of the last sleep) and writes a
+    ``slept`` transition row with the state unchanged. A sleep is a note, never a stop: no state
+    changes. An unknown segment is refused ``unknown_segment``; a finalized segment is
+    ``no_change``, because the monitor can race the launcher's finalize.
+    """
+    segment = get_segment(tx, segment_id)
+    if segment["finalized_utc"] is not None:
+        return Outcome("no_change", {"segment_id": segment_id, "finalized": True})
+    state = str(segment["state"])
+    tx.con.execute(
+        "UPDATE segments SET slept_utc = ? WHERE segment_id = ?",
+        (tx.ctx.now_utc, segment_id),
+    )
+    tx.transition("segment", segment_id, state, state)
+    return Outcome("changed", {"segment_id": segment_id, "slept_utc": tx.ctx.now_utc})
+
+
+@dataclass(frozen=True)
+class MonitorFact:
+    """The facts of one running segment that Watch-CreditsRuns.ps1 gives scan_monitor.
+
+    ``transcript_mtime`` is the last write of the segment's transcript, or None when the monitor
+    found no transcript. ``slept`` is True when the host slept in the interval while the child
+    was alive. The monitor records a sleep with the ``slept`` verb; no scan rule reads it,
+    because report.md:799-801 has no sleep exception to the hang rule.
+    """
+
+    transcript_mtime: datetime | None
+    pid_alive: bool
+    slept: bool
+
+
+def parse_monitor_facts(raw: dict[str, object]) -> dict[str, MonitorFact]:
+    """Check the ``--alive-json`` map of scan_monitor; refuse ``monitor_fact_invalid``.
+
+    Each key is a segment id (a store key). Each value is an object with exactly the fields of
+    ``MONITOR_FACT_FIELDS``: ``transcript_mtime_utc`` (null or ``YYYY-MM-DDTHH:MM:SSZ``),
+    ``pid_alive`` and ``slept`` (true or false). The store does not refuse a segment that it does
+    not know: the monitor can race a finalize, and the scan reads only the open segments.
+    """
+    facts: dict[str, MonitorFact] = {}
+    for segment_id, value in raw.items():
+        if not KEY_RE.match(segment_id) or ".." in segment_id:
+            raise Refusal("monitor_fact_invalid", f"not a segment id: {segment_id!r}")
+        if not isinstance(value, dict):
+            raise Refusal(
+                "monitor_fact_invalid", f"{segment_id}: the facts are not an object"
+            )
+        fields = cast(dict[str, object], value)
+        names = set(fields)
+        if names != MONITOR_FACT_FIELDS:
+            raise Refusal(
+                "monitor_fact_invalid",
+                f"{segment_id}: missing {sorted(MONITOR_FACT_FIELDS - names)},"
+                f" unknown {sorted(names - MONITOR_FACT_FIELDS)}",
+            )
+        pid_alive = fields["pid_alive"]
+        slept = fields["slept"]
+        if not isinstance(pid_alive, bool) or not isinstance(slept, bool):
+            raise Refusal(
+                "monitor_fact_invalid",
+                f"{segment_id}: pid_alive and slept must be true or false",
+            )
+        stamp = fields["transcript_mtime_utc"]
+        mtime: datetime | None = None
+        if stamp is not None:
+            if not isinstance(stamp, str):
+                raise Refusal(
+                    "monitor_fact_invalid",
+                    f"{segment_id}: transcript_mtime_utc is not a string",
+                )
+            try:
+                mtime = parse_utc(stamp)
+            except ValueError as exc:
+                raise Refusal(
+                    "monitor_fact_invalid",
+                    f"{segment_id}: transcript_mtime_utc {stamp!r}",
+                ) from exc
+        facts[segment_id] = MonitorFact(mtime, pid_alive, slept)
+    return facts
+
+
+def verb_scan_monitor(tx: Tx, raw_facts: dict[str, object]) -> Outcome:
+    """File the monitor duty notices that are due on the store clock (PE21-D13).
+
+    Rules, each filed once per notice key ``kind:ref`` (a later scan files no duplicate):
+
+    * ``possible_hang:<segment>``: a running segment whose child is alive and whose transcript
+      has had no write for ``HANG_AFTER_S`` (report.md:799-801). Nothing is killed.
+    * ``termination_pending:<segment>``: a segment that entered ``termination_pending`` (its
+      transition row) ``TERMINATION_PENDING_AFTER_S`` ago (report.md:802-804).
+    * For each open message of a running, finalizing or stopped run (report.md:836-844,
+      :1250-1253): ``delivery_slow:<msg>`` with no claimed delivery, or a claimed delivery that
+      was never confirmed and no ack, ``no_ack:<msg>`` confirmed with no ack, ``not_applied:<msg>`` for a kind of ``APPLIED_MESSAGE_KINDS`` acked with no
+      applied. On a running or finalizing run each fires after its limit; on a stopped run at
+      once, because no session reads the message.
+    * ``transcript_discontinuity:<session>``: an orchestrator session that the transcript scan
+      marked broken, of a run that is not terminal and has ``messaging.ruling_enabled`` true
+      (report.md:846-847).
+    """
+    facts = parse_monitor_facts(raw_facts)
+    now = parse_utc(tx.ctx.now_utc)
+    filed: list[str] = []
+
+    def file(kind: str, ref: str, run_id: str, body: dict[str, object]) -> None:
+        if tx.notice(kind, ref, run_id, body):
+            filed.append(f"{kind}:{ref}")
+
+    def age(stamp: object) -> float:
+        return (now - parse_utc(str(stamp))).total_seconds()
+
+    for segment in tx.rows(
+        "SELECT segment_id, run_id, state, resume FROM segments WHERE finalized_utc IS NULL"
+        " ORDER BY segment_id"
+    ):
+        segment_id = str(segment["segment_id"])
+        run_id = str(segment["run_id"])
+        fact = facts.get(segment_id)
+        if segment["state"] == "running" and fact is not None and fact.pid_alive:
+            # Silence counts from the last transcript write. With no transcript file it counts
+            # from the segment's start, and a resume segment takes the later of the two: the
+            # write of an earlier segment of a resumed session is not silence of this one (R1-F5).
+            began = tx.row(
+                "SELECT MAX(at_utc) AS at_utc FROM transitions WHERE entity = 'segment'"
+                " AND entity_id = ? AND from_state = 'launching' AND to_state = 'running'",
+                (segment_id,),
+            )
+            quiet_since = (
+                [fact.transcript_mtime] if fact.transcript_mtime is not None else []
+            )
+            if (
+                (not quiet_since or segment["resume"] is not None)
+                and began is not None
+                and began["at_utc"]
+            ):
+                quiet_since.append(parse_utc(str(began["at_utc"])))
+            if quiet_since and (now - max(quiet_since)).total_seconds() >= HANG_AFTER_S:
+                file("possible_hang", segment_id, run_id, {"segment_id": segment_id})
+        if segment["state"] == "termination_pending":
+            entered = tx.row(
+                "SELECT MAX(at_utc) AS at_utc FROM transitions WHERE entity = 'segment'"
+                " AND entity_id = ? AND to_state = 'termination_pending'",
+                (segment_id,),
+            )
+            if (
+                entered is not None
+                and entered["at_utc"]
+                and age(entered["at_utc"]) >= TERMINATION_PENDING_AFTER_S
+            ):
+                file(
+                    "termination_pending",
+                    segment_id,
+                    run_id,
+                    {"segment_id": segment_id},
+                )
+    for run in tx.rows(
+        "SELECT run_id, state FROM runs WHERE state IN ('running', 'finalizing', 'stopped')"
+        " ORDER BY run_id"
+    ):
+        run_id = str(run["run_id"])
+        stopped = run["state"] == "stopped"
+        # Only the run's latest segment can deliver now: the delivery of an earlier segment
+        # does not count for a resumed session, and its wait starts with the segment (R1-F4).
+        latest = tx.row(
+            "SELECT segment_id, created_utc FROM segments WHERE run_id = ?"
+            " ORDER BY created_utc DESC, rowid DESC LIMIT 1",
+            (run_id,),
+        )
+        for message in tx.rows(
+            "SELECT msg_id, kind, created_utc, acked_utc, applied_utc FROM messages"
+            " WHERE run_id = ? AND state = 'open' ORDER BY msg_id",
+            (run_id,),
+        ):
+            msg_id = str(message["msg_id"])
+            delivery = (
+                None
+                if latest is None
+                else tx.row(
+                    "SELECT confirmed_utc, fires_since_emit FROM deliveries"
+                    " WHERE msg_id = ? AND segment_id = ? AND claimed_utc IS NOT NULL"
+                    " ORDER BY claimed_utc DESC LIMIT 1",
+                    (msg_id, latest["segment_id"]),
+                )
+            )
+            # A claimed delivery that was never confirmed (still re-emitting, or failed after
+            # its last emit) is not delivered either: it is slow after the same limit (R2-F1).
+            if delivery is None or (
+                message["acked_utc"] is None and delivery["confirmed_utc"] is None
+            ):
+                waited = age(message["created_utc"])
+                if latest is not None:
+                    waited = min(waited, age(latest["created_utc"]))
+                if stopped or waited >= DELIVERY_SLOW_AFTER_S:
+                    file("delivery_slow", msg_id, run_id, {"msg_id": msg_id})
+                continue
+            if message["acked_utc"] is None:
+                confirmed = delivery["confirmed_utc"]
+                if stopped or (
+                    int(delivery["fires_since_emit"] or 0) >= NO_ACK_FIRES
+                    and confirmed is not None
+                    and age(confirmed) >= NO_ACK_AFTER_S
+                ):
+                    file("no_ack", msg_id, run_id, {"msg_id": msg_id})
+            elif (
+                message["kind"] in APPLIED_MESSAGE_KINDS
+                and message["applied_utc"] is None
+            ):
+                if stopped or age(message["acked_utc"]) >= NOT_APPLIED_AFTER_S:
+                    file("not_applied", msg_id, run_id, {"msg_id": msg_id})
+    terminal = sorted(TERMINAL_RUN_STATES)
+    marks = ", ".join("?" for _ in terminal)
+    for row in tx.rows(
+        "SELECT o.run_id, o.session FROM orchestrator_sessions o"
+        " JOIN runs r ON r.run_id = o.run_id"
+        f" WHERE o.history_state = 'broken' AND r.state NOT IN ({marks})"
+        " AND CASE WHEN json_valid(r.manifest_json)"
+        " THEN json_extract(r.manifest_json, '$.messaging.ruling_enabled') END = 1"
+        " ORDER BY o.run_id, o.session",
+        tuple(terminal),
+    ):
+        run_id = str(row["run_id"])
+        session = str(row["session"])
+        file(
+            "transcript_discontinuity",
+            session,
+            run_id,
+            {"run_id": run_id, "session": session},
+        )
+    return Outcome(
+        "changed" if filed else "no_change",
+        {
+            "filed": filed,
+            "slept": sorted(seg for seg, fact in facts.items() if fact.slept),
+        },
+    )
+
+
+@dataclass
+class TranscriptUsage:
+    """The token sums of the usage records of one segment's transcript (PE21-D11)."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_write_5m_tokens: int = 0
+    cache_write_1h_tokens: int = 0
+    cache_read_tokens: int = 0
+    messages: int = 0
+
+
+def registry_prices(registry: Path, model: str) -> tuple[float, float]:
+    """The base input and output USD per million tokens of ``model`` in the model registry.
+
+    The registry is ``catalog.<slug>.price_per_mtok`` with ``in`` and ``out``; a ``.json`` file
+    is read as JSON (the compiled ``model-registry.json``), any other file as YAML
+    (``model-registry.yaml``). The over-cliff prices are not used, so the estimate
+    stays a lower bound. Refusals: ``registry_unreadable`` (no file, not UTF-8, not JSON or
+    YAML, no PyYAML for a YAML file, or not a mapping with a ``catalog`` mapping) and
+    ``registry_no_price`` (no entry for ``model``, or an ``in`` or ``out`` that is not a finite
+    number at or above 0).
+    """
+    try:
+        source = registry.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Refusal("registry_unreadable", f"cannot read {registry}: {exc}") from exc
+    loaded: object
+    if registry.suffix.lower() == ".json":
+        try:
+            loaded = json.loads(source)
+        except json.JSONDecodeError as exc:
+            raise Refusal(
+                "registry_unreadable", f"{registry} is not JSON: {exc}"
+            ) from exc
+    else:
+        try:
+            import yaml
+        except ImportError as exc:
+            raise Refusal(
+                "registry_unreadable", f"PyYAML is needed to read {registry}"
+            ) from exc
+        try:
+            loaded = yaml.safe_load(source)
+        except yaml.YAMLError as exc:
+            raise Refusal(
+                "registry_unreadable", f"{registry} is not YAML: {exc}"
+            ) from exc
+    catalog = loaded.get("catalog") if isinstance(loaded, dict) else None
+    if not isinstance(catalog, dict):
+        raise Refusal("registry_unreadable", f"{registry} has no catalog mapping")
+    entry = cast(dict[str, object], catalog).get(model)
+    prices = entry.get("price_per_mtok") if isinstance(entry, dict) else None
+    if not isinstance(prices, dict):
+        raise Refusal(
+            "registry_no_price", f"the registry has no price_per_mtok of {model}"
+        )
+    found: list[float] = []
+    for name in ("in", "out"):
+        value = cast(dict[str, object], prices).get(name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise Refusal(
+                "registry_no_price",
+                f"price_per_mtok.{name} of {model} is not a price: {value!r}",
+            )
+        found.append(float(value))
+    return found[0], found[1]
+
+
+def _usage_tokens(usage: dict[str, object], name: str, where: str) -> int:
+    """One token count of a usage record: absent is 0; else an int at or above 0."""
+    value = usage.get(name, 0)
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise Refusal(
+            "transcript_invalid", f"{where}: {name} is not a token count: {value!r}"
+        )
+    return value
+
+
+def transcript_usage(
+    transcript: Path, start: datetime, end: datetime | None = None
+) -> TranscriptUsage:
+    """Sum the usage records of a CLI transcript from ``start`` on (PE21-D11).
+
+    A usage record is a JSON line with a ``message`` object that has a ``usage`` object. Only
+    records with a ``timestamp`` at or after ``start`` and, with ``end``, before ``end`` count
+    (the records of earlier and of later segments of a resumed session do not; R1-F6), and
+    each ``message.id`` counts once (the CLI writes one record per content block of a message). A record with no ``message.id`` counts each time. With a
+    ``cache_creation`` split the 5-minute and 1-hour writes count apart; without it,
+    ``cache_creation_input_tokens`` counts as 5-minute writes, the cheaper price, so the sum
+    stays a lower bound. A torn last line (no newline: the CLI was killed while writing it) is
+    skipped. Refusal ``transcript_invalid``: an unreadable file, any other line that is not a
+    JSON object, a usage record whose timestamp is not an ISO time with a zone, or a token count
+    that is not an int at or above 0.
+    """
+    usage_sum = TranscriptUsage()
+    seen: set[str] = set()
+    try:
+        with transcript.open("r", encoding="utf-8", newline="") as handle:
+            for number, line in enumerate(handle, start=1):
+                where = f"{transcript.name}:{number}"
+                if not line.strip():
+                    continue
+                try:
+                    record: object = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    if not line.endswith("\n"):
+                        log(
+                            "transcript_torn_tail",
+                            transcript=str(transcript),
+                            line=number,
+                        )
+                        continue
+                    raise Refusal(
+                        "transcript_invalid", f"{where}: not JSON: {exc}"
+                    ) from exc
+                if not isinstance(record, dict):
+                    raise Refusal("transcript_invalid", f"{where}: not a JSON object")
+                fields = cast(dict[str, object], record)
+                message = fields.get("message")
+                if not isinstance(message, dict):
+                    continue
+                message_fields = cast(dict[str, object], message)
+                usage = message_fields.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                stamp = fields.get("timestamp")
+                try:
+                    moment = (
+                        datetime.fromisoformat(stamp)
+                        if isinstance(stamp, str)
+                        else None
+                    )
+                except ValueError:
+                    moment = None
+                if moment is None or moment.tzinfo is None:
+                    raise Refusal(
+                        "transcript_invalid",
+                        f"{where}: a usage record with timestamp {stamp!r}",
+                    )
+                if moment < start or (end is not None and moment >= end):
+                    continue
+                message_id = message_fields.get("id")
+                if isinstance(message_id, str) and message_id:
+                    if message_id in seen:
+                        continue
+                    seen.add(message_id)
+                tokens = cast(dict[str, object], usage)
+                counts = {
+                    name: _usage_tokens(tokens, name, where)
+                    for name in USAGE_TOKEN_FIELDS
+                }
+                split = tokens.get("cache_creation")
+                write_5m = counts["cache_creation_input_tokens"]
+                write_1h = 0
+                if isinstance(split, dict):
+                    parts = cast(dict[str, object], split)
+                    if (
+                        "ephemeral_5m_input_tokens" in parts
+                        or "ephemeral_1h_input_tokens" in parts
+                    ):
+                        write_5m = _usage_tokens(
+                            parts, "ephemeral_5m_input_tokens", where
+                        )
+                        write_1h = _usage_tokens(
+                            parts, "ephemeral_1h_input_tokens", where
+                        )
+                usage_sum.input_tokens += counts["input_tokens"]
+                usage_sum.output_tokens += counts["output_tokens"]
+                usage_sum.cache_write_5m_tokens += write_5m
+                usage_sum.cache_write_1h_tokens += write_1h
+                usage_sum.cache_read_tokens += counts["cache_read_input_tokens"]
+                usage_sum.messages += 1
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Refusal("transcript_invalid", f"cannot read {transcript}: {exc}") from exc
+    return usage_sum
+
+
+def usage_cost_usd(
+    usage: TranscriptUsage, model: str, p_in: float, p_out: float
+) -> float:
+    """The USD of ``usage`` at the base prices ``p_in`` and ``p_out`` per million tokens.
+
+    Cache writes and reads are priced from the input price with the multipliers of the
+    Anthropic prompt-caching documentation, section Pricing
+    (https://platform.claude.com/docs/en/build-with-claude/prompt-caching):
+    ``CACHE_WRITE_5M_FACTOR``, ``CACHE_WRITE_1H_FACTOR``, and ``CACHE_READ_FACTOR`` unless
+    ``CACHE_READ_FACTOR_BY_MODEL`` names the model.
+    """
+    read_factor = CACHE_READ_FACTOR_BY_MODEL.get(model, CACHE_READ_FACTOR)
+    total = (
+        usage.input_tokens * p_in
+        + usage.output_tokens * p_out
+        + usage.cache_write_5m_tokens * CACHE_WRITE_5M_FACTOR * p_in
+        + usage.cache_write_1h_tokens * CACHE_WRITE_1H_FACTOR * p_in
+        + usage.cache_read_tokens * read_factor * p_in
+    )
+    return money(total / 1_000_000)
+
+
+def _cost_unknown(tx: Tx, segment_id: str, run_id: str, reason: str) -> Outcome:
+    """File ``cost_unknown:<segment>`` once (PE21-D11); the body names why there is no estimate."""
+    new = tx.notice(
+        "cost_unknown", segment_id, run_id, {"segment_id": segment_id, "reason": reason}
+    )
+    return Outcome(
+        "changed" if new else "no_change",
+        {"segment_id": segment_id, "cost_unknown": reason},
+    )
+
+
+def verb_cost_reconcile(
+    tx: Tx, segment_id: str, transcript: Path, registry: Path
+) -> Outcome:
+    """Set the information-only cost estimate of a finalized segment with no trusted total.
+
+    PE21-D11: the sum of the segment's transcript usage records (``transcript_usage``) times the
+    registry prices of the run's ``launch.model`` (``registry_prices``, ``usage_cost_usd``) goes
+    to ``segments.cost_estimate_usd`` with ``cost_estimate_source = 'transcript'``. The estimate
+    is a lower bound (the transcript omits the output of a crashed turn and all subagent spend),
+    so no verb takes it as an amount: the exposure, ``cost_known`` and the spend stay as they
+    were (report.md:435-458). The segment's start is its ``launching -> running`` transition,
+    and its end the next such transition of another segment of the run, if any (R1-F6).
+
+    With no start transition, no ``launch.model`` or no transcript file, the notice
+    ``cost_unknown:<segment>`` is filed once and no estimate is set; the body names the reason.
+    Refusals: ``unknown_segment``, ``segment_open`` (not finalized), ``cost_known`` (the segment
+    has a trusted total), ``manifest_invalid``, and those of ``registry_prices`` and
+    ``transcript_usage``.
+    """
+    segment = get_segment(tx, segment_id)
+    if segment["finalized_utc"] is None:
+        raise Refusal(
+            "segment_open",
+            f"segment {segment_id} is not finalized; only a finalized one is estimated",
+        )
+    if segment["cost_known"]:
+        raise Refusal(
+            "cost_known",
+            f"segment {segment_id} has a trusted total; it needs no estimate",
+        )
+    run_id = str(segment["run_id"])
+    start_row = tx.row(
+        "SELECT at_utc FROM transitions WHERE entity = 'segment' AND entity_id = ?"
+        " AND from_state = 'launching' AND to_state = 'running' ORDER BY at_utc LIMIT 1",
+        (segment_id,),
+    )
+    launch = manifest_doc(get_run(tx, run_id)).get("launch")
+    model = launch.get("model") if isinstance(launch, dict) else None
+    if start_row is None:
+        return _cost_unknown(tx, segment_id, run_id, "no_start_time")
+    if not isinstance(model, str) or not model:
+        return _cost_unknown(tx, segment_id, run_id, "model_not_named")
+    if not transcript.is_file():
+        return _cost_unknown(tx, segment_id, run_id, "no_transcript")
+    p_in, p_out = registry_prices(registry, model)
+    start = parse_utc(str(start_row["at_utc"]))
+    later = [
+        moment
+        for moment in (
+            parse_utc(str(row["at_utc"]))
+            for row in tx.rows(
+                "SELECT t.at_utc FROM transitions t JOIN segments s"
+                " ON s.segment_id = t.entity_id WHERE t.entity = 'segment'"
+                " AND s.run_id = ? AND s.segment_id != ?"
+                " AND t.from_state = 'launching' AND t.to_state = 'running'",
+                (run_id, segment_id),
+            )
+        )
+        if moment > start
+    ]
+    usage = transcript_usage(transcript, start, min(later) if later else None)
+    cost = usage_cost_usd(usage, model, p_in, p_out)
+    payload: dict[str, object] = {
+        "segment_id": segment_id,
+        "cost_estimate_usd": cost,
+        "messages": usage.messages,
+    }
+    if (
+        segment["cost_estimate_source"] == "transcript"
+        and segment["cost_estimate_usd"] is not None
+        and float(segment["cost_estimate_usd"]) == cost
+    ):
+        return Outcome("no_change", payload)
+    tx.con.execute(
+        "UPDATE segments SET cost_estimate_usd = ?, cost_estimate_source = 'transcript'"
+        " WHERE segment_id = ?",
+        (cost, segment_id),
+    )
+    return Outcome("changed", payload)
+
+
 def verb_notice(tx: Tx, args: argparse.Namespace) -> Outcome:
     """File one monitor notice ``<kind>:<ref>``; the same key again is ``no_change``."""
     new = tx.notice(args.kind, args.ref, args.run_id, args.body_json or {})
@@ -3698,11 +4503,14 @@ def verb_notice(tx: Tx, args: argparse.Namespace) -> Outcome:
 
 
 def verb_notices_due(tx: Tx) -> Outcome:
-    """The notices to send now: pending, retry under the slow limit, or slow and an hour old."""
+    """The notices to send now: pending, retry under the slow limit, or slow and an hour old.
+
+    A closed notice is never due: its decision was resolved or expired (R1-F7).
+    """
     rows = tx.rows(
-        "SELECT * FROM notices WHERE state = 'pending'"
+        "SELECT * FROM notices WHERE closed_utc IS NULL AND (state = 'pending'"
         " OR (state = 'retry' AND attempts < ?)"
-        " OR (state = 'retry' AND attempts >= ? AND (last_attempt_utc IS NULL OR last_attempt_utc <= ?))"
+        " OR (state = 'retry' AND attempts >= ? AND (last_attempt_utc IS NULL OR last_attempt_utc <= ?)))"
         " ORDER BY created_utc, notice_key",
         (NOTICE_SLOW_AFTER, NOTICE_SLOW_AFTER, tx.ctx.ago(NOTICE_SLOW_RETRY_S)),
     )
@@ -3768,6 +4576,21 @@ def verb_notice_failed(tx: Tx, key: str, error: str) -> Outcome:
     )
 
 
+def close_decision_notice(tx: Tx, gate_id: str) -> int:
+    """Close the open ``decision`` notice of gate ``gate_id`` (report.md:831-833).
+
+    The notice body names its outbox key ``decision:<gate>``. A body that is not JSON matches
+    nothing. Returns the number of notices closed (0 or 1).
+    """
+    cursor = tx.con.execute(
+        "UPDATE notices SET closed_utc = ? WHERE kind = 'decision' AND closed_utc IS NULL"
+        " AND CASE WHEN json_valid(body_json)"
+        " THEN json_extract(body_json, '$.semantic_key') END = ?",
+        (tx.ctx.now_utc, f"decision:{gate_id}"),
+    )
+    return cursor.rowcount
+
+
 def verb_outbox_scan(tx: Tx) -> Outcome:
     """Read the outbox past the cursor: decision, decision_resolved and gate_expired open a
     notice; other kinds only move the cursor. The cursor moves in the same transaction."""
@@ -3800,6 +4623,11 @@ def verb_outbox_scan(tx: Tx) -> Outcome:
         run_id = None if event["run_id"] is None else str(event["run_id"])
         if tx.notice(kind, seq, run_id, body):
             noticed.append(f"{kind}:{seq}")
+        if kind in ("decision_resolved", "gate_expired"):
+            gate = payload.get("gate_id") if isinstance(payload, dict) else None
+            if not isinstance(gate, str) or not gate:
+                gate = str(event["semantic_key"]).split(":", 1)[-1]
+            close_decision_notice(tx, gate)
     last = int(events[-1]["event_seq"])
     tx.con.execute(
         "INSERT INTO cursors (name, value, updated_utc) VALUES (?, ?, ?) "
@@ -3859,7 +4687,8 @@ def verb_monitor_view(tx: Tx) -> Outcome:
         for row in tx.rows(
             "SELECT segment_id, run_id, attempt_id, dispatch_id, supervision, job, state,"
             " launcher_pid, launcher_created, wrapper_pid, wrapper_created, pid, created,"
-            " boot_id, win_session, job_name, last_alive_utc, cancel_requested_utc, created_utc"
+            " boot_id, win_session, job_name, last_alive_utc, cancel_requested_utc, created_utc,"
+            " expected_session_id"
             " FROM segments WHERE finalized_utc IS NULL ORDER BY created_utc, segment_id"
         )
     ]
@@ -4088,6 +4917,10 @@ def view_run(tx: Tx, run_id: str, output_dir: Path | None) -> dict[str, Any]:
                 "session_total_usd": seg.get("session_total_usd"),
                 "segment_delta_usd": seg.get("segment_delta_usd"),
                 "reservation_usd": seg.get("reservation_usd"),
+                "policy_sha256": seg.get("policy_sha256"),
+                "cost_estimate_usd": seg.get("cost_estimate_usd"),
+                "cost_estimate_source": seg.get("cost_estimate_source"),
+                "slept_utc": seg.get("slept_utc"),
                 "dispatch": dispatch_signals(output_dir, seg.get("dispatch_id")),
             }
         )
@@ -4104,6 +4937,7 @@ def view_run(tx: Tx, run_id: str, output_dir: Path | None) -> dict[str, Any]:
                 "brief",
                 "reason",
                 "created_utc",
+                "source_check",
             )
         }
         for q in tx.rows(
@@ -4448,13 +5282,31 @@ def transcript_path(doc: dict[str, Any], session: str) -> Path:
     project = doc.get("project_root")
     if not isinstance(project, str) or not project:
         raise Refusal("manifest_invalid", "the run's manifest has no project_root")
+    return (
+        claude_config_dir()
+        / "projects"
+        / SLUG_RE.sub("-", project)
+        / f"{session}.jsonl"
+    )
+
+
+def claude_config_dir() -> Path:
+    """The CLI's config folder: ``CLAUDE_CONFIG_DIR``, else ``~/.claude``."""
     config = os.environ.get("CLAUDE_CONFIG_DIR")
     if config:
-        base = Path(config)
-    else:
-        home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
-        base = (Path(home) if home else Path.home()) / ".claude"
-    return base / "projects" / SLUG_RE.sub("-", project) / f"{session}.jsonl"
+        return Path(config)
+    home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+    return (Path(home) if home else Path.home()) / ".claude"
+
+
+def session_transcripts(session: str) -> list[Path]:
+    """Return every ``projects/<slug>/<session>.jsonl`` file under the config folder."""
+    projects = claude_config_dir() / "projects"
+    if not projects.is_dir():
+        return []
+    return [
+        path for path in sorted(projects.glob(f"*/{session}.jsonl")) if path.is_file()
+    ]
 
 
 @dataclass
@@ -5275,6 +6127,342 @@ def verb_orchestrator_sessions(tx: Tx, run_id: str | None) -> Outcome:
 # --- dispatch ---------------------------------------------------------------------------
 
 
+# --- the start source of a request (PE21, MEU-894) ----------------------------------------
+
+
+@dataclass(frozen=True)
+class StartEvidence:
+    """What ``prepare_request`` proved about the source of a start, for the request row."""
+
+    source_check: str
+    start_session: str | None = None
+    start_message: str | None = None
+    attested_utc: str | None = None
+    attest_channel: str | None = None
+
+
+class ConsoleReader(Protocol):
+    """The console of the attestation: the real one, or an injected one in a test."""
+
+    def available(self) -> bool:
+        """Return True when the process has a console with an input."""
+        ...
+
+    def write_prompt(self, text: str) -> None:
+        """Show ``text`` on the console, never on standard output."""
+        ...
+
+    def kbhit(self) -> bool:
+        """Return True when a key is waiting."""
+        ...
+
+    def getwch(self) -> str:
+        """Return the next key, with no echo."""
+        ...
+
+
+class WindowsConsole:
+    """The console of this process: ``CONOUT$`` for the prompt, ``CONIN$`` for the keys."""
+
+    def available(self) -> bool:
+        """Open ``CONIN$`` and read its mode: a process with no console fails here."""
+        if sys.platform != "win32":
+            return False
+        generic_read_write = 0x80000000 | 0x40000000
+        file_share_read_write = 0x1 | 0x2
+        open_existing = 3
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = ctypes.c_void_p
+        kernel32.CreateFileW.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.c_void_p,
+        ]
+        kernel32.GetConsoleMode.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.CreateFileW(
+            "CONIN$",
+            generic_read_write,
+            file_share_read_write,
+            None,
+            open_existing,
+            0,
+            None,
+        )
+        if handle is None or handle == ctypes.c_void_p(-1).value:
+            return False
+        try:
+            mode = ctypes.c_ulong()
+            return bool(kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def write_prompt(self, text: str) -> None:
+        """Write to ``CONOUT$``, because the caller captures standard output."""
+        with open("CONOUT$", "w", encoding="utf-8", errors="replace") as console:
+            console.write(f"{text}\n")
+
+    def kbhit(self) -> bool:
+        """Return True when the console has a key waiting."""
+        if sys.platform != "win32":
+            return False
+        import msvcrt
+
+        return bool(msvcrt.kbhit())
+
+    def getwch(self) -> str:
+        """Read one key from the console, with no echo."""
+        if sys.platform != "win32":
+            raise OSError("this platform has no msvcrt console")
+        import msvcrt
+
+        return msvcrt.getwch()
+
+
+def attest_console(
+    run_id: str,
+    *,
+    timeout_s: int = ATTEST_TIMEOUT_S,
+    reader: ConsoleReader | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    code: str | None = None,
+) -> None:
+    """Show a one-use code on the console and wait for the same code, or refuse.
+
+    This proves a console with live input, not a person (PE21-D6). It holds no store lock:
+    ``prepare_request`` calls it before the transaction. The code goes to the console only,
+    never to standard output, which the caller captures.
+    """
+    console: ConsoleReader = WindowsConsole() if reader is None else reader
+    if not console.available():
+        raise Refusal(
+            "attest_no_console",
+            "this process has no console with an input; a human-command start runs from a terminal",
+        )
+    wanted = code or "".join(
+        secrets.choice(ATTEST_ALPHABET) for _ in range(ATTEST_CODE_LEN)
+    )
+    try:
+        console.write_prompt(f"Type this code to start run {run_id}: {wanted}")
+    except OSError as exc:
+        raise Refusal(
+            "attest_no_console", f"the console cannot show the code: {exc}"
+        ) from exc
+    deadline = clock() + timeout_s
+    typed = ""
+    while True:
+        while console.kbhit():
+            key = console.getwch()
+            if key in ATTEST_ENTER_KEYS:
+                if typed.strip() == wanted:
+                    return
+                raise Refusal("attest_mismatch", "the typed code is not the shown code")
+            if key == ATTEST_CANCEL_KEY:
+                raise Refusal("attest_mismatch", "the code entry was cancelled")
+            if key in ATTEST_PREFIX_KEYS:
+                console.getwch()
+            elif key == ATTEST_BACKSPACE_KEY:
+                typed = typed[:-1]
+            else:
+                typed += key
+        if clock() >= deadline:
+            raise Refusal(
+                "attest_timeout",
+                f"no code was entered in {timeout_s} s",
+                timeout_s=timeout_s,
+            )
+        time.sleep(ATTEST_POLL_S)
+
+
+def is_production_db(db: Path) -> bool:
+    """Compare with ``PRODUCTION_DB``; a path that cannot be resolved counts as production."""
+    try:
+        return db.resolve() == Path(PRODUCTION_DB).resolve()
+    except OSError as exc:
+        log("db_path_unresolved", db=str(db), error=str(exc))
+        return True
+
+
+def attest_file(path: str, db: Path) -> None:
+    """The test seam of the attestation: the file holds a code of the alphabet, or refuse."""
+    if is_production_db(db):
+        raise Refusal(
+            "attest_seam_refused",
+            f"{ATTEST_FILE_ENV} is not read for the production store",
+        )
+    try:
+        code = Path(path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise Refusal(
+            "attest_no_console", f"the attestation file cannot be read: {exc}"
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise Refusal(
+            "attest_mismatch", f"the attestation file is not text: {exc}"
+        ) from exc
+    if len(code) != ATTEST_CODE_LEN or not set(code) <= set(ATTEST_ALPHABET):
+        raise Refusal("attest_mismatch", "the attestation file holds no code")
+
+
+def typed_message_text(session: str, message: str) -> str:
+    """Return the text of the one typed human record ``message`` of ``session``, or refuse.
+
+    The rules of the run-parameters verifier (``_typed_record``, R§4.1 V-2): a typed human
+    turn on the main line of the session, so a tool result, hook output, a meta line or an
+    injected frame never counts, and a uuid that occurs twice names no record.
+    """
+    found = session_transcripts(session)
+    if len(found) != 1:
+        raise Refusal(
+            "start_session_unlisted",
+            f"session {session} has {len(found)} transcripts under {claude_config_dir()}",
+        )
+    try:
+        data = found[0].read_bytes()
+    except OSError as exc:
+        raise Refusal(
+            "start_session_unlisted", f"cannot read {found[0]}: {exc}"
+        ) from exc
+    records: list[dict[str, Any]] = []
+    for raw in data.split(b"\n"):
+        try:
+            record = as_dict(json.loads(raw))
+        except (ValueError, RecursionError):
+            continue
+        if record is not None:
+            records.append(record)
+    hits = [record for record in records if record.get("uuid") == message]
+    record = hits[0] if len(hits) == 1 else None
+    parent = None if record is None else record.get("parentUuid")
+    text = None if record is None else text_blocks(message_content(record))
+    if (
+        record is None
+        or text is None
+        or not is_human_entry(record, session)
+        or not is_typed_turn(record)
+        or record.get("isSidechain") is not False
+        or (parent is not None and not any(r.get("uuid") == parent for r in records))
+    ):
+        raise Refusal(
+            "start_message_not_found",
+            f"session {session} has no typed human message {message}",
+        )
+    return text
+
+
+def verify_typed_quote(session: str, message: str, quote: str) -> None:
+    """Refuse unless ``quote`` equals the whole typed text of the message, after normalization."""
+    if normalize_text(quote) != normalize_text(typed_message_text(session, message)):
+        raise Refusal(
+            "start_quote_mismatch",
+            f"the quote is not the typed text of message {message}",
+        )
+
+
+def verify_chain_source(chain: dict[str, Any]) -> None:
+    """Check a chain block against the message that set up the chain (AC-894.3)."""
+    session = chain.get("session")
+    message = chain.get("message_uuid")
+    if (
+        not isinstance(session, str)
+        or not isinstance(message, str)
+        or not START_UUID_RE.match(session)
+        or not START_UUID_RE.match(message)
+    ):
+        raise Refusal(
+            "chain_source_missing", "the chain block names no session and message_uuid"
+        )
+    try:
+        verify_typed_quote(session, message, str(chain.get("quote")))
+    except Refusal as exc:
+        raise Refusal(
+            "chain_quote_mismatch",
+            f"the chain quote is not the typed message ({exc.error}): {exc.message}",
+        ) from exc
+
+
+def check_start_flags(args: argparse.Namespace) -> None:
+    """Refuse start-source flags that do not belong to this kind of start."""
+    if (
+        args.quote is not None
+        and not 1 <= len(normalize_text(args.quote)) <= QUOTE_MAX_CHARS
+    ):
+        raise Refusal(
+            "quote_out_of_range",
+            f"the quote must be 1 to {QUOTE_MAX_CHARS} characters after normalization",
+        )
+    agent = args.started_by == "agent-on-user-chat"
+    has_flags = args.start_session is not None or args.start_message is not None
+    if agent and (args.start_session is None or args.start_message is None):
+        raise Refusal(
+            "start_source_missing",
+            "an agent start names the typed message: --start-session and --start-message",
+        )
+    if not agent and has_flags:
+        raise Refusal(
+            "start_source_refused",
+            f"--start-session and --start-message belong to an agent start, not to {args.started_by}",
+        )
+    timeout_s = args.attest_timeout_s
+    if timeout_s is not None:
+        if args.started_by != "human-command":
+            raise Refusal(
+                "start_source_refused",
+                f"--attest-timeout-s belongs to a human-command start, not to {args.started_by}",
+            )
+        if not ATTEST_TIMEOUT_MIN_S <= timeout_s <= ATTEST_TIMEOUT_MAX_S:
+            raise Refusal(
+                "attest_timeout_out_of_range",
+                f"--attest-timeout-s must be {ATTEST_TIMEOUT_MIN_S} to {ATTEST_TIMEOUT_MAX_S}",
+            )
+
+
+def prepare_request(ctx: Context, args: argparse.Namespace) -> StartEvidence:
+    """Collect the start evidence with no transaction open (Design item 8, R1-F6).
+
+    A wait for a human key inside a transaction would hold the writer lock. A read-only
+    precheck refuses a run that cannot take a request before the human is asked.
+    """
+    ctx.con.execute("BEGIN")
+    try:
+        check_request(Tx(ctx), args)
+    finally:
+        rollback(ctx)
+    check_start_flags(args)
+    if args.started_by == "agent-on-user-chat":
+        verify_typed_quote(args.start_session, args.start_message, args.quote)
+        return StartEvidence(
+            SOURCE_TRANSCRIPT,
+            start_session=args.start_session,
+            start_message=args.start_message,
+        )
+    if args.started_by == "monitor-chain":
+        # The block was checked at register; authority checks it again for the segment.
+        return StartEvidence(SOURCE_CHAIN)
+    seam = os.environ.get(ATTEST_FILE_ENV)
+    if seam:
+        attest_file(seam, ctx.db)
+    else:
+        timeout_s = args.attest_timeout_s
+        attest_console(
+            args.run_id,
+            timeout_s=ATTEST_TIMEOUT_S if timeout_s is None else timeout_s,
+        )
+    attested = format_utc(ctx.clock()) if ctx.clock is not None else ctx.now_utc
+    return StartEvidence(
+        SOURCE_CONSOLE,
+        attested_utc=attested,
+        attest_channel="file" if seam else "console",
+    )
+
+
 def run_verb(ctx: Context, args: argparse.Namespace) -> Outcome:
     """Dispatch one verb to its transaction."""
     verb = args.verb
@@ -5287,6 +6475,9 @@ def run_verb(ctx: Context, args: argparse.Namespace) -> Outcome:
     if verb == "register":
         manifest = load_manifest(args.manifest, args.run_id)
         return transact(ctx, lambda tx: verb_register(tx, args.run_id, manifest, args))
+    if verb == "request":
+        evidence = prepare_request(ctx, args)
+        return transact(ctx, lambda tx: verb_request(tx, args, evidence))
     bodies: dict[str, Callable[[Tx], Outcome]] = {
         "check": verb_check,
         "clear_check": lambda tx: verb_clear_check(tx, args.note),
@@ -5294,7 +6485,6 @@ def run_verb(ctx: Context, args: argparse.Namespace) -> Outcome:
         "registration_failed": lambda tx: verb_registration_failed(
             tx, args.run_id, args.reason
         ),
-        "request": lambda tx: verb_request(tx, args),
         "not_started": lambda tx: verb_not_started(tx, args.request_id, args.reason),
         "accept": lambda tx: verb_accept(tx, args),
         "admit": lambda tx: verb_admit(tx, args.attempt_id, args.segment_id, args.base),
@@ -5317,6 +6507,11 @@ def run_verb(ctx: Context, args: argparse.Namespace) -> Outcome:
         "lease": lambda tx: verb_lease(tx, args),
         "lease_release": lambda tx: verb_lease_release(tx, args),
         "alive": lambda tx: verb_alive(tx, args.segment_id),
+        "slept": lambda tx: verb_slept(tx, args.segment_id),
+        "scan_monitor": lambda tx: verb_scan_monitor(tx, args.alive_json),
+        "cost_reconcile": lambda tx: verb_cost_reconcile(
+            tx, args.segment_id, Path(args.transcript), Path(args.registry)
+        ),
         "notice": lambda tx: verb_notice(tx, args),
         "notices_due": verb_notices_due,
         "monitor_view": verb_monitor_view,

@@ -14,3 +14,7 @@
 # The commit-gate hook tests pin the byte hash of `_hook_common.split_segments`. A CRLF
 # checkout (core.autocrlf=true) changes those bytes, so the hooks check out LF too.
 core/.claude/hooks/*.py text eol=lf
+
+# The credits launcher pins the SHA-256 of the operator policy and refuses a policy whose text is
+# not LF (policy_hash_mismatch), so the policy checks out LF too.
+core/.agent/skills/claude-credits/templates/operator-policy.md text eol=lf

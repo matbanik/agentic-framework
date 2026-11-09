@@ -55,15 +55,19 @@ session, they are listed here, because the new session does not have that transc
 
 ## Start authority
 
-The human's resume words, quoted word for word as the agent passed them in `-StartQuote`:
-`<the words>`. For a resume that the human started from their own terminal, write: `Started by
-the human from their terminal.`
+The launcher puts a Start record above this brief. It states who started this segment and which
+check passed. You may check it again with the read-only command that it names. A refusal of that
+command is a stop: write `stop_gate: "released:human-gate"` and end with `STOPPED:decision`.
 
-1. Run `python tools/credits_msg.py authority --quote "<the words>"` before any other action
-   (no `--quote` for a terminal start). Exit 0 is the human's authorization for this segment
-   within the scope of the briefs (GUARDRAILS SIGN 3 (b)).
-2. A refusal is a stop: write `stop_gate: "released:human-gate"` and end with
-   `STOPPED:decision`.
+For a resume that an agent started on the human's chat, the record quotes the whole typed text of
+the new message that the agent named with `-StartSession` and `-StartMessage`. The message of an
+earlier segment does not start a resume. For such a resume the record names the command with
+those words: `uv run python tools/credits_msg.py authority --quote "<the human's resume words>"`.
+When the words hold a quotation mark, `$`, a backtick, a backslash or `!`, the command has
+`--quote-b64 <the UTF-8 words in base64>` in place of `--quote`. Run the command as the record
+writes it.
+
+The project instructions load from the repository as usual.
 
 ## Authorization
 

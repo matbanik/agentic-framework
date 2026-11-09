@@ -199,12 +199,13 @@ function Format-RunView($View) {
             "  class=$(Format-Text (Get-Field $s 'stop_class'))  by=$(Format-Text (Get-Field $s 'finalized_by'))  exit=$(Format-Text (Get-Field $s 'exit_code'))" +
             "  session_total=$(Format-Usd (Get-Field $s 'session_total_usd'))  dispatch=$(Format-Text (Get-Field $s 'dispatch_id')) ($status)")
         $lines.Add("    session=$(Format-Text (Get-Field $s 'expected_session_id'))  heartbeat=$(Format-Text (Get-Field $s 'last_alive_utc'))  brief=$(Format-Text (Get-Field $s 'brief'))")
+        $lines.Add("    policy_sha256=$(Format-Text (Get-Field $s 'policy_sha256'))  cost_estimate_usd=$(Format-Text (Get-Field $s 'cost_estimate_usd'))  source=$(Format-Text (Get-Field $s 'cost_estimate_source'))")
     }
     $lines.Add('Requests:')
     foreach ($q in @(Get-Field $View 'requests')) {
         if ($null -eq $q) { continue }
         $mode = if ([int](Get-Field $q 'resume')) { "resume=$(Format-Text (Get-Field $q 'resume_mode'))" } else { 'first start' }
-        $lines.Add("  $(Get-Field $q 'request_id')  $(Format-Text (Get-Field $q 'state'))  $mode  by=$(Format-Text (Get-Field $q 'started_by'))  reason=$(Format-Text (Get-Field $q 'reason'))")
+        $lines.Add("  $(Get-Field $q 'request_id')  $(Format-Text (Get-Field $q 'state'))  $mode  by=$(Format-Text (Get-Field $q 'started_by'))  source_check=$(Format-Text (Get-Field $q 'source_check'))  reason=$(Format-Text (Get-Field $q 'reason'))")
     }
     $lines.Add('Attempts:')
     foreach ($a in @(Get-Field $View 'attempts')) {

@@ -13,9 +13,13 @@ session of the live segment:
    A subagent payload (``agent_id``) or a payload with no ``session_id`` gets
    nothing.
 2. Confirm: a transcript line with a time at or after ``last_emit_utc`` that
-   holds the frame of an emitted message sets ``confirmed_utc``.
+   holds the frame of an emitted message sets ``confirmed_utc`` and sets
+   ``fires_since_emit`` to 0.
 3. Claim: an emitted message without a confirm is emitted again after two
    more fires and 60 s; the third emit without a confirm sets ``failed_utc``.
+   A confirmed open message with no ack counts each later fire in
+   ``fires_since_emit``, for the monitor's ``no_ack`` (R§4.6.4 step 9). The
+   fire that confirmed it is not counted; a later fire in the same second is.
    Each open message with no ack and no emit in this segment is emitted.
 4. Output: ``PostToolUse`` puts the frames in ``additionalContext`` and, on
    Bash, appends them to the tool's stdout (``updatedToolOutput``). ``Stop``
@@ -254,7 +258,8 @@ def bind_and_confirm(
                 continue
             if sighting >= cs.parse_utc(str(row["last_emit_utc"])):
                 tx.con.execute(
-                    "UPDATE deliveries SET confirmed_utc = ?, state = 'confirmed'"
+                    "UPDATE deliveries SET confirmed_utc = ?, state = 'confirmed',"
+                    " fires_since_emit = 0"
                     " WHERE msg_id = ? AND segment_id = ? AND confirmed_utc IS NULL",
                     (tx.ctx.now_utc, msg_id, segment_id),
                 )
@@ -287,8 +292,17 @@ def record_emit(tx: cs.Tx, msg_id: str, segment_id: str, generation: int) -> Non
     )
 
 
-def claim(tx: cs.Tx, env: dict[str, str], event: str, stop_active: bool) -> cs.Outcome:
-    """Pick the messages to emit now and count their emits (R§4.6.4)."""
+def claim(
+    tx: cs.Tx,
+    env: dict[str, str],
+    event: str,
+    stop_active: bool,
+    just_confirmed: list[str],
+) -> cs.Outcome:
+    """Pick the messages to emit now and count their emits (R§4.6.4).
+
+    ``just_confirmed`` holds the messages that the confirm step of this fire confirmed.
+    """
     run_id = env["CREDITS_RUN_ID"]
     segment_id = env["CREDITS_SEGMENT"]
     now = tx.ctx.now
@@ -330,6 +344,18 @@ def claim(tx: cs.Tx, env: dict[str, str], event: str, stop_active: bool) -> cs.O
             "UPDATE deliveries SET fires_since_emit = ? WHERE msg_id = ? AND segment_id = ?",
             (fires, msg_id, segment_id),
         )
+    # A confirmed message with no ack counts each later fire, for the monitor's no_ack after
+    # three more fires (R§4.6.4 step 9). The fire that confirmed it is not one. That fire is
+    # known by its confirm step, not by the time: the clock has whole seconds, so a later fire
+    # can have the time of the confirm.
+    tx.con.execute(
+        "UPDATE deliveries SET fires_since_emit = fires_since_emit + 1"
+        " WHERE segment_id = ? AND confirmed_utc IS NOT NULL"
+        " AND msg_id NOT IN (SELECT value FROM json_each(?))"
+        " AND msg_id IN (SELECT msg_id FROM messages WHERE run_id = ? AND state = 'open'"
+        " AND acked_utc IS NULL)",
+        (segment_id, json.dumps(just_confirmed), run_id),
+    )
     pending = tx.rows(
         "SELECT m.msg_id FROM messages m WHERE m.run_id = ? AND m.state = 'open'"
         " AND (m.acked_utc IS NULL OR (m.kind = 'ruling' AND m.applied_utc IS NULL"
@@ -577,7 +603,10 @@ def run(env: dict[str, str]) -> int:
             return 0
         ctx.crash("after_confirm")
         stop_active = payload.get("stop_hook_active") is True
-        claimed = cs.transact(ctx, lambda tx: claim(tx, env, event, stop_active))
+        just_confirmed: list[str] = list(bound.payload["confirmed"])
+        claimed = cs.transact(
+            ctx, lambda tx: claim(tx, env, event, stop_active, just_confirmed)
+        )
         # A ruling that came at or after its gate's deadline: one WARN (R§4.6.3 step 7).
         warns: list[dict[str, str]] = claimed.payload["warns"]
         for warn in warns:
