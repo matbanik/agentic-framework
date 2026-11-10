@@ -1567,13 +1567,18 @@ def project_root(plan_path: str) -> Path:
 
     A plan declares ``.agent/context/grouping/{file}.md`` relative to its repository,
     so the root is the nearest ancestor of the plan file that holds a ``.agent``
-    directory; a plan with no such ancestor resolves beside itself. The working
-    directory never takes part, so the binding cannot move with ``cd``.
+    directory, searched no higher than the plan's repository: an ancestor with a
+    ``.git`` entry (a folder, or the file of a linked worktree or submodule) ends the
+    search, as git's own discovery does. A plan with no such ancestor inside its
+    repository resolves beside itself. The working directory never takes part, so
+    the binding cannot move with ``cd``.
     """
     plan = Path(plan_path).resolve()
     for ancestor in plan.parents:
         if (ancestor / ".agent").is_dir():
             return ancestor
+        if (ancestor / ".git").exists():
+            return plan.parent
     return plan.parent
 
 
@@ -4610,6 +4615,7 @@ def selftest() -> int:
          "--decision-source", bound_plan, "--decision-source", bound_actual],
     )
     base = tmp / "basename"
+    (base / ".git").mkdir(parents=True)
     base_actual = grouping_at(base / "demo.md", _DECISION_GROUPING)
     base_decoy = grouping_at(base / "other" / "demo.md", empty_grouping)
     base_plan = grouping_at(base / "plan.md", _GOOD_PLAN.replace(
@@ -4627,6 +4633,41 @@ def selftest() -> int:
         ["--reflection", reflection, "--reflection-template", template,
          "--decision-source", base_plan, "--decision-source", base_actual],
         must_say="D-7 (grouping",
+    )
+    # A `.git` entry ends the root search: an outer `.agent` above the plan's
+    # repository (such as the home `~/.agent`) is never the plan's root.
+    nest = tmp / "repo-boundary"
+    (nest / ".agent").mkdir(parents=True)
+    nest_decoy = grouping_at(nest / "demo.md", empty_grouping)
+    nest_plan_text = _GOOD_PLAN.replace(
+        'date: "2026-09-01"\n', 'date: "2026-09-01"\ngrouping_source: "demo.md"\n', 1)
+    (nest / "repo" / ".git").mkdir(parents=True)
+    nest_plan = grouping_at(nest / "repo" / "plan.md", nest_plan_text)
+    nest_actual = grouping_at(nest / "repo" / "demo.md", _DECISION_GROUPING)
+    arm(
+        "grouping-declared-repo-boundary-read",
+        "1/REFUSE",
+        ["--reflection", reflection, "--reflection-template", template,
+         "--decision-source", nest_plan, "--decision-source", nest_actual],
+        must_say="D-7 (grouping",
+    )
+    (nest / "gitfile-repo").mkdir(parents=True)
+    (nest / "gitfile-repo" / ".git").write_text("gitdir: ../elsewhere\n", encoding="utf-8")
+    gitfile_plan = grouping_at(nest / "gitfile-repo" / "plan.md", nest_plan_text)
+    gitfile_actual = grouping_at(nest / "gitfile-repo" / "demo.md", _DECISION_GROUPING)
+    arm(
+        "grouping-declared-repo-boundary-gitfile-read",
+        "1/REFUSE",
+        ["--reflection", reflection, "--reflection-template", template,
+         "--decision-source", gitfile_plan, "--decision-source", gitfile_actual],
+        must_say="D-7 (grouping",
+    )
+    arm(
+        "grouping-declared-repo-boundary-outer-decoy-refused",
+        "1/REFUSE",
+        ["--reflection", reflection, "--reflection-template", template,
+         "--decision-source", nest_plan, "--decision-source", nest_decoy],
+        must_say="declares grouping_source",
     )
 
     # -- HDP-22: the bounded grammar refuses malformed flow, escapes and mixed blocks --
@@ -4699,6 +4740,7 @@ def selftest() -> int:
         must_say="one kind of source",
     )
     declared_handoff_dir = tmp / "declared-handoff"
+    (declared_handoff_dir / ".git").mkdir(parents=True)
     arm(
         "grouping-declared-with-plan-source-refused",
         "1/REFUSE",
@@ -4784,6 +4826,7 @@ def selftest() -> int:
         "```markdown\n## 8. Open Decisions\n\nNone.\n\n## 9. Notes\n```\n"
     )
     fenced = tmp / "fenced-heading"
+    (fenced / ".git").mkdir(parents=True)
     fenced_plan = grouping_at(fenced / "plan.md", _GOOD_PLAN.replace(
         'date: "2026-09-01"\n', 'date: "2026-09-01"\ngrouping_source: "demo.md"\n', 1) + fenced_heading)
     fenced_grouping = grouping_at(fenced / "demo.md", _DECISION_GROUPING)
@@ -4937,6 +4980,7 @@ def selftest() -> int:
         must_say="D-7 (grouping",
     )
     tilde = tmp / "tilde-heading"
+    (tilde / ".git").mkdir(parents=True)
     tilde_plan = grouping_at(tilde / "plan.md", _GOOD_PLAN.replace(
         'date: "2026-09-01"\n', 'date: "2026-09-01"\ngrouping_source: "demo.md"\n', 1)
         + "\n## Notes\n\n" + tilde_example)
