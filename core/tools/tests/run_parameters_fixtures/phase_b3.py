@@ -50,8 +50,8 @@ JOURNAL_PHASES = (
     "reconciled",
 )
 ACT_FOR_PHASE = {"plan": "plan_commit", "exec": "exec_commit", "finalize": "finalize"}
-AUTHOR = {"name": "Fixture", "email": "fixture@example.invalid"}
-SIGNER_PRINCIPALS = ("fixture@example.invalid", "signer@example.com")
+AUTHOR = {"name": "Fixture", "email": "100+fixture@users.noreply.github.com"}
+SIGNER_PRINCIPALS = ("100+fixture@users.noreply.github.com", "signer@example.com")
 TASK_CARRIER_PREFIX = "docs/execution/plans/"
 
 Result = tuple[int, dict[str, Any], str]

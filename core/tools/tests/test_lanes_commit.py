@@ -203,9 +203,9 @@ def lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Lane:
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
     for var, value in (
         ("GIT_AUTHOR_NAME", "Lane Test"),
-        ("GIT_AUTHOR_EMAIL", "lane@example.invalid"),
+        ("GIT_AUTHOR_EMAIL", "100+lane@users.noreply.github.com"),
         ("GIT_COMMITTER_NAME", "Lane Test"),
-        ("GIT_COMMITTER_EMAIL", "lane@example.invalid"),
+        ("GIT_COMMITTER_EMAIL", "100+lane@users.noreply.github.com"),
     ):
         monkeypatch.setenv(var, value)
     monkeypatch.delenv(SESSION_ENV, raising=False)
@@ -215,7 +215,7 @@ def lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Lane:
     for key, value in (
         ("core.autocrlf", "false"),
         ("user.name", "Lane Test"),
-        ("user.email", "lane@example.invalid"),
+        ("user.email", "100+lane@users.noreply.github.com"),
         ("commit.gpgsign", "false"),
     ):
         _git(main, "config", key, value)
@@ -636,7 +636,7 @@ def _decoy(lane: Lane) -> Path:
     decoy.mkdir()
     _git(decoy, "init", "-q", "-b", "main")
     _git(decoy, "config", "user.name", "Decoy")
-    _git(decoy, "config", "user.email", "decoy@example.invalid")
+    _git(decoy, "config", "user.email", "100+decoy@users.noreply.github.com")
     _write(decoy / "d.txt", "decoy\n")
     _git(decoy, "add", "-A")
     _git(decoy, "commit", "-q", "--no-verify", "-m", "decoy")

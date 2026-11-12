@@ -354,6 +354,44 @@ OFFER_LINE_RE = re.compile(r"  ([a-z_][a-z0-9_-]*): (.*)")
 FLOW_KEY_RE = re.compile(r"[a-z_][a-z0-9_-]*")
 TRAILING_COMMENT_RE = re.compile(r" +#.*")
 REVOKE_RE = re.compile(r"revoke run_parameters ([0-9a-f-]{36})")
+#: MEU-939 D-1 A — a prose line of a typed record that records the standing commit grant:
+#: the workflow token or the workflow mention, from the line's first non-blank character.
+STANDING_RE = re.compile(
+    r"(?:/standing-commit-grant|@\.agent/workflows/standing-commit-grant\.md)(?:\s|$)"
+)
+#: MEU-939 — the verb that records the standing commit grant. It is dispatched beside the
+#: fourteen ``RP_VERBS`` (AC-B.3 freezes that tuple at fourteen; interfaces.md gap G3).
+STANDING_VERB = "standing"
+#: MEU-939 D-1 A — the authorization form of the standing commit grant.
+STANDING_FORM = "standing-commit"
+#: MEU-939 D-1 A — the fixed scope of the standing commit grant: no plan, no grouping, main.
+STANDING_SCOPE: dict[str, str] = {"plan": "none", "grouping": "none", "branch": "main"}
+#: MEU-939 D-1 A — the acts the standing grant covers, byte-sorted; never ``exec_start``.
+STANDING_GRANTS: tuple[str, ...] = ("exec_commit", "finalize", "plan_commit")
+#: MEU-939 — the keys of a standing grant's ``offer``, in record order (the authorization/1
+#: fields without ``offer_digest``, which the store envelope carries beside the offer).
+STANDING_OFFER_KEYS: tuple[str, ...] = (
+    "schema",
+    "source",
+    "form",
+    "project",
+    "session",
+    "message_uuid",
+    "presentation_uuid",
+    "date",
+    "response",
+    "scope",
+    "members",
+    "expires",
+    "grants",
+    "standing",
+    "supersedes",
+)
+#: MEU-939 AC-939.3 — the refusal code of a plan that opts out of the standing grant.
+STANDING_OPT_OUT = "standing_opt_out"
+#: MEU-939 — a typed record that names the manual path (``run_parameters: manual``) never
+#: records the standing commit grant.
+MANUAL_INVOCATION_RE = re.compile(r"\brun_parameters:\s*manual\b")
 FOREIGN_SLUG_RE = re.compile(r"[^A-Za-z0-9]")
 #: O-1a — a value may not start with a YAML indicator that this grammar does not read.
 VALUE_INDICATORS = frozenset("&*!|>%@`")
@@ -929,8 +967,20 @@ def _grants_ok(value: object) -> bool:
 
 
 def _standing_ok(values: Mapping[str, Any]) -> bool:
-    """An invocation grant names one plan; a standing grant names a grouping and members."""
+    """An invocation grant names one plan; a standing grant names a grouping and members.
+
+    A ``standing-commit`` grant (MEU-939 D-1 A) names no plan, no grouping and no members:
+    its scope is exactly ``STANDING_SCOPE``, ``members`` is ``[]`` and it never expires by
+    date (it ends only when it is revoked or superseded).
+    """
     scope = values["scope"]
+    if values.get("form") == STANDING_FORM:
+        return (
+            values["standing"] is True
+            and scope == STANDING_SCOPE
+            and values["members"] == []
+            and values["expires"] == "none"
+        )
     if values["standing"] is False:
         return (
             _match(SLUG_RE, scope["plan"])
@@ -1460,6 +1510,23 @@ def _fenced_blocks(lines: Sequence[str]) -> tuple[list[list[str]], list[str]]:
     if current is not None:
         blocks.append(current)
     return blocks, prose
+
+
+def _prose_lines(text: str) -> list[str]:
+    """The prose lines of a typed record, each stripped of its surrounding white space.
+
+    A prose line is outside every O-1f fenced block (an unclosed fence runs to the end) and
+    is not a ``>`` quote line. Blank lines are dropped. A ``\\r\\n`` line end is read as
+    ``\\n``. MEU-939: the any-line invocation (AC-939.12) and the standing token (AC-939.1)
+    are read only from these lines, so a quoted or fenced mention never authorizes.
+    """
+    _blocks, prose = _fenced_blocks(text.replace("\r\n", "\n").split("\n"))
+    out: list[str] = []
+    for line in prose:
+        stripped = line.strip()
+        if stripped and not stripped.startswith(">"):
+            out.append(stripped)
+    return out
 
 
 def _offer_payload(text: str, *, self_contained: bool) -> list[str]:
@@ -2120,10 +2187,15 @@ def _check_scope(
     branch must also equal it (MEU-785 AC-785.20, D:268); without it (``verify``,
     ``reserve``, ``init``) no packet exists yet and only the existence rule applies.
 
+    A ``standing-commit`` grant (MEU-939 D-1 A) has every plan of the project in scope:
+    any plan slug, and ``none`` for a planless packet. The project and branch rules stay.
+
     Raises:
         Refusal: ``scope`` (``plan``, ``project``, ``branch``) or ``scope_branch_mismatch``.
     """
-    if auth["standing"]:
+    if auth.get("form") == STANDING_FORM:
+        in_scope = plan == "none" or SLUG_RE.fullmatch(plan) is not None
+    elif auth["standing"]:
         in_scope = plan in auth["members"]
     else:
         in_scope = plan == auth["scope"]["plan"]
@@ -3415,6 +3487,291 @@ def _revoke(repo: Repo, session: str, message: str) -> tuple[int, dict[str, Any]
         "revoked": target,
         "seq": seq,
     }
+
+
+# -- the standing commit grant (MEU-939 D-1 A) ------------------------------------------------
+
+
+def standing_digest(offer: Mapping[str, Any]) -> str:
+    """The ``offer_digest`` of a standing grant: sha256 of its canonical ``offer``.
+
+    The canonical form is the offer as JSON with sorted keys, no white space and ASCII
+    escapes, so the digest does not depend on how the store file is indented.
+    """
+    data = json.dumps(
+        dict(offer), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return _digest(data.encode("ascii"))
+
+
+def _standing_envelope_ok(value: object, stem: str) -> bool:
+    """A ``grants/<stem>.json`` envelope whose ``offer`` is a well-formed standing grant.
+
+    The envelope keys are the ones ``_grant_ok`` checks; this adds the standing offer:
+    exactly ``STANDING_OFFER_KEYS``, ``source: USER_EXPLICIT``, the one message uuid
+    (``message_uuid`` = ``presentation_uuid`` = the envelope's = ``stem``, ``chain`` =
+    ``[stem]``), the fixed scope (``_standing_ok``), the grants ``STANDING_GRANTS``, and an
+    ``offer_digest`` that equals ``standing_digest`` of the offer.
+    """
+    if not _grant_ok(value, stem):
+        return False
+    envelope = cast(dict[str, Any], value)
+    offer = cast(dict[str, Any], envelope["offer"])
+    if set(offer) != set(STANDING_OFFER_KEYS):
+        return False
+    return (
+        offer["schema"] == "authorization/1"
+        and offer["source"] == "USER_EXPLICIT"
+        and offer["form"] == STANDING_FORM
+        and _match(PROJECT_RE, offer["project"])
+        and _match(UUID_RE, offer["session"])
+        and offer["message_uuid"] == stem
+        and offer["presentation_uuid"] == stem
+        and _is_date(offer["date"])
+        and isinstance(offer["response"], str)
+        and bool(offer["response"])
+        and _scope_ok(offer["scope"])
+        and _members_ok(offer["members"])
+        and _is_expires(offer["expires"])
+        and offer["grants"] == list(STANDING_GRANTS)
+        and isinstance(offer["standing"], bool)
+        and _is_supersedes(offer["supersedes"])
+        and offer["supersedes"] != stem
+        and _standing_ok(offer)
+        and envelope["chain"] == [stem]
+        and envelope["offer_digest"] == standing_digest(offer)
+    )
+
+
+def _standing_live(store: Store) -> dict[str, Any] | None:
+    """The one live standing grant of ``store`` (not revoked, not superseded), or None.
+
+    Every envelope whose offer names the ``standing-commit`` form must be well formed
+    (``_standing_envelope_ok``). Each record supersedes the live one, so two live grants
+    can only come from a damaged store.
+
+    Raises:
+        Refusal: ``store_malformed`` (``grant:<uuid>:standing`` or ``standing:live_count``).
+    """
+    revoked = {cast(str, line["revoked"]) for line in store.revocations}
+    live: list[dict[str, Any]] = []
+    for stem, grant in sorted(store.grants.items()):
+        if cast(dict[str, Any], grant["offer"]).get("form") != STANDING_FORM:
+            continue
+        if not _standing_envelope_ok(grant, stem):
+            raise Refusal("store_malformed", f"grant:{stem}:standing")
+        if stem in revoked or grant["superseded_by"] != "none":
+            continue
+        live.append(grant)
+    if len(live) > 1:
+        raise Refusal("store_malformed", "standing:live_count")
+    return live[0] if live else None
+
+
+def _standing_record(repo: Repo, session: str, message: str) -> str:
+    """The text of the typed human record that records the standing grant (AC-939.1).
+
+    The record is read as ``_human_record`` reads it (V-1 and V-2), with one check first:
+    an assistant record refuses ``not_user`` (``_typed_record`` would report only
+    ``record``). The standing token must start a prose line (``_prose_lines``), and the
+    record must not name the manual path (``MANUAL_INVOCATION_RE``).
+
+    Raises:
+        Refusal: ``transcript_missing`` or ``record`` for a malformed session or message
+            id, a missing transcript or a record that is not one typed human record;
+            ``consent`` with ``not_user``, ``not_a_standing_grant`` or ``standing_manual``.
+    """
+    if not _match(UUID_RE, session):
+        raise Refusal("transcript_missing", "session_name")
+    if not _match(UUID_RE, message):
+        raise Refusal("record", "uuid_shape")
+    transcript = _load_transcript(repo, session)
+    hits = transcript.by_uuid.get(message, [])
+    if len(hits) == 1 and transcript.records[hits[0]].get("type") == "assistant":
+        raise Refusal("consent", "not_user")
+    _raw, record = _typed_record(transcript, message, session)
+    text = _human_text(record)
+    if not any(STANDING_RE.match(line) for line in _prose_lines(text)):
+        raise Refusal("consent", "not_a_standing_grant")
+    if MANUAL_INVOCATION_RE.search(text) is not None:
+        raise Refusal("consent", "standing_manual")
+    return text
+
+
+def _standing(repo: Repo, session: str, message: str) -> tuple[int, dict[str, Any]]:
+    """``standing``: record the standing commit grant of one typed human record.
+
+    Under the writer lock (the store is created first when it does not exist), it writes
+    ``grants/<message>.json`` in the existing envelope, with the standing offer, through
+    one ``_txn``. A live standing grant is superseded in the same transaction (the new
+    offer's ``supersedes`` and the old envelope's ``superseded_by``). The same record run
+    again reports its live grant with ``created: false`` and writes nothing.
+
+    Raises:
+        Refusal: the ``_standing_record`` refusals; ``revoked`` (the record's grant was
+            revoked); ``superseded`` (the record's grant was superseded); ``binding``
+            (``grant_exists``: a grant of another form has this uuid); the store refusals.
+    """
+    text = _standing_record(repo, session, message)
+    with _locked(repo, session):
+        if not (repo.store / "store.json").exists():
+            _bootstrap(repo)
+        _recover(repo)
+        repo.refresh()
+        store = _load_store(repo)
+        _check_history(repo, store, None, check_grant=False)
+        if any(line["revoked"] == message for line in store.revocations):
+            raise Refusal("revoked", message)
+        existing = store.grants.get(message)
+        if existing is not None:
+            if cast(dict[str, Any], existing["offer"]).get("form") != STANDING_FORM:
+                raise Refusal("binding", "grant_exists")
+            if not _standing_envelope_ok(existing, message):
+                raise Refusal("store_malformed", f"grant:{message}:standing")
+            if existing["superseded_by"] != "none":
+                raise Refusal("superseded", cast(str, existing["superseded_by"]))
+            return EXIT_OK, {
+                "result": "standing_ok",
+                "authorized": False,
+                "failure": False,
+                "message_uuid": message,
+                "supersedes": existing["offer"]["supersedes"],
+                "created": False,
+                "store_seq": store.log.seq,
+            }
+        live = _standing_live(store)
+        old = cast(str, live["message_uuid"]) if live is not None else "none"
+        offer: dict[str, Any] = {
+            "schema": "authorization/1",
+            "source": "USER_EXPLICIT",
+            "form": STANDING_FORM,
+            "project": repo.main_display,
+            "session": session,
+            "message_uuid": message,
+            "presentation_uuid": message,
+            "date": _ts(repo),
+            "response": text,
+            "scope": dict(STANDING_SCOPE),
+            "members": [],
+            "expires": "none",
+            "grants": list(STANDING_GRANTS),
+            "standing": True,
+            "supersedes": old,
+        }
+        envelope: dict[str, Any] = {
+            "message_uuid": message,
+            "offer": offer,
+            "offer_digest": standing_digest(offer),
+            "chain": [message],
+            "consumed": {},
+            "superseded_by": "none",
+        }
+        if not _standing_envelope_ok(envelope, message):
+            raise Refusal("binding", "standing_offer")
+        files: dict[str, bytes] = {f"grants/{message}.json": _json_bytes(envelope)}
+        if live is not None:
+            files[f"grants/{old}.json"] = _json_bytes(
+                {**live, "superseded_by": message}
+            )
+        _txn(repo, _with_inventory(store, files, [f"grants/{message}.json"]))
+        seq = _txn_log(repo.store).seq
+    _log("standing_granted", message_uuid=message, supersedes=old, store_seq=seq)
+    return EXIT_OK, {
+        "result": "standing_ok",
+        "authorized": False,
+        "failure": False,
+        "message_uuid": message,
+        "supersedes": old,
+        "created": True,
+        "store_seq": seq,
+    }
+
+
+def _standing_opt_out(repo: Repo, plan: str, act: str) -> None:
+    """AC-939.3: refuse when the plan's carriers opt out of the standing grant for ``act``.
+
+    The two carriers, ``task.md`` and ``implementation-plan.md``, are read independently
+    (R1-F7): a missing carrier, a carrier with no frontmatter or a frontmatter with no
+    ``run_parameters`` key holds no block, and that never hides a block in the other one.
+    Each present block passes V-0 (``_check_block``). A plan opts out when any present block
+    is manual (``authorization: {schema: manual}``), for every act, or when any present
+    block sets the act's enabling boolean (``ENABLING``) to false: ``commit_exec`` for
+    ``exec_commit`` and ``finalize``, ``commit_plan`` for ``plan_commit``.
+
+    A planless packet (``none``) and a plan with no block in either carrier (no carrier at
+    all, or a legacy plan) never opt out (AC-939.1 "any plan slug of the project", AC-939.3).
+    Only the carriers are read; a grouping line is not.
+
+    Raises:
+        Refusal: ``standing_opt_out`` (``manual``, ``commit_exec`` or ``commit_plan``);
+            ``schema`` for a malformed carrier frontmatter or block.
+    """
+    if plan == "none":
+        return
+    folder = _plan_dir(repo, plan)
+    blocks: list[dict[str, Any]] = []
+    for name in ("task.md", "implementation-plan.md"):
+        text = _carrier_text(repo, folder / name)
+        meta = _frontmatter(text) if text is not None else None
+        if meta is not None and "run_parameters" in meta:
+            blocks.append(cast(dict[str, Any], meta["run_parameters"]))
+    kinds = [_check_block(block) for block in blocks]
+    if "manual" in kinds:
+        raise Refusal(STANDING_OPT_OUT, "manual")
+    key = ENABLING[act]
+    if any(block[key] is False for block in blocks):
+        raise Refusal(STANDING_OPT_OUT, key)
+
+
+def standing_authority(repo: Repo, plan: str, act: str) -> dict[str, Any] | None:
+    """The live standing commit grant that covers ``act`` for ``plan``, or None (AC-939.3).
+
+    ``repo`` is an ``_open_repo`` handle. ``plan`` is a plan slug, or ``none`` for a
+    planless packet. ``act`` is one of ``ACTS``. The caller (``commit_batch.py`` and
+    ``lanes.py``) asks only after the plan's own grant did not authorize the act: this
+    function reads the standing grant alone and reserves nothing.
+
+    Order: an act the grant never covers (``exec_start``) returns None; then V-A
+    (``_gate``); then the plan's opt-out (``_standing_opt_out``); then one consistent read
+    of the store (``_snapshot``), which returns None when no store exists or no standing
+    grant is live (none recorded, revoked or superseded); then V-7 (``_check_scope``) for
+    the project and the branch.
+
+    Returns:
+        A copy of the live standing envelope (``message_uuid``, ``offer``,
+        ``offer_digest``, ``chain``, ``consumed``, ``superseded_by``), or None.
+
+    Raises:
+        Refusal: ``binding`` (``act`` or ``plan_slug``) for a malformed argument;
+            ``standing_opt_out`` (``manual``, ``commit_exec``, ``commit_plan``); the V-A,
+            store and scope refusals.
+    """
+    if act not in ACTS:
+        raise Refusal("binding", "act")
+    if plan != "none" and SLUG_RE.fullmatch(plan) is None:
+        raise Refusal("binding", "plan_slug")
+    if act not in STANDING_GRANTS:
+        return None
+    _gate(repo, act)
+    _standing_opt_out(repo, plan, act)
+    if not (repo.store / "store.json").is_file():
+        return None
+
+    def read() -> dict[str, Any] | None:
+        store = _load_store(repo)
+        if store.log.pending():
+            raise Refusal("txn_pending")
+        _check_history(repo, store, None, check_grant=False)
+        return _standing_live(store)
+
+    live = _snapshot(repo, read)
+    if live is None:
+        return None
+    offer = cast(dict[str, Any], live["offer"])
+    if act not in cast(list[str], offer["grants"]):
+        return None
+    _check_scope(repo, offer, plan)
+    return cast(dict[str, Any], json.loads(json.dumps(live)))
 
 
 def _unlock(
@@ -6312,6 +6669,12 @@ def _cmd_revoke(repo: Repo, args: argparse.Namespace) -> Outcome:
     return _revoke(repo, cast(str, args.session), cast(str, args.message))
 
 
+def _cmd_standing(repo: Repo, args: argparse.Namespace) -> Outcome:
+    """``standing``: V-A, then record the standing commit grant (MEU-939 AC-939.1)."""
+    _gate(repo, None)
+    return _standing(repo, cast(str, args.session), cast(str, args.message_uuid))
+
+
 def _cmd_unlock(repo: Repo, args: argparse.Namespace) -> Outcome:
     """``unlock`` (no V-A: it must work while the store is broken)."""
     if not TOKEN_RE.fullmatch(cast(str, args.expect)):
@@ -6455,7 +6818,7 @@ _EFFECTIVE_VERBS = frozenset({"verify", "reserve"})
 
 
 def _parser() -> argparse.ArgumentParser:
-    """The command line: a global ``--repo``, the fourteen verbs and ``limits-check``.
+    """The command line: a global ``--repo``, the fourteen verbs, ``standing`` and ``limits-check``.
 
     ``limits-check`` stays out of ``RP_VERBS``: it serves ``review_ledger.py begin``, not
     the run-parameters acts.
@@ -6533,6 +6896,13 @@ def _parser() -> argparse.ArgumentParser:
                 help="open the next final generation under a superseding finalize grant",
             )
             sub.add_argument("--plan", help="the plan of --final")
+    sub = verb(
+        STANDING_VERB,
+        _cmd_standing,
+        "Record the standing commit grant from a typed human record.",
+    )
+    sub.add_argument("--session", required=True)
+    sub.add_argument("--message-uuid", required=True)
     sub = verb("unlock", _cmd_unlock, "Remove a dead writer's lock with its token.")
     sub.add_argument("--expect", required=True)
     sub.add_argument("--session", required=True)

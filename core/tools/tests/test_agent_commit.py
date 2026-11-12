@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".agent/skills/git-workflow/scripts/agent-commit.ps1"
 TARGET = b"approved target\n"
 RELEASE = "release: exact signed scope\n"
-SIGNER = {"name": "Test Signer", "email": "signer@example.com"}
+SIGNER = {"name": "Test Signer", "email": b3.AUTHOR["email"]}
 # The originating repo routes commands through its output proxy (``rtk proxy``); an adopter
 # without one runs them directly.
 PROXY = ["rtk", "proxy"] if shutil.which("rtk") else []

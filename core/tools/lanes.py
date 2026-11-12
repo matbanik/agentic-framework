@@ -148,6 +148,7 @@ import argparse
 import collections
 import contextlib
 import ctypes
+import hashlib
 import io
 import json
 import os
@@ -161,6 +162,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -245,6 +247,26 @@ DEPS_STATES = (DEPS_PENDING, DEPS_EXCLUSIVE)
 DEPS_DRAIN_WAIT_S = 600
 DEPS_DRAIN_WAIT_MAX_S = 3600
 MESSAGE_MAX_BYTES = 64 * 1024
+# R1-F1 (D-1): the markers of a git operation in progress, each resolved with
+# ``git rev-parse --git-path`` in the worktree. ``git commit`` would finish such an
+# operation: a merge commit from MERGE_HEAD, a picked commit with its original author.
+PENDING_OPERATION_MARKERS = (
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+)
+# R1-F2: the copy of the worktree index that ``git write-tree`` reads before the
+# commit, so a refused check leaves the index bytes as they were.
+CHECK_INDEX_PREFIX = "{{PROJECT_NAME}}-lane-check-"
+CHECK_INDEX_SUFFIX = ".index"
+# R1-F1/R1-F2: the reflog message of the compare-and-swap that moves the lane branch
+# back to the prior tip when the commit as written fails a check.
+VERIFY_ROLLBACK_MESSAGE = "lanes commit: verify failed"
+# The git mode of a submodule entry: a commit id, not a blob the scanner can read.
+GITLINK_MODE = "160000"
 LANE_REF_PREFIX = "refs/heads/lane/"
 MAIN_REF = "refs/heads/main"
 # The land (design §5.5): its journal phases are commit_batch's ``LAND_PHASES``.
@@ -259,6 +281,9 @@ LAND_AUTHORIZED = "land:authorized"
 # must hold for it, and the sentence the human types for the human-directed route.
 PUBLISH_BRANCH = MAIN_REF.removeprefix("refs/heads/")
 PUBLISH_ACT = "exec_commit"
+# MEU-939 D-1: the route ``_authority`` names for a land under the standing grant.
+STANDING_ROUTE_PREFIX = "standing:"
+HUMAN_ROUTE_PREFIX = "human:"
 HUMAN_PUBLISH_SENTENCE = "Commit the {plan} plan on main."
 # The journal points ``land recover`` resumes at step 4 (D:262 "Steps 4-5", EA-25).
 RECOVER_READY_POINTS = frozenset(
@@ -403,10 +428,80 @@ SCRUBBED_GIT_ENV = (
     "GIT_CONFIG_COUNT",
 )
 SCRUBBED_GIT_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+# MEU-939: the commit_batch refusals whose detail names their subject; a lanes
+# refusal prints them as ``<reason>:<detail>`` (AC-939.15, AC-939.5, AC-939.3).
+DETAILED_BATCH_REASONS = frozenset(
+    {"direction_busy", "identity_env", "standing_opt_out"}
+)
+# MEU-939 D-3: the base comparator runs the gate on P in its own candidate
+# ``<candidate root>/land-<op>-base`` and logs it next to the lane gate log.
+GATE_BASE_SUFFIX = "-base"
+GATE_BASE_LOG_NAME = "land-gate-base.txt"
+GATE_RUN_DIR_PREFIX = "GATE RUN DIR "
+GATE_RESULT_FILE = "gate.json"
+# The cache of base runs in the commit_batch store: ``gate-base/<P>-<files>-<env>.json``.
+GATE_BASE_DIR = "gate-base"
+GATE_BASE_SCHEMA = "gate-base/1"
+GATE_BASE_KEYS = frozenset(
+    {"schema", "base", "files_digest", "env_digest", "result", "cases"}
+)
+GATE_BASE_MATCHED = "matched"
+GATE_BASE_NOT_RUN = "not_run"
+GATE_BASE_UNAVAILABLE = "base_gate_unavailable"
+GATE_RED_NO_BASE = "gate_red_no_base"
+# The gate environment entries that can change a gate outcome, so the cache key
+# names them; a name in this set or with one of these prefixes counts (D-3).
+GATE_ENV_NAMES = frozenset(
+    {
+        "CI",
+        "NO_COLOR",
+        "FORCE_COLOR",
+        "LOCALAPPDATA",
+        "APPDATA",
+        "HOME",
+        "USERPROFILE",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "RIPGREP_CONFIG_PATH",
+        "LANG",
+        "TZ",
+    }
+)
+GATE_ENV_PREFIXES = (
+    "{{PROJECT_NAME_UPPER}}_",
+    "PYTEST_",
+    "UV_",
+    "PYTHON",
+    "COVERAGE_",
+    "HYPOTHESIS_",
+    "NODE_",
+    "NPM_CONFIG_",
+    "GIT_",
+    "ELECTRON_",
+    "XDG_",
+    "LC_",
+    "AGENT_",
+)
+# Per-process values that never change a gate outcome.
+GATE_ENV_EXCLUDED = frozenset(
+    {
+        "UV_RUN_RECURSION_DEPTH",
+        "OLDPWD",
+        "{{PROJECT_NAME_UPPER}}_GATE_LEASE_TOKEN",
+        "PYTEST_CURRENT_TEST",
+    }
+)
+_JUNIT_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_WHITESPACE_RE = re.compile(r"\s+")
 
 _LANE_RE = re.compile(r"[a-z0-9-]+")
 _GENERATION_RE = re.compile(r"[0-9a-f]{16}")
 _OBJECT_ID_RE = re.compile(r"[0-9a-f]{40}")
+# An ``author`` or ``committer`` header line of a raw commit object.
+_IDENT_LINE_RE = re.compile(r"(author|committer) (.*) <([^<>]*)> \d+ [+-]\d{4}")
+# The characters git strips from both ends of an identity name (ident.c ``crud``).
+_IDENT_CRUD = " \t\n\r.,:;<>\"\\'"
 _UPDATED_RE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
 _DRIVE_RE = re.compile(r"[A-Za-z]:")
 _GLOB_CHARS = frozenset("*?[]")
@@ -1323,13 +1418,27 @@ def _git_env() -> dict[str, str]:
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     """Run ``git <args>`` in ``cwd`` with the cleaned environment; never raises on exit."""
+    return _git_with(cwd, _git_env(), *args)
+
+
+def _git_with(
+    cwd: Path, env: Mapping[str, str], *args: str
+) -> subprocess.CompletedProcess[bytes]:
+    """Run ``git <args>`` in ``cwd`` with the environment ``env``; never raises on exit.
+
+    The caller builds ``env`` from ``_git_env()``, so the repository-redirecting
+    variables stay out of it (AC-785.5).
+
+    Raises:
+        Refusal: ``git_unavailable`` (git cannot start).
+    """
     try:
         return subprocess.run(
             ["git", *args],
             cwd=str(cwd),
             capture_output=True,
             stdin=subprocess.DEVNULL,
-            env=_git_env(),
+            env=dict(env),
             check=False,
         )
     except OSError as exc:
@@ -1998,14 +2107,322 @@ def _commit_failure(worktree: Path, proc: subprocess.CompletedProcess[bytes]) ->
     return "hook"
 
 
+def _refuse_pending_operation(worktree: Path) -> None:
+    """Refuse a git operation in progress in ``worktree`` (R1-F1, ruling D-1).
+
+    Each of ``PENDING_OPERATION_MARKERS`` resolves with ``git rev-parse
+    --path-format=absolute --git-path <marker>``, so a linked worktree's markers
+    are read in its own git dir. Any marker that exists (a file or a folder)
+    refuses: ``git commit`` would write a merge commit, or finish a cherry-pick
+    or revert with the picked commit's author, and the lane helper makes plain
+    single-parent commits only.
+
+    Raises:
+        Refusal: ``operation_pending:<marker>``, ``git_failed``.
+    """
+    args = ["rev-parse", "--path-format=absolute"]
+    for marker in PENDING_OPERATION_MARKERS:
+        args += ["--git-path", marker]
+    lines = _git_text(worktree, *args).splitlines()
+    if len(lines) != len(PENDING_OPERATION_MARKERS):
+        raise Refusal(
+            "git_failed",
+            f"git rev-parse --git-path printed {len(lines)} lines for "
+            f"{len(PENDING_OPERATION_MARKERS)} markers in {worktree.as_posix()}",
+        )
+    for marker, line in zip(PENDING_OPERATION_MARKERS, lines):
+        if os.path.lexists(line):
+            raise Refusal(
+                f"operation_pending:{marker}",
+                f"{line} exists: a git operation is in progress in "
+                f"{worktree.as_posix()}. Finish or abort it with git, then commit "
+                "again; the lane helper makes plain single-parent commits only (D-1).",
+            )
+
+
+def _index_tree(worktree: Path) -> str:
+    """The tree id of the worktree's index, written from a copy of the index (R1-F2).
+
+    ``git write-tree`` updates the cache-tree data of the index it reads, so it
+    reads a copy (``GIT_INDEX_FILE``) beside the index in the worktree's git
+    dir; the index keeps its bytes when a later check refuses. The copy is
+    removed afterwards; a copy that cannot be removed is reported on stderr.
+
+    Raises:
+        Refusal: ``worktree_bad`` (the index cannot be copied), ``git_failed``
+            (``write-tree`` fails, for example on an unmerged entry).
+    """
+    index = Path(
+        _git_text(
+            worktree, "rev-parse", "--path-format=absolute", "--git-path", "index"
+        ).strip()
+    )
+    try:
+        handle, name = tempfile.mkstemp(
+            prefix=CHECK_INDEX_PREFIX, suffix=CHECK_INDEX_SUFFIX, dir=str(index.parent)
+        )
+        os.close(handle)
+    except OSError as exc:
+        raise Refusal(
+            "worktree_bad", f"cannot make an index copy in {index.parent}: {exc}"
+        ) from None
+    copy = Path(name)
+    try:
+        try:
+            shutil.copyfile(index, copy)
+        except OSError as exc:
+            raise Refusal(
+                "worktree_bad", f"cannot copy the index {index}: {exc}"
+            ) from None
+        proc = _git_with(
+            worktree, {**_git_env(), "GIT_INDEX_FILE": str(copy)}, "write-tree"
+        )
+        tree = proc.stdout.decode("utf-8", "replace").strip()
+        if proc.returncode != 0 or not _OBJECT_ID_RE.fullmatch(tree):
+            raise Refusal(
+                "git_failed",
+                f"git write-tree of the index of {worktree.as_posix()} exited "
+                f"{proc.returncode}: {proc.stderr.decode('utf-8', 'replace').strip()}",
+            )
+        return tree
+    finally:
+        try:
+            copy.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"warning: index copy not removed: {copy}: {exc}", file=sys.stderr)
+
+
+def _staged_blobs(worktree: Path, before: str, tree: str) -> dict[str, bytes]:
+    """``{path: bytes}`` of every blob of ``tree`` that differs from the commit ``before``.
+
+    ``diff-tree -r --no-renames`` of the two trees; deleted paths and submodule
+    entries (mode ``GITLINK_MODE``) carry no blob and are left out.
+
+    Raises:
+        Refusal: ``git_failed``.
+    """
+    out = _git_text(worktree, "diff-tree", "-r", "-z", "--no-renames", before, tree)
+    items = out.split("\0")
+    blobs: dict[str, bytes] = {}
+    for meta, path in zip(items[0::2], items[1::2]):
+        fields = meta.lstrip(":").split(" ")
+        if len(fields) != 5 or not path:
+            raise Refusal(
+                "git_failed", f"git diff-tree {before} {tree} printed {meta!r}"
+            )
+        _old_mode, new_mode, _old_id, new_id, status = fields
+        if status.startswith("D") or new_mode == GITLINK_MODE:
+            continue
+        proc = _git(worktree, "cat-file", "blob", new_id)
+        if proc.returncode != 0:
+            raise Refusal(
+                "git_failed",
+                f"git cat-file blob {new_id} ({path}) exited {proc.returncode}: "
+                f"{proc.stderr.decode('utf-8', 'replace').strip()}",
+            )
+        blobs[path] = proc.stdout
+    return blobs
+
+
+def _checked_secrets(worktree: Path, before: str, tree: str) -> None:
+    """The staged blobs pass the shared secrets scan (R1-F3, MEU-939 AC-939.5).
+
+    The scan is ``commit_batch.secret_findings`` on the blobs of the checked
+    index tree that differ from the lane tip ``before``, with ``before``'s
+    ``.secrets.baseline`` and pre-commit config. It runs whatever the hooks do:
+    the scanner's environment drops ``SKIP`` (``SCAN_ENV_DROPPED``), and a
+    missing detect-secrets hook does not matter. With no baseline at ``before``
+    there is nothing to scan against, as on the other routes.
+
+    Raises:
+        Refusal: ``secret:<path>`` (the first path with a finding; the detail
+            lists all), ``secret_scan``, ``containment``, ``git_failed``.
+    """
+    files = _staged_blobs(worktree, before, tree)
+    if not files:
+        return
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - imported when a commit runs
+
+    try:
+        found = commit_batch.secret_findings(worktree, files, before)
+    except _batch_errors() as exc:
+        raise _as_refusal(exc, "the secret scan") from None
+    if found:
+        raise Refusal(
+            f"secret:{found[0]}",
+            f"the secrets scanner finds a secret that {SCAN_BASELINE} of {before} "
+            f"does not hold in: {', '.join(found)}. Remove it from the index, or "
+            "update the baseline on a reviewed change, then commit again.",
+        )
+
+
+def _ident_name(name: str) -> str:
+    """``name`` without the characters git strips from the ends of an identity name."""
+    return name.strip(_IDENT_CRUD)
+
+
+def _verify_commit(
+    worktree: Path,
+    before: str,
+    after: str,
+    identity: Mapping[str, str],
+    tree: str,
+) -> tuple[str, str] | None:
+    """The first defect of the commit ``after`` as written; None when it has none.
+
+    R1-F1 and R1-F2: the hooks ran inside ``git commit``, after the input
+    checks, so the stored commit is read back (``git cat-file -p``) and
+    checked against what the helper checked: exactly one parent, ``before``
+    (``verify:parents``); the author and committer name and address equal the
+    bound ``identity`` (``verify:identity``; names compare without git's
+    stripped end characters, and the detail never echoes an address); the tree
+    equals the checked index tree ``tree`` (``verify:tree``: a pre-commit hook
+    staged other content); the message as written passes
+    ``commit_batch.check_message`` (``verify:attribution``: a commit-msg hook
+    added a trailer). ``verify:unreadable`` when git cannot read the commit.
+
+    Returns:
+        ``(kind, detail)`` of the first failed check, or None.
+
+    Raises:
+        Refusal: ``git_unavailable``.
+    """
+    # ``-p`` of a commit prints its raw object, as ``cat-file commit`` does; the
+    # ``^{commit}`` peel fails on any other object type. The argv holds no bare
+    # ``commit`` word, so ``git commit`` stays the helper's only commit call.
+    proc = _git(worktree, "cat-file", "-p", f"{after}^{{commit}}")
+    if proc.returncode != 0:
+        return (
+            "verify:unreadable",
+            f"git cat-file -p {after}^{{commit}} exited {proc.returncode}: "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}",
+        )
+    header, _, message = proc.stdout.decode("utf-8", "replace").partition("\n\n")
+    parents: list[str] = []
+    trees: list[str] = []
+    idents: dict[str, tuple[str, str]] = {}
+    for line in header.split("\n"):
+        key, _, value = line.partition(" ")
+        if key == "parent":
+            parents.append(value)
+        elif key == "tree":
+            trees.append(value)
+        elif key in ("author", "committer"):
+            match = _IDENT_LINE_RE.fullmatch(line)
+            if match is not None:
+                idents[key] = (match.group(2), match.group(3))
+    if parents != [before]:
+        return (
+            "verify:parents",
+            f"{after} has the parents {' '.join(parents) or '(none)'}; the lane "
+            f"helper writes one parent, the prior tip {before} (D-1)",
+        )
+    for role in ("author", "committer"):
+        name = identity.get(f"GIT_{role.upper()}_NAME", "")
+        email = identity.get(f"GIT_{role.upper()}_EMAIL", "")
+        got = idents.get(role)
+        if got is None or _ident_name(got[0]) != _ident_name(name) or got[1] != email:
+            return (
+                "verify:identity",
+                f"the {role} of {after} is not the bound noreply identity "
+                "(AC-939.5); git took it from another source than the bound "
+                "variables",
+            )
+    if trees != [tree]:
+        return (
+            "verify:tree",
+            f"{after} records the tree {' '.join(trees) or '(none)'}, not the "
+            f"checked index tree {tree}: a hook changed the staged content after "
+            "the checks",
+        )
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - imported when a commit runs
+
+    try:
+        commit_batch.check_message(message)
+    except _batch_errors() as exc:
+        return (
+            "verify:attribution",
+            f"the message of {after} as written fails the attribution rule "
+            f"({_as_refusal(exc, 'the commit').reason}): a commit-msg hook added a "
+            "co-author trailer or an AI-tool credit",
+        )
+    return None
+
+
+def _roll_back_commit(worktree: Path, branch: str, before: str, after: str) -> None:
+    """Move ``branch`` from ``after`` back to ``before`` by a compare-and-swap.
+
+    ``git update-ref -m VERIFY_ROLLBACK_MESSAGE refs/heads/<branch> <before>
+    <after>`` changes the ref only while it still holds ``after``; the index
+    and the work tree stay as the commit left them. Prints ``<branch> stays at
+    <before>``, or ``rollback_failed`` and the branch's current tip.
+
+    Raises:
+        Refusal: ``git_failed`` (the tip cannot be read after a failed swap).
+    """
+    moved = _git(
+        worktree,
+        "update-ref",
+        "-m",
+        VERIFY_ROLLBACK_MESSAGE,
+        f"refs/heads/{branch}",
+        before,
+        after,
+    )
+    if moved.returncode == 0:
+        print(f"{branch} stays at {before}")
+        return
+    print(
+        f"rollback_failed: git update-ref refs/heads/{branch} {before} {after} "
+        f"exited {moved.returncode}: {moved.stderr.decode('utf-8', 'replace').strip()}"
+    )
+    print(f"{branch} is at {_branch_tip(worktree, branch)}. Stop and tell the human.")
+
+
 def _cmd_commit(
     args: argparse.Namespace, *, wait_s: float, poll_s: float, argv: Sequence[str]
 ) -> int:
     """The lane commit helper (design §5.1, AC-785.3–AC-785.5).
 
-    Order: HALT, the message file, the worktree lease (held for the check and
-    the commit), the card under the registry lock (released before git runs,
-    lock order D:165), the symbolic HEAD, then ``git commit -F <file>``.
+    Order: HALT, the message file, the worktree lease (held for the checks,
+    the commit and the verification), the card under the registry lock
+    (released before git runs, lock order D:165), the symbolic HEAD, the shared
+    commit checks of ``tools/commit_batch.py`` (MEU-939 AC-939.5: the message
+    carries no attribution, the configured identity is the noreply address and
+    no inherited ``GIT_*_EMAIL`` differs from it), no git operation in progress
+    (R1-F1: ``PENDING_OPERATION_MARKERS``), the index tree (``git write-tree``
+    on a copy of the index) and the shared secrets scan of its blobs that differ
+    from the prior tip (R1-F3: ``commit_batch.secret_findings``, which drops
+    ``SKIP``, so it runs whatever the detect-secrets hook does), then
+    ``git commit -F <file>`` with the four identity variables bound to that
+    identity. A refused check leaves the branch where it was.
+
+    The hooks run inside ``git commit``, after those checks (R1-F2), so the
+    commit as written is checked again (``_verify_commit``): one parent, the
+    prior tip; author and committer, the bound identity; the tree, the checked
+    index tree; the message, no attribution. When a check fails, a
+    compare-and-swap ``update-ref`` moves the branch from the new commit back to
+    the prior tip and leaves the index and the work tree as the commit left
+    them, like ``git reset --soft``: the change stays staged. The helper prints
+    ``commit_fail:<kind>``, the detail and ``<branch> stays at <before>``, and
+    exits ``EXIT_REFUSED``. The commit object stays unreferenced except by the
+    branch's reflog. If the branch moved meanwhile, the swap does nothing and
+    the helper prints ``rollback_failed`` and the branch's tip instead.
+
+    Returns:
+        0 on ``commit_ok:<sha>``; ``EXIT_HALT``; ``EXIT_REFUSED`` on
+        ``commit_fail:<kind>``: ``git``, ``nothing_staged`` and ``hook`` (git
+        commit wrote nothing), or ``verify:parents``, ``verify:identity``,
+        ``verify:tree``, ``verify:attribution`` and ``verify:unreadable`` (the
+        commit was written and the branch moved back).
+
+    Raises:
+        Refusal: ``worktree_bad``, ``message_file``, ``branch_mismatch``,
+            ``attribution``, ``author_not_noreply``, ``identity_env:<var>``,
+            ``operation_pending:<marker>``, ``secret:<path>``, ``secret_scan``,
+            ``containment``, ``git_failed`` or a card refusal.
     """
     session = _session(None)
     worktree = Path(args.worktree).resolve()
@@ -2031,8 +2448,15 @@ def _cmd_commit(
                 f"the card of {card['lane']} names branch {card['branch']}; "
                 f"{shown} is on {branch}",
             )
+        _checked_message(message)
+        identity = _checked_identity(worktree)
+        _refuse_pending_operation(worktree)
         before = _branch_tip(worktree, branch)
-        proc = _git(worktree, "commit", "-F", str(message))
+        tree = _index_tree(worktree)
+        _checked_secrets(worktree, before, tree)
+        proc = _git_with(
+            worktree, {**_git_env(), **identity}, "commit", "-F", str(message)
+        )
         after = _branch_tip(worktree, branch)
         if proc.returncode != 0 or after == before:
             kind = _commit_failure(worktree, proc) if proc.returncode != 0 else "git"
@@ -2042,6 +2466,13 @@ def _cmd_commit(
                 if text:
                     print(text)
             print(f"{branch} stays at {before}")
+            return EXIT_REFUSED
+        defect = _verify_commit(worktree, before, after, identity, tree)
+        if defect is not None:
+            kind, detail = defect
+            print(f"commit_fail:{kind}")
+            print(detail)
+            _roll_back_commit(worktree, branch, before, after)
             return EXIT_REFUSED
     finally:
         os_lease.release(lease)
@@ -2078,8 +2509,9 @@ def _land_journal(top: Path, op: str) -> LandOp | None:
 def _batch_path() -> None:
     """Put the repository root on ``sys.path`` so ``tools.commit_batch`` imports.
 
-    The land verbs import commit_batch inside their functions, so the stage-1
-    commands stay standard library only.
+    The land verbs and the commit helper's shared checks (MEU-939 AC-939.5)
+    import commit_batch inside their functions, so every other stage-1 command
+    stays standard library only.
     """
     root = str(Path(__file__).resolve().parent.parent)
     if not __package__ and root not in sys.path:
@@ -2095,13 +2527,90 @@ def _batch_errors() -> tuple[type[Exception], ...]:
 
 
 def _as_refusal(exc: Exception, op: str) -> Refusal:
-    """A commit_batch refusal (its reason) or stop (``op_file``) as a lanes ``Refusal``."""
+    """A commit_batch refusal (its reason) or stop (``op_file``) as a lanes ``Refusal``.
+
+    The reasons in ``DETAILED_BATCH_REASONS`` name their subject in the
+    reason itself (``direction_busy:<op>``, ``identity_env:<var>``,
+    ``standing_opt_out:<path>``), as the commit_batch CLI prints them, so an
+    operator sees which op, variable or opt-out stopped the act. Every other
+    reason stays exact.
+    """
     _batch_path()
     from tools import commit_batch  # noqa: PLC0415 - the land verbs only
 
     if isinstance(exc, commit_batch.rp.Refusal):
+        if exc.reason in DETAILED_BATCH_REASONS and exc.detail:
+            return Refusal(f"{exc.reason}:{exc.detail}", exc.detail)
         return Refusal(exc.reason, exc.detail)
     return Refusal(str(exc), f"the op file of {op} cannot be read; it is left as it is")
+
+
+def _checked_message(path: Path) -> None:
+    """The message file passes ``commit_batch.check_message`` (MEU-939 AC-939.5).
+
+    Raises:
+        Refusal: ``message_file`` (not readable as UTF-8), ``attribution`` (a
+            co-author trailer or an AI-tool credit).
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - imported when a commit runs
+
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Refusal("message_file", f"cannot read {path} as UTF-8: {exc}") from None
+    try:
+        commit_batch.check_message(text)
+    except _batch_errors() as exc:
+        raise _as_refusal(exc, "the commit") from None
+
+
+def _config_value(top: Path, key: str) -> str:
+    """The value git resolves for ``key`` in ``top``; empty when it is not set.
+
+    Raises:
+        Refusal: ``git_failed`` (git config exited other than 0 or 1).
+    """
+    proc = _git(top, "config", "--get", key)
+    if proc.returncode == 1:
+        return ""
+    if proc.returncode != 0:
+        raise Refusal(
+            "git_failed",
+            f"git config --get {key} exited {proc.returncode}: "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}",
+        )
+    return proc.stdout.decode("utf-8", "replace").strip()
+
+
+def _checked_identity(top: Path) -> dict[str, str]:
+    """The four git identity variables bound to the checked identity of ``top`` (AC-939.5).
+
+    The identity is ``user.name`` and ``user.email`` as git resolves them in
+    ``top``. ``commit_batch.check_identity`` requires the noreply address, and
+    ``commit_batch.commit_identity_env`` refuses an inherited
+    ``GIT_AUTHOR_EMAIL`` or ``GIT_COMMITTER_EMAIL`` that differs from it, so
+    a commit made with the returned variables records exactly that identity.
+
+    Returns:
+        ``{GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME,
+        GIT_COMMITTER_EMAIL}``.
+
+    Raises:
+        Refusal: ``author_not_noreply`` (the detail names the rule, never the
+            address), ``identity_env:<var>``, ``git_failed``.
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - imported when a commit runs
+
+    name = _config_value(top, "user.name")
+    email = _config_value(top, "user.email")
+    try:
+        commit_batch.check_identity(top, {"name": name, "email": email})
+        bound = commit_batch.commit_identity_env(os.environ, name, email)
+    except _batch_errors() as exc:
+        raise _as_refusal(exc, "the commit identity") from None
+    return {key: bound[key] for key in commit_batch.IDENTITY_ENV_KEYS}
 
 
 def _op_lease_path(common: Path, op: str) -> Path:
@@ -2287,14 +2796,18 @@ def _recover_close(
     (``commit_batch.land_sync``) and then the close; ``land:sync:done`` and
     ``land:closed:started`` run the close only. With ``again`` the journal is at
     ``published:started``: ``commit_batch.land_publish_again`` publishes again or
-    finishes (the reflog decides) and the sync and the close follow. HALT is checked
-    before and after the main-tree lease is taken, and the lease is released on
-    every path. It ends ``land_closed:<op>``.
+    finishes (the reflog decides) and the sync and the close follow; when ``main``
+    is still at P, the D-4 check runs first under the main-tree lease
+    (``_recover_admit``, R3-F2). HALT is checked before and after the main-tree
+    lease is taken, and the lease is released on every path. It ends
+    ``land_closed:<op>``.
 
     Raises:
-        Refusal: ``sync_unexplained:<path>``, ``sync_incomplete:<path>`` or a
-            ``_close`` reason; the sync refusal stays journaled and blocks every
-            other publication (``sync_pending:<op>``).
+        Refusal: ``sync_unexplained:<path>``, ``sync_incomplete:<path>``, a
+            ``_close`` reason, or on ``again`` ``main_staged:<path>``,
+            ``main_overlap:<path>`` and commit_batch's publication reasons; the
+            sync refusal stays journaled and blocks every other publication
+            (``sync_pending:<op>``).
     """
     if _halted(common):
         print("halt")
@@ -2314,6 +2827,7 @@ def _recover_close(
             _batch_path()
             from tools import commit_batch  # noqa: PLC0415 - the land verbs only
 
+            _recover_admit(main_top, land, handle)
             try:
                 commit = commit_batch.land_publish_again(handle, land, act=PUBLISH_ACT)
             except _batch_errors() as exc:
@@ -2327,6 +2841,37 @@ def _recover_close(
         os_lease.release(lease)
     print(f"land_closed:{land.op}")
     return 0
+
+
+def _recover_admit(main_top: Path, land: LandOp, handle: RpRepo) -> None:
+    """R3-F2: the D-4 admission again before a recovery that must still move ``main``.
+
+    A publication stopped at ``published:started`` with ``main`` still at P moves
+    ``main`` from P to C when it is recovered, so the main tree passes the same
+    D-4 check (``_check_main_dirt``) that ``_publish`` runs under the main-tree
+    lease; the caller holds that lease. The land plan's live task.md is left out
+    as in ``_main_dirt_or_reactivate``. The card is not changed: the op is past
+    its authority, so it stays ``landing`` and the recovery runs again once the
+    dirt is gone. With ``main`` at any other commit the swap is done or unclear,
+    which ``commit_batch.land_publish_again`` decides, so nothing is checked here.
+
+    Raises:
+        Refusal: ``main_staged:<path>``, ``main_overlap:<path>``, ``git_failed``.
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - the land verbs only
+
+    fields = land.fields()
+    parent = str(fields["P"])
+    integrated = str(fields["T"])
+    current = _git_text(main_top, "rev-parse", "--verify", "--quiet", MAIN_REF).strip()
+    if current != parent:
+        return
+    try:
+        live = commit_batch.live_task_dirt(handle, land, integrated)
+    except commit_batch.rp.GitError as exc:
+        raise Refusal("git_failed", str(exc)) from None
+    _check_main_dirt(main_top, parent, integrated, live)
 
 
 def _recover_abandon(
@@ -4049,12 +4594,38 @@ def _run_gate(candidate: Path, parent: str, integrated: str) -> tuple[str, Path]
     if diff.returncode != 0:
         raise Refusal("git_failed", diff.stderr.decode("utf-8", "replace").strip())
     files = _split_z(diff.stdout)
-    command = [_gate_python(candidate), GATE_SCRIPT, "--scope", "meu"]
-    if files:
-        command += ["--files", *files]
     git_dir = _git_text(candidate, "rev-parse", "--absolute-git-dir").strip()
     log = Path(git_dir) / GATE_LOG_NAME
-    env = _gate_env()
+    return _gate_result(_gate_child(candidate, files, log)), log
+
+
+def _gate_command(files: Sequence[str]) -> list[str]:
+    """The gate's arguments after the interpreter: ``--scope meu`` and ``--files``."""
+    command = [GATE_SCRIPT, "--scope", "meu"]
+    if files:
+        command += ["--files", *files]
+    return command
+
+
+def _gate_result(code: int) -> str:
+    """``pass`` for exit code 0, else ``fail:<exit code>``."""
+    return GATE_PASS if code == 0 else f"fail:{code}"
+
+
+def _gate_child(candidate: Path, files: Sequence[str], log: Path) -> int:
+    """Run the gate in ``candidate`` with ``_gate_env()``; all output goes to ``log``.
+
+    The command is ``_gate_python(candidate)`` and ``_gate_command(files)``
+    (R1-F6). The lane gate and the D-3 base gate both run through here.
+
+    Returns:
+        The gate's exit code.
+
+    Raises:
+        Refusal: ``gate_unavailable`` (the gate cannot start or its log cannot
+            be written).
+    """
+    command = [_gate_python(candidate), *_gate_command(files)]
     try:
         with log.open("wb") as out:
             proc = subprocess.run(
@@ -4063,15 +4634,14 @@ def _run_gate(candidate: Path, parent: str, integrated: str) -> tuple[str, Path]
                 stdout=out,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
-                env=env,
+                env=_gate_env(),
                 check=False,
             )
     except OSError as exc:
         raise Refusal(
             "gate_unavailable", f"cannot run the gate in {candidate}: {exc}"
         ) from None
-    result = GATE_PASS if proc.returncode == 0 else f"fail:{proc.returncode}"
-    return result, log
+    return proc.returncode
 
 
 def _tested_tree(candidate: Path, integrated: str) -> None:
@@ -4108,14 +4678,462 @@ def _tested_tree(candidate: Path, integrated: str) -> None:
         )
 
 
+# -- MEU-939 D-3: the base comparator ------------------------------------------
+#
+# A red lane gate is compared with the same gate run on the base P: each lane
+# failure (pytest node id, first message line) must also fail on P. The junit
+# reading is local code: the lane path never imports validate_codebase
+# (AC-785.32), whose ``_parse_junit_cases`` returns node ids only (SG-D6).
+
+
+def _gate_run_dir(log: Path) -> Path | None:
+    """The run folder of a gate log: the last ``GATE RUN DIR`` line whose folder holds gate.json.
+
+    Returns:
+        The folder, or None when the log cannot be read or names no such folder.
+    """
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for raw in reversed(text.splitlines()):
+        line = raw.strip()
+        if line.startswith(GATE_RUN_DIR_PREFIX):
+            folder = Path(line[len(GATE_RUN_DIR_PREFIX) :].strip())
+            if (folder / GATE_RESULT_FILE).is_file():
+                return folder
+    return None
+
+
+def _failed_stages(run_dir: Path) -> list[str] | None:
+    """The blocking stages that ``<run_dir>/gate.json`` reports failed, in its order.
+
+    A check counts when ``passed`` is not true, it is neither ``skipped`` nor
+    ``not_run``, and ``blocking`` is not false: an advisory stage never decides
+    a land.
+
+    Returns:
+        The stage names, or None when gate.json cannot be read or its ``checks``
+        is not a list of objects with a non-empty ``name``.
+    """
+    try:
+        data: object = json.loads(
+            (run_dir / GATE_RESULT_FILE).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    checks = (
+        cast(dict[str, Any], data).get("checks") if isinstance(data, dict) else None
+    )
+    if not isinstance(checks, list):
+        return None
+    failed: list[str] = []
+    for check in cast(list[object], checks):
+        if not isinstance(check, dict):
+            return None
+        item = cast(dict[str, Any], check)
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            return None
+        if (
+            item.get("passed") is True
+            or item.get("skipped") is True
+            or item.get("not_run") is True
+            or item.get("blocking") is False
+        ):
+            continue
+        failed.append(name)
+    return failed
+
+
+def _stage_junit(run_dir: Path, stage: str) -> list[Path]:
+    """The junit files of ``stage``: ``<slug>.xml`` and its ``-parallel``/``-serial`` halves.
+
+    The slug is the gate's ``_stage_slug`` form (lower case, each run of other
+    characters one ``-``). Only the files that exist are returned.
+    """
+    slug = _JUNIT_SLUG_RE.sub("-", stage.lower()).strip("-")
+    names = (f"{slug}.xml", f"{slug}-parallel.xml", f"{slug}-serial.xml")
+    return [run_dir / name for name in names if (run_dir / name).is_file()]
+
+
+def _junit_node(root: Path, classname: str, name: str, modules: dict[str, bool]) -> str:
+    """The pytest node id of a junit case: ``<file>.py::<class>...::<name>``.
+
+    The longest dotted prefix of ``classname`` that names a ``.py`` file under
+    ``root`` is the file; its remaining parts are classes. A classname with no
+    such file reads ``<classname>::<name>``. ``modules`` caches the file checks.
+    """
+    parts = [part for part in classname.split(".") if part]
+    for cut in range(len(parts), 0, -1):
+        rel = "/".join(parts[:cut]) + ".py"
+        known = modules.get(rel)
+        if known is None:
+            known = (root / rel).is_file()
+            modules[rel] = known
+        if known:
+            return "::".join([rel, *parts[cut:], name])
+    return f"{classname}::{name}"
+
+
+def _root_forms(root: Path) -> list[str]:
+    """The spellings of ``root`` a failure message can hold (native, POSIX, resolved), longest first."""
+    forms = {str(root), root.as_posix()}
+    try:
+        resolved = root.resolve()
+    except OSError:
+        resolved = root
+    forms.update({str(resolved), resolved.as_posix()})
+    return sorted((form for form in forms if form), key=len, reverse=True)
+
+
+def _junit_message(item: ElementTree.Element, forms: Sequence[str]) -> str:
+    """The normalized first line of a ``failure`` or ``error`` element (D-3).
+
+    The text is the ``message`` attribute, else the element text. Its first
+    non-empty line has each spelling of the run's root replaced by ``<root>``
+    (ignoring case on Windows) and each run of white space collapsed to one
+    space.
+    """
+    text = item.get("message") or item.text or ""
+    first = next((line for line in text.splitlines() if line.strip()), "")
+    flags = re.IGNORECASE if sys.platform == "win32" else 0
+    for form in forms:
+        first = re.sub(re.escape(form), "<root>", first, flags=flags)
+    return _WHITESPACE_RE.sub(" ", first).strip()
+
+
+def _junit_pairs(
+    path: Path, root: Path, modules: dict[str, bool]
+) -> set[tuple[str, str]] | None:
+    """The ``(node id, message line)`` of each ``failure`` and ``error`` of one junit file.
+
+    The file is the gate's own output in its run folder (pytest ``--junitxml``).
+
+    Returns:
+        The pairs, or None when the file cannot be parsed or its root is not
+        ``testsuites`` or ``testsuite``.
+    """
+    try:
+        tree_root = ElementTree.parse(path).getroot()
+    except (ElementTree.ParseError, OSError):
+        return None
+    if tree_root.tag not in ("testsuites", "testsuite"):
+        return None
+    forms = _root_forms(root)
+    pairs: set[tuple[str, str]] = set()
+    for case in tree_root.iter("testcase"):
+        node = _junit_node(
+            root, case.get("classname", ""), case.get("name", ""), modules
+        )
+        for tag in ("failure", "error"):
+            for item in case.findall(tag):
+                pairs.add((node, _junit_message(item, forms)))
+    return pairs
+
+
+def _gate_failures(
+    log: Path, root: Path
+) -> dict[str, frozenset[tuple[str, str]] | None] | None:
+    """The failures of one gate run in ``root``, per failed blocking stage.
+
+    Returns:
+        None when the log names no run folder with a readable gate.json. Else
+        each failed blocking stage maps to its junit failure pairs, or to None
+        when it has no junit file or one cannot be read.
+    """
+    run_dir = _gate_run_dir(log)
+    if run_dir is None:
+        return None
+    stages = _failed_stages(run_dir)
+    if stages is None:
+        return None
+    modules: dict[str, bool] = {}
+    found: dict[str, frozenset[tuple[str, str]] | None] = {}
+    for stage in stages:
+        files = _stage_junit(run_dir, stage)
+        pairs: set[tuple[str, str]] | None = set() if files else None
+        for path in files:
+            read = _junit_pairs(path, root, modules)
+            if read is None or pairs is None:
+                pairs = None
+                break
+            pairs |= read
+        found[stage] = frozenset(pairs) if pairs is not None else None
+    return found
+
+
+def _lane_failures(
+    log: Path, root: Path
+) -> tuple[frozenset[tuple[str, str]], str | None]:
+    """The lane gate's failure pairs, or the ``red_unmatched:<stage>`` outcome.
+
+    A failed blocking stage with no junit failure case cannot be matched by
+    test, so it is ``red_unmatched:<stage name>``; a red run whose log names no
+    readable gate.json, or whose gate.json names no failed stage, is
+    ``red_unmatched:gate``.
+
+    Returns:
+        ``(pairs, None)``, or ``(frozenset(), outcome)``.
+    """
+    found = _gate_failures(log, root)
+    if not found:
+        return frozenset(), "red_unmatched:gate"
+    pairs: set[tuple[str, str]] = set()
+    for stage, read in found.items():
+        if not read:
+            return frozenset(), f"red_unmatched:{stage}"
+        pairs |= read
+    return frozenset(pairs), None
+
+
+def _gate_env_digest() -> str:
+    """The sha256 hex of the gate environment entries that can change an outcome.
+
+    An entry counts when its name is in GATE_ENV_NAMES or starts with one of
+    GATE_ENV_PREFIXES, and is not in GATE_ENV_EXCLUDED; names fold to upper
+    case on Windows, where the environment ignores case.
+    """
+    fold = sys.platform == "win32"
+    entries: list[tuple[str, str]] = []
+    for name, value in _gate_env().items():
+        key = name.upper() if fold else name
+        if key in GATE_ENV_EXCLUDED:
+            continue
+        if key in GATE_ENV_NAMES or key.startswith(GATE_ENV_PREFIXES):
+            entries.append((key, value))
+    return hashlib.sha256(json.dumps(sorted(entries)).encode("utf-8")).hexdigest()
+
+
+def _base_files(top: Path, parent: str, integrated: str) -> list[str]:
+    """The gate files of ``P..T`` that exist at P: modified or type-changed, no renames.
+
+    Raises:
+        Refusal: ``git_failed``.
+    """
+    proc = _git(
+        top,
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        "--diff-filter=MT",
+        parent,
+        integrated,
+        "--",
+    )
+    if proc.returncode != 0:
+        raise Refusal("git_failed", proc.stderr.decode("utf-8", "replace").strip())
+    return sorted(_split_z(proc.stdout))
+
+
+def _read_base_cache(
+    path: Path, parent: str, files_digest: str, env_digest: str
+) -> tuple[str, frozenset[tuple[str, str]]] | None:
+    """A ``gate-base/1`` cache entry for this key: ``(result, pairs)``.
+
+    Returns:
+        None when there is no entry, or it cannot be read, has other keys, or
+        names another key or a malformed result or case (it is then run again).
+    """
+    try:
+        data: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    entry = cast(dict[str, Any], data)
+    if set(entry) != GATE_BASE_KEYS or (
+        entry["schema"],
+        entry["base"],
+        entry["files_digest"],
+        entry["env_digest"],
+    ) != (GATE_BASE_SCHEMA, parent, files_digest, env_digest):
+        return None
+    result, cases = entry["result"], entry["cases"]
+    if not isinstance(result, str) or not (
+        result == GATE_PASS or result.startswith("fail:")
+    ):
+        return None
+    if not isinstance(cases, list):
+        return None
+    pairs: set[tuple[str, str]] = set()
+    for case in cast(list[object], cases):
+        if not isinstance(case, list) or len(cast(list[object], case)) != 2:
+            return None
+        node, message = cast(list[object], case)
+        if not isinstance(node, str) or not isinstance(message, str):
+            return None
+        pairs.add((node, message))
+    return result, frozenset(pairs)
+
+
+def _write_base_cache(
+    path: Path,
+    parent: str,
+    digests: tuple[str, str],
+    result: str,
+    pairs: frozenset[tuple[str, str]],
+) -> None:
+    """Write the ``gate-base/1`` cache entry of one base run.
+
+    The cache only saves a base run, so a failed write is a warning on stderr,
+    never a refusal: the next land on the same key runs the base again.
+    """
+    entry = {
+        "schema": GATE_BASE_SCHEMA,
+        "base": parent,
+        "files_digest": digests[0],
+        "env_digest": digests[1],
+        "result": result,
+        "cases": [list(pair) for pair in sorted(pairs)],
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _replace_atomically(
+            path, (json.dumps(entry, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        )
+    except OSError as exc:
+        print(f"warning: gate-base cache not written: {path}: {exc}", file=sys.stderr)
+
+
+def _run_base_gate(
+    top: Path,
+    base: Path,
+    parent: str,
+    files: Sequence[str],
+    lane_worktree: Path,
+    log: Path,
+) -> tuple[str, frozenset[tuple[str, str]]] | None:
+    """Run the gate on P in the disposable clone ``base`` (D-3 step 1).
+
+    The clone is ``git clone --shared --no-checkout`` of ``top`` with P checked
+    out detached, provisioned from ``lane_worktree`` as the lane candidate is,
+    and removed afterwards (a stale one is removed first). The output goes to
+    ``log``.
+
+    Returns:
+        ``(result, pairs)``: the gate result and the failure pairs of every
+        failed blocking stage that has junit (a stage without junit adds no
+        pair, so it can only leave a lane failure unmatched). None when the
+        clone, checkout, provisioning or gate cannot run, or the run reports no
+        readable gate.json.
+
+    Raises:
+        Refusal: ``candidate_remove`` (the clone cannot be removed) or
+            ``git_failed`` (from the worktree prune of the removal).
+    """
+    _remove_candidate(top, base)
+    try:
+        try:
+            base.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+        clone = _git(
+            top,
+            *GIT_LONGPATHS,
+            "clone",
+            "--quiet",
+            "--shared",
+            "--no-checkout",
+            top.as_posix(),
+            base.as_posix(),
+        )
+        if clone.returncode != 0:
+            return None
+        checkout = _git(base, *GIT_LONGPATHS, "checkout", "--quiet", "--detach", parent)
+        if checkout.returncode != 0:
+            return None
+        try:
+            _provision_candidate(base, lane_worktree)
+            code = _gate_child(base, files, log)
+        except Refusal:
+            return None
+        found = _gate_failures(log, base)
+        if found is None:
+            return None
+        pairs: set[tuple[str, str]] = set()
+        for read in found.values():
+            if read:
+                pairs |= read
+        return _gate_result(code), frozenset(pairs)
+    finally:
+        _remove_candidate(top, base)
+
+
+def _gate_base_record(
+    top: Path,
+    land: LandOp,
+    objects: Mapping[str, str],
+    lane_worktree: Path,
+    log: Path,
+) -> dict[str, Any]:
+    """D-3 at prepare: the route-neutral ``gate.base`` evidence of a red lane gate.
+
+    The keys are ``command`` (the base gate's arguments after the interpreter),
+    ``result`` (``pass``, ``fail:<code>``, or ``not_run`` when the base did not
+    run), ``pairs`` (the lane failures that also fail on P, as
+    ``[node id, message line]``) and ``outcome``: ``matched``,
+    ``new_red:<node id>`` (the first lane failure P does not share),
+    ``red_unmatched:<stage>`` or ``base_gate_unavailable``. Prepare never
+    refuses on the outcome; ``land publish --grant`` admits only ``matched``.
+
+    The base result is cached in ``<store>/gate-base/<P>-<files>-<env>.json``
+    (``gate-base/1``), so a second land on the same P, files and environment
+    does not run the base gate again.
+
+    Raises:
+        Refusal: ``git_failed`` or ``candidate_remove`` (the base clone stays).
+    """
+    parent = objects["P"]
+    files = _base_files(top, parent, objects["T"])
+    record: dict[str, Any] = {
+        "command": _gate_command(files),
+        "result": GATE_BASE_NOT_RUN,
+        "pairs": [],
+        "outcome": GATE_BASE_UNAVAILABLE,
+    }
+    candidate = _land_candidate_path(land)
+    lane_pairs, unmatched = _lane_failures(log, candidate)
+    if unmatched is not None:
+        record["outcome"] = unmatched
+        return record
+    if _git(top, "cat-file", "-e", f"{parent}:{GATE_SCRIPT}").returncode != 0:
+        return record
+    digests = (
+        hashlib.sha256(json.dumps(files).encode("utf-8")).hexdigest(),
+        _gate_env_digest(),
+    )
+    cache = land.repo.store / GATE_BASE_DIR / f"{parent}-{digests[0]}-{digests[1]}.json"
+    known = _read_base_cache(cache, parent, *digests)
+    if known is None:
+        base = candidate.parent / f"{candidate.name}{GATE_BASE_SUFFIX}"
+        known = _run_base_gate(
+            top, base, parent, files, lane_worktree, log.parent / GATE_BASE_LOG_NAME
+        )
+        if known is None:
+            return record
+        _write_base_cache(cache, parent, digests, *known)
+    result, base_pairs = known
+    new = sorted(lane_pairs - base_pairs)
+    record["result"] = result
+    record["pairs"] = [list(pair) for pair in sorted(lane_pairs & base_pairs)]
+    record["outcome"] = f"new_red:{new[0][0]}" if new else GATE_BASE_MATCHED
+    return record
+
+
 def _ready(
     top: Path, land: LandOp, objects: Mapping[str, str], lane_worktree: Path
 ) -> str:
-    """Step 5 (D:248, AC-785.17): the gate on T, ``gate{tree, result}``, the report.
+    """Step 5 (D:248, AC-785.17): the gate on T, ``gate{tree, result, base}``, the report.
 
     The candidate gets the runtime of ``lane_worktree`` after the started entry
     and before the gate (R1-F6), so a failed provision leaves ``land:ready``
     started and recovery provisions the candidate it makes again.
+
+    A red gate also records ``gate.base`` (MEU-939 D-3, ``_gate_base_record``):
+    the comparison with the gate on P, on every route; the report shows its
+    outcome as ``land_report:gate_base:<outcome>``.
 
     The same entry records ``carrier{task, plan, grouping}``, the blob ids of the
     lane plan's carriers at L1 (AC-785.20), which ``land publish`` binds to.
@@ -4132,6 +5150,7 @@ def _ready(
         Refusal: ``candidate_runtime:<rel>`` (see ``_provision_candidate``),
             ``gate_unavailable``, ``gate_tree_drift`` (the gate changed the
             candidate, so it did not test T; ``land:ready`` stays started),
+            ``candidate_remove`` (the D-3 base clone cannot be removed),
             ``git_failed`` or a journal refusal.
     """
     candidate = _land_candidate_path(land)
@@ -4141,17 +5160,22 @@ def _ready(
     _provision_candidate(candidate, lane_worktree)
     result, log = _run_gate(candidate, objects["P"], objects["T"])
     _tested_tree(candidate, objects["T"])
+    gate: dict[str, Any] = {"tree": tree, "result": result}
+    if result != GATE_PASS:
+        gate["base"] = _gate_base_record(top, land, objects, lane_worktree, log)
     _journal(
         land,
         LAND_READY,
         done=True,
-        evidence={"gate": {"tree": tree, "result": result}, "carrier": carrier},
+        evidence={"gate": gate, "carrier": carrier},
     )
     base = _git_text(top, "merge-base", objects["P"], objects["L0"]).strip()
     stat = _git_text(top, "diff", "--stat", objects["L1"], objects["T"], "--")
     for name in ("P", *KEPT_NAMES):
         print(f"land_report:{name}:{objects[name]}")
     print(f"land_report:gate:{result}")
+    if "base" in gate:
+        print(f"land_report:gate_base:{gate['base']['outcome']}")
     print(f"land_report:gate_log:{log.as_posix()}")
     print(
         f"land_review:rebase:git range-diff {base}..{objects['L0']} "
@@ -4517,23 +5541,33 @@ def _authority(
 ) -> tuple[str, RpRepo]:
     """Step 6 (D:248, AC-785.18): the authority for this op, decided without a lock.
 
-    ``--grant`` verifies the lane plan's ``exec_commit`` grant over the committed
-    carriers (L1 and the recorded blobs) with ``scope.branch`` equal to ``main``
-    and reserves it for this op (idempotent for the same op, V-8).
+    ``--grant`` takes the authorities in the D-1 order (MEU-939 AC-939.3,
+    AC-939.7): first the lane plan's ``exec_commit`` grant, verified over the
+    committed carriers (L1 and the recorded blobs) with ``scope.branch`` equal
+    to ``main`` and reserved for this op (idempotent for the same op, V-8);
+    then, when the plan has no grant for the act (``NonAuthorizing``, or a
+    refusal in ``commit_batch.STANDING_FALLTHROUGH``), the live standing grant
+    (``rp.standing_authority``), whose scope must name ``main`` and whose
+    ``consumed[plan][exec_commit]`` is reserved for this op
+    (``commit_batch._standing_reserve``).
     ``--human-directed`` resolves the typed record through commit_batch's
     ``_consent`` to this plan on ``main``. Repository identity, store and
     target are those of the main repository; the transcript lookup also maps
     the reserving lane worktree's folder (``rp.with_lane``, R1-F4, D:268).
 
     Returns:
-        ``(grant | human:<message uuid>, the carrier-bound main handle)``. The
-        human direction is only resolved here; ``_publish`` spends it once
-        (``commit_batch.spend_direction``) just before the publication.
+        ``(grant | standing:<message uuid> | human:<message uuid>, the
+        carrier-bound main handle)``. The human direction is only resolved
+        here; ``_publish`` claims it (``commit_batch.claim_direction``) under
+        the main-tree lease and settles the claim after the attempt.
 
     Raises:
         Refusal: ``needs_human_publish`` (no authority form, or a ``manual`` or
-            ``legacy`` plan under ``--grant``), or the verifier's reason
-            (``scope_branch_mismatch``, ``no_commit_direction``, ...).
+            ``legacy`` plan under ``--grant`` with no live standing grant), the
+            plan grant's own refusal when no standing grant covers the act, or
+            the verifier's reason (``scope_branch_mismatch``,
+            ``standing_opt_out:<field>``, ``consumed``, ``no_commit_direction``,
+            ...).
     """
     _batch_path()
     from tools import commit_batch  # noqa: PLC0415 - the land verbs only
@@ -4545,15 +5579,39 @@ def _authority(
     try:
         handle = rp.bind_carrier(main_repo, l1, blobs)
         if args.grant:
+            first: rp.Refusal | None = None
+            kind = ""
             try:
                 rp.reserve_act(
                     handle, plan, PUBLISH_ACT, land.op, branch=PUBLISH_BRANCH
                 )
+                return "grant", handle
             except rp.NonAuthorizing as exc:
+                kind = exc.kind
+            except rp.Refusal as exc:
+                if exc.reason not in commit_batch.STANDING_FALLTHROUGH:
+                    raise
+                first = exc
+            live = rp.standing_authority(handle, plan, PUBLISH_ACT)
+            if live is None:
+                if first is not None:
+                    raise first
                 raise _needs_human(
-                    plan, f"the plan's authorization is {exc.kind}; it holds no grant"
-                ) from None
-            return "grant", handle
+                    plan, f"the plan's authorization is {kind}; it holds no grant"
+                )
+            rp._check_scope(
+                handle, cast(dict[str, Any], live["offer"]), plan, PUBLISH_BRANCH
+            )
+            uid = str(live["message_uuid"])
+            commit_batch._standing_reserve(
+                handle,
+                uid,
+                plan,
+                PUBLISH_ACT,
+                land.op,
+                session=str(land.identity["run_id"]),
+            )
+            return f"{STANDING_ROUTE_PREFIX}{uid}", handle
         if args.human_directed:
             consent = commit_batch.human_direction(
                 handle,
@@ -4562,7 +5620,7 @@ def _authority(
                 plan,
                 PUBLISH_BRANCH,
             )
-            return f"human:{consent['message_uuid']}", handle
+            return f"{HUMAN_ROUTE_PREFIX}{consent['message_uuid']}", handle
     except _batch_errors() as exc:
         raise _as_refusal(exc, land.op) from None
     except rp.GitError as exc:
@@ -4578,8 +5636,12 @@ def _main_tree(top: Path) -> Path:
 def _land_message(path: Path) -> str:
     """The text of a checked message file, refused now if its canonical form is empty.
 
+    The message also passes ``commit_batch.check_message`` (MEU-939 AC-939.5):
+    no ``Co-Authored-By`` trailer and no AI-tool credit.
+
     Raises:
-        Refusal: ``message_file`` (not UTF-8) or commit_batch's ``message``.
+        Refusal: ``message_file`` (not UTF-8), commit_batch's ``message`` or
+            ``attribution``.
     """
     _batch_path()
     from tools import commit_batch  # noqa: PLC0415 - the land verbs only
@@ -4590,6 +5652,7 @@ def _land_message(path: Path) -> str:
         raise Refusal("message_file", f"cannot read {path} as UTF-8: {exc}") from None
     try:
         commit_batch.canonical_message(text)
+        commit_batch.check_message(text)
     except _batch_errors() as exc:
         raise _as_refusal(exc, "the land") from None
     return text
@@ -4644,6 +5707,219 @@ def _sync_and_close(
     _close(top, land)
 
 
+def _admit_gate(land: LandOp) -> None:
+    """D-3 (MEU-939 AC-939.8): the grant route publishes a green gate or a matched base.
+
+    A gate whose ``result`` is ``pass`` is admitted. A red gate is admitted only
+    when prepare recorded ``gate.base`` with the outcome ``matched`` (every lane
+    failure also fails on P). Runs before the authority is decided, so a
+    refusal claims no direction and reserves no grant act.
+
+    Raises:
+        Refusal: ``gate_red_no_base`` (a red gate with no ``gate.base`` record,
+            for example a land prepared before MEU-939), or the recorded
+            outcome itself (``new_red:<node id>``, ``red_unmatched:<stage>``,
+            ``base_gate_unavailable``).
+    """
+    raw = land.fields().get("gate")
+    gate = cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
+    result = gate.get("result")
+    if result == GATE_PASS:
+        return
+    base_raw = gate.get("base")
+    base = cast(dict[str, Any], base_raw) if isinstance(base_raw, dict) else None
+    outcome = base.get("outcome") if base is not None else None
+    if not isinstance(outcome, str) or not outcome:
+        raise Refusal(
+            GATE_RED_NO_BASE,
+            f"the gate of {land.op} is {result or 'unrecorded'} and its journal holds "
+            "no gate.base record; land prepare again, or publish on the human route",
+        )
+    if outcome == GATE_BASE_MATCHED:
+        return
+    raise Refusal(
+        outcome,
+        f"the gate of {land.op} is {result} and the base comparison on P says "
+        f"{outcome}; the grant route publishes only a green or matched gate. "
+        "Fix the failure and land again, or publish on the human route.",
+    )
+
+
+def _landed_paths(top: Path, parent: str, integrated: str) -> set[str]:
+    """The paths that differ between P and T (``diff-tree -r --no-renames``).
+
+    Raises:
+        Refusal: ``git_failed``.
+    """
+    out = _git_text(
+        top,
+        "diff-tree",
+        "-r",
+        "-z",
+        "--no-renames",
+        "--name-only",
+        parent,
+        integrated,
+    )
+    return {name for name in out.split("\0") if name}
+
+
+def _path_overlaps(path: str, landed: set[str], *, ignorecase: bool) -> bool:
+    """Whether ``path`` is a landed path, sits under one, or holds one under it."""
+    key = path.casefold() if ignorecase else path
+    for name in landed:
+        other = name.casefold() if ignorecase else name
+        if key == other or key.startswith(f"{other}/") or other.startswith(f"{key}/"):
+            return True
+    return False
+
+
+def _check_main_dirt(
+    main_top: Path, parent: str, integrated: str, live: str | None
+) -> None:
+    """D-4 (MEU-939 AC-939.9): the main tree's foreign dirt may stay; it must not touch the land.
+
+    Reads ``git status --porcelain=v1 -z --untracked-files=all
+    --ignored=matching --no-renames`` of the main tree (``--no-optional-locks``:
+    the index is never rewritten), leaving out the land plan's live task.md
+    (``live``, EA-60). Any staged entry (an index column other than blank,
+    ``?`` or ``!``) refuses first; then any listed path that the land changes
+    (``diff-tree P T``), or that holds or sits under such a path, refuses.
+    Ignored entries are listed too (R1-F6): the sync's read-tree overwrites an
+    ignored file at a landed path, so one there refuses as ``main_overlap``;
+    an ignored entry is never ``main_staged``. ``--ignored=matching`` lists an
+    ignored folder as one entry (``build/``), which is checked as ``build``.
+    Every other dirty, untracked or ignored path is foreign dirt that the sync
+    keeps (``commit_batch.snapshot_sync_dirt``).
+
+    Raises:
+        Refusal: ``main_staged:<path>``, ``main_overlap:<path>``, ``git_failed``.
+    """
+    out = _git_text(
+        main_top,
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--no-renames",
+    )
+    entries = [
+        (item[:2], item[3:].rstrip("/"))
+        for item in out.split("\0")
+        if len(item) > 3 and item[3:] != live
+    ]
+    shown = main_top.as_posix()
+    for status, path in entries:
+        if status[0] not in " ?!":
+            raise Refusal(
+                f"main_staged:{path}",
+                f"the index of the main tree {shown} holds a staged change to {path} "
+                f"(status {status.strip()}); a land publishes only when the index "
+                "matches HEAD. Unstage it and publish again.",
+            )
+    if not entries:
+        return
+    landed = _landed_paths(main_top, parent, integrated)
+    ignorecase = _ignorecase(main_top)
+    for _status, path in entries:
+        if _path_overlaps(path, landed, ignorecase=ignorecase):
+            raise Refusal(
+                f"main_overlap:{path}",
+                f"{path} is changed, untracked or ignored in the main tree {shown} and "
+                "the land changes it, so the sync would overwrite it; commit, move or "
+                "revert it, then land again",
+            )
+
+
+def _main_dirt_or_reactivate(
+    land: LandOp,
+    *,
+    common: Path,
+    main_top: Path,
+    handle: RpRepo,
+    card: Card,
+    parent: str,
+    integrated: str,
+    wait_s: float,
+    poll_s: float,
+    argv: Sequence[str],
+) -> None:
+    """The D-4 check of the main tree; a D-4 refusal sends the card back to ``active``.
+
+    The land plan's own task.md changed only in run_parameters' live fields is
+    carrier state, not dirt (``commit_batch.live_task_dirt``, EA-60). On
+    ``main_staged:<path>`` or ``main_overlap:<path>`` the card goes back to
+    ``active`` with op None, so the lane can prepare a new op once the dirt
+    is gone.
+
+    Raises:
+        Refusal: ``main_staged:<path>``, ``main_overlap:<path>``,
+            ``git_failed``, or ``_set_card``'s reasons.
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - the land verbs only
+
+    try:
+        live = commit_batch.live_task_dirt(handle, land, integrated)
+    except commit_batch.rp.GitError as exc:
+        raise Refusal("git_failed", str(exc)) from None
+    try:
+        _check_main_dirt(main_top, parent, integrated, live)
+    except Refusal as exc:
+        if exc.reason.startswith(("main_staged:", "main_overlap:")):
+            _set_card(
+                common,
+                card,
+                state="active",
+                op=None,
+                expect_op=land.op,
+                wait_s=wait_s,
+                poll_s=poll_s,
+                argv=argv,
+            )
+        raise
+
+
+def _settle_claim(
+    handle: RpRepo,
+    *,
+    main_top: Path,
+    parent: str,
+    session: str,
+    uid: str,
+    op: str,
+) -> None:
+    """Settle this op's pending claim once the attempt ends (MEU-939 AC-939.15, D-2).
+
+    ``spent`` when main is no longer at P (the attempt published, or may have,
+    so the direction is never offered again), else ``released`` (no commit
+    was made, so the same direction may land with a new op). A settle that
+    fails is reported on stderr and left to the next claim, which resolves a
+    stale pending claim from its op; after a failed attempt the caller
+    re-raises the attempt's own error.
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - the land verbs only
+
+    state = commit_batch.CLAIM_SPENT
+    try:
+        proc = _git(
+            main_top, "rev-parse", "--verify", "--quiet", f"{MAIN_REF}^{{commit}}"
+        )
+        if proc.stdout.decode("utf-8", "replace").strip() == parent:
+            state = commit_batch.CLAIM_RELEASED
+        commit_batch.settle_direction(
+            handle, session=session, uid=uid, op=op, state=state
+        )
+    except (*_batch_errors(), Refusal, OSError, ValueError) as exc:
+        sys.stderr.write(
+            f"warning: the claim of direction {uid} for {op} stays pending "
+            f"(settle {state} failed: {exc}); the next claim resolves it\n"
+        )
+
+
 def _publish(
     args: argparse.Namespace,
     land: LandOp,
@@ -4664,20 +5940,25 @@ def _publish(
     generation (``card_superseded``) and no other land between publication and
     close (``commit_batch.land_blocker``: ``sync_pending:<op>``, ``land_busy:<op>``).
     Then main == P, else the card goes back to ``active`` with op None and the
-    verdict is void (``main_moved``: land again from step 1); a clean main tree
-    (``main_dirty:<path>``; the land plan's own task.md changed only in
-    run_parameters' live fields is carrier state, ``commit_batch.live_task_dirt``,
-    EA-60); the carriers again (``carrier_mismatch``); the human
-    direction spent once (``commit_batch.spend_direction``); the publication
-    through commit_batch's tree adapter (``commit_batch.land_publish``); the
+    verdict is void (``main_moved``: land again from step 1). On the human
+    route the direction is then claimed ``pending`` for this op
+    (``commit_batch.claim_direction``: ``direction_spent``,
+    ``direction_busy:<op>``) before any ref moves. ``_publish_attempt`` runs
+    the D-4 dirt check (``main_staged:<path>``, ``main_overlap:<path>``; the
+    land plan's own task.md changed only in run_parameters' live fields is
+    carrier state, ``commit_batch.live_task_dirt``, EA-60), the carriers
+    again, the message and identity checks and the publication. The claim
+    then settles: ``spent`` once main has moved from P, else ``released``
+    (MEU-939 AC-939.15). After the publication the foreign dirt of the main
+    tree is recorded (``commit_batch.snapshot_sync_dirt``, D-4), then the
     sync and the close.
 
     Returns:
         C, the published commit.
 
     Raises:
-        Refusal: each reason above, or commit_batch's (``hook_drift``,
-            ``publish_refused``, ``direction_spent``, ...).
+        Refusal: each reason above, ``_publish_attempt``'s, or commit_batch's
+            (``hook_drift``, ``publish_refused``, ``sync_dirt_malformed``, ...).
     """
     _batch_path()
     from tools import commit_batch  # noqa: PLC0415 - the land verbs only
@@ -4712,43 +5993,158 @@ def _publish(
             f"{land.lane} is active again and the verdict of {land.op} is void. "
             "Land again from step 1 (land prepare).",
         )
-    try:
-        live = commit_batch.live_task_dirt(handle, land, str(land.fields()["T"]))
-    except commit_batch.rp.GitError as exc:
-        raise Refusal("git_failed", str(exc)) from None
-    dirty = [line for line in _dirty_lines(main_top) if line[3:] != live]
-    if dirty:
-        raise Refusal(
-            f"main_dirty:{dirty[0][3:]}",
-            f"the main tree {main_top.as_posix()} has uncommitted changes "
-            f"({len(dirty)}); a land publishes only onto a clean main tree at P",
-        )
-    if dict(_check_carrier(top, land, Path(str(card["worktree"])))) != dict(blobs):
-        raise Refusal(
-            "carrier_mismatch",
-            f"the carriers of {land.op} changed while publish took its leases",
-        )
-    try:
-        if route != "grant":
-            commit_batch.spend_direction(
+    integrated = str(land.fields()["T"])
+    human = route.startswith(HUMAN_ROUTE_PREFIX)
+    uid = route[len(HUMAN_ROUTE_PREFIX) :] if human else ""
+    session = str(args.session)
+    if human:
+        uid = uid or str(args.message_uuid)
+        try:
+            commit_batch.claim_direction(
                 handle,
-                str(args.session),
-                str(args.message_uuid),
-                str(land.identity["plan"]),
-                land.op,
+                plan=str(land.identity["plan"]),
+                session=session,
+                uid=uid,
+                act=commit_batch.LAND_ACT,
+                op=land.op,
+                branch=PUBLISH_BRANCH,
             )
-        commit = commit_batch.land_publish(
-            handle,
+        except _batch_errors() as exc:
+            raise _as_refusal(exc, land.op) from None
+    try:
+        commit = _publish_attempt(
             land,
-            act=PUBLISH_ACT,
-            reserved=land.op if route == "grant" else None,
+            top=top,
+            common=common,
+            main_top=main_top,
+            handle=handle,
+            route=route,
+            card=card,
+            blobs=blobs,
+            parent=parent,
+            integrated=integrated,
+            wait_s=wait_s,
+            poll_s=poll_s,
+            argv=argv,
         )
+    except BaseException:
+        if human:
+            _settle_claim(
+                handle,
+                main_top=main_top,
+                parent=parent,
+                session=session,
+                uid=uid,
+                op=land.op,
+            )
+        raise
+    if human:
+        # main is at C now, so the claim settles spent.
+        _settle_claim(
+            handle,
+            main_top=main_top,
+            parent=parent,
+            session=session,
+            uid=uid,
+            op=land.op,
+        )
+    try:
+        commit_batch.snapshot_sync_dirt(handle, land, parent, commit)
     except _batch_errors() as exc:
         raise _as_refusal(exc, land.op) from None
     except commit_batch.rp.GitError as exc:
         raise Refusal("git_failed", str(exc)) from None
     _sync_and_close(top, land, handle, sync=True)
     return commit
+
+
+def _publish_attempt(
+    land: LandOp,
+    *,
+    top: Path,
+    common: Path,
+    main_top: Path,
+    handle: RpRepo,
+    route: str,
+    card: Card,
+    blobs: Mapping[str, str],
+    parent: str,
+    integrated: str,
+    wait_s: float,
+    poll_s: float,
+    argv: Sequence[str],
+) -> str:
+    """Step 7 of ``_publish`` once the direction (if any) is claimed: the checks, then C.
+
+    In order: the D-4 dirt check of the main tree (``_main_dirt_or_reactivate``;
+    on a refusal the card goes back to ``active`` with op None, so the lane can
+    prepare a new op once the dirt is gone; on ``--grant`` this repeats the
+    check made before the authority, now under the main-tree lease); the
+    carriers again; the stored
+    land message (``commit_batch.check_message``); the commit identity of the
+    main repository (``_checked_identity``); then the publication through
+    commit_batch's tree adapter (``commit_batch.land_publish``), with the
+    reserved grant op on the grant route and the standing grant's message
+    uuid on the standing route.
+
+    Returns:
+        C, the published commit.
+
+    Raises:
+        Refusal: ``main_staged:<path>``, ``main_overlap:<path>``,
+            ``carrier_mismatch``, ``message``, ``attribution``,
+            ``author_not_noreply``, ``identity_env:<var>``, ``git_failed``, or
+            commit_batch's (``hook_drift``, ``publish_refused``, ...).
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - the land verbs only
+
+    _main_dirt_or_reactivate(
+        land,
+        common=common,
+        main_top=main_top,
+        handle=handle,
+        card=card,
+        parent=parent,
+        integrated=integrated,
+        wait_s=wait_s,
+        poll_s=poll_s,
+        argv=argv,
+    )
+    if dict(_check_carrier(top, land, Path(str(card["worktree"])))) != dict(blobs):
+        raise Refusal(
+            "carrier_mismatch",
+            f"the carriers of {land.op} changed while publish took its leases",
+        )
+    message = land.folder / commit_batch.LAND_MESSAGE_NAME
+    try:
+        text = message.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Refusal(
+            "message", f"cannot read the stored land message {message}: {exc}"
+        ) from None
+    try:
+        commit_batch.check_message(text)
+    except _batch_errors() as exc:
+        raise _as_refusal(exc, land.op) from None
+    _checked_identity(main_top)
+    standing = (
+        route[len(STANDING_ROUTE_PREFIX) :]
+        if route.startswith(STANDING_ROUTE_PREFIX)
+        else None
+    )
+    try:
+        return commit_batch.land_publish(
+            handle,
+            land,
+            act=PUBLISH_ACT,
+            reserved=land.op if route == "grant" else None,
+            standing=standing,
+        )
+    except _batch_errors() as exc:
+        raise _as_refusal(exc, land.op) from None
+    except commit_batch.rp.GitError as exc:
+        raise Refusal("git_failed", str(exc)) from None
 
 
 def _cmd_land_publish(
@@ -4761,6 +6157,11 @@ def _cmd_land_publish(
     an approved verdict for tree(T) (``verdict_missing``); HALT (``halt``, exit
     3, nothing written); the card ``landing`` with this op, read under the
     registry lock (``card_superseded``); the carriers (``carrier_mismatch``);
+    on ``--grant`` the D-3 gate admission (``_admit_gate``: a green gate or a
+    ``matched`` base, else ``gate_red_no_base`` or the recorded outcome, MEU-939
+    AC-939.8), before any claim or grant act; on ``--grant`` also the D-4
+    main-tree check (``main_staged:<path>``, ``main_overlap:<path>``; the card
+    goes back to ``active``), so a D-4 refusal reserves no grant act (EA-6);
     then the authority (``_authority``). With no authority it refuses
     ``needs_human_publish`` and prints the sentence; nothing is written and no
     lease or lock stays held. With authority it takes the per-op lease in one
@@ -4795,6 +6196,23 @@ def _cmd_land_publish(
         _landing_card(card, land)
     lane_worktree = Path(str(card["worktree"]))
     blobs = _check_carrier(top, land, lane_worktree)
+    if args.grant:
+        _admit_gate(land)
+        # EA-6: a D-4 refusal must reserve no grant act, so D-4 runs before
+        # _authority; _publish_attempt runs it again under the main-tree lease.
+        fields = land.fields()
+        _main_dirt_or_reactivate(
+            land,
+            common=common,
+            main_top=_main_tree(top),
+            handle=_main_repo(top),
+            card=card,
+            parent=str(fields["P"]),
+            integrated=str(fields["T"]),
+            wait_s=wait_s,
+            poll_s=poll_s,
+            argv=argv,
+        )
     route, handle = _authority(args, top, land, blobs, lane_worktree)
     lease = _op_lease(common, op, poll_s=poll_s, argv=argv)
     if lease is None:
@@ -4848,7 +6266,11 @@ def _cmd_land_prepare(
 ) -> int:
     """``land prepare`` steps 1 to 5 of design §5.5 (AC-785.13 to AC-785.17).
 
-    Order: the message file; a first read of the journal (an existing op is
+    Order: the message file (``_land_message``, which refuses an attribution);
+    the commit identity of the main repository (``_checked_identity``:
+    ``author_not_noreply``, ``identity_env:<var>``, MEU-939 AC-939.5), so a
+    land that publish would refuse for its identity never starts; a first
+    read of the journal (an existing op is
     ``op_exists``: ``land recover`` re-runs it); the per-op lease in one
     attempt (``op_busy``, exit 3); step 1 freeze (``_freeze``); step 2 rebase
     in the candidate (``_rebase``); step 3 the integration requests and T
@@ -4862,6 +6284,7 @@ def _cmd_land_prepare(
         raise Refusal("worktree_bad", f"{worktree} is not a directory")
     top, common = _repo_dirs(worktree)
     message = _land_message(_checked_message_file(args.message_file))
+    _checked_identity(_main_tree(top))
     op = str(args.op) if args.op else ""
     if not op:
         lane = _card_for_worktree(common, worktree.as_posix())["lane"]

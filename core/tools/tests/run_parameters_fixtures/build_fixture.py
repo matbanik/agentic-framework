@@ -850,7 +850,7 @@ class Fixture:
         )
         for key, value in (
             ("user.name", "Fixture"),
-            ("user.email", "fixture@example.invalid"),
+            ("user.email", "100+fixture@users.noreply.github.com"),
             ("commit.gpgsign", "false"),
             ("core.hooksPath", str(self.root / "no-hooks")),
         ):
@@ -1075,7 +1075,7 @@ def build(
     git(repo, "init", "-q", "-b", "main")
     for key, value in (
         ("user.name", "Fixture"),
-        ("user.email", "fixture@example.invalid"),
+        ("user.email", "100+fixture@users.noreply.github.com"),
         ("commit.gpgsign", "false"),
         ("core.autocrlf", "false"),
         ("core.hooksPath", str(root / "no-hooks")),

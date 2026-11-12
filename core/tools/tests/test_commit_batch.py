@@ -968,7 +968,7 @@ def test_vec_v3_016_driver_scrubs_the_inherited_git_environment(tmp_path: Path) 
     identity = rig.git("show", "-s", "--format=%an <%ae>|%cn <%ce>", out["commit"])
     assert (
         identity
-        == "Fixture <fixture@example.invalid>|Fixture <fixture@example.invalid>"
+        == "Fixture <100+fixture@users.noreply.github.com>|Fixture <100+fixture@users.noreply.github.com>"
     )
     assert rig.git("rev-parse", ":change.txt") == b3.blob_oid(CHANGE)
 

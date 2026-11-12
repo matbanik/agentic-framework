@@ -190,9 +190,9 @@ def lane_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LaneRepo:
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
     for var, value in (
         ("GIT_AUTHOR_NAME", "Lane Test"),
-        ("GIT_AUTHOR_EMAIL", "lane@example.invalid"),
+        ("GIT_AUTHOR_EMAIL", "100+lane@users.noreply.github.com"),
         ("GIT_COMMITTER_NAME", "Lane Test"),
-        ("GIT_COMMITTER_EMAIL", "lane@example.invalid"),
+        ("GIT_COMMITTER_EMAIL", "100+lane@users.noreply.github.com"),
     ):
         monkeypatch.setenv(var, value)
     monkeypatch.delenv(_lanes().SESSION_ENV, raising=False)

@@ -56,6 +56,10 @@ PLANS = "docs/execution/plans"
 OP = "op-land-1"
 OP_B = "op-land-b1"
 GATE_LOCK = "{{PROJECT_NAME}}-gate.lock"
+GATE_SCRIPT = "tools/validate_codebase.py"
+# A green land gate for ``_build(gate=True)``: lanes.py ``_gate_result`` reads only the
+# exit code, so exit 0 is ``pass`` and the grant route admits it (D-3).
+PASS_GATE = b"import sys\n\nprint('GATE PASS')\nsys.exit(0)\n"
 SESSION_ENV = "{{PROJECT_NAME_UPPER}}_SESSION"
 CLI_TIMEOUT_S = 300
 WAIT_S = 0.2
@@ -200,6 +204,7 @@ def _build(
     main_change: Mapping[str, bytes] | None = None,
     mnt: list[str] | None = None,
     second: bool = False,
+    gate: bool = False,
 ) -> tuple[Land, Land | None]:
     """The fixture, lane A (and lane B when ``second``), then one more ``main`` commit (``P``)."""
     rig = b3.rig(tmp_path / "fx", ROOT, seed=lwc.SEED)
@@ -223,7 +228,10 @@ def _build(
     other: tuple[Path, str] | None = None
     if second:
         other = _add_lane(rig, bf.PLAN_B, LANE_B_DIR)
-    p = rig.seed(dict(main_change or {MAIN_SIDE: b"main side\n"}), message="main: move")
+    main_files = dict(main_change or {MAIN_SIDE: b"main side\n"})
+    if gate:
+        main_files[GATE_SCRIPT] = PASS_GATE
+    p = rig.seed(main_files, message="main: move")
     message = rig.fx.root / "land-message.txt"
     message.write_bytes(MESSAGE)
     land = Land(rig=rig, slug=slug, wt=wt, message=message, l0=l0, p=p)
@@ -804,7 +812,7 @@ def test_publish_stops_under_halt_without_a_write(tmp_path: Path) -> None:
 def test_publish_is_land_busy_while_another_land_is_between_publication_and_close(
     tmp_path: Path,
 ) -> None:
-    land, other = _build(tmp_path, second=True)
+    land, other = _build(tmp_path, second=True, gate=True)
     assert other is not None
     _ready(land)
     _ready(other, op=OP_B)
@@ -829,11 +837,11 @@ def test_a_moved_main_is_main_moved_and_the_card_goes_back_to_active(
     assert (card["state"], card["op"]) == ("active", None), card
 
 
-def test_a_dirty_main_tree_is_main_dirty(tmp_path: Path) -> None:
+def test_a_dirty_landed_path_is_main_overlap(tmp_path: Path) -> None:
     land = _one(tmp_path)
     _ready(land)
-    (land.repo / MAIN_SIDE).write_bytes(b"edited in main\n")
-    _refused(_publish_human(land), f"main_dirty:{MAIN_SIDE}")
+    (land.repo / FEATURE).write_bytes(b"edited in main\n")
+    _refused(_publish_human(land), f"main_overlap:{FEATURE}")
     assert land.rig.ref() == land.p
 
 
