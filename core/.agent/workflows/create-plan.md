@@ -185,9 +185,9 @@ When Steps 2–2A surface design questions where the spec is silent or ambiguous
 
 **Process** (the planning instance of `.agent/docs/human-decision-protocol.md` §2–§6):
 
-0. **Precedent sweep** the codebase first (protocol §2): grouping §8 decision tables, prior plans' Decision Logs, reflections' Decisions Logs, handoffs, the ADR directory, `emerging-standards.md`, known-issues, and any harness memory. Record every hit as `path:line — what was decided — by whom`.
+0. **Precedent sweep** the codebase first (protocol §2). Sources: grouping §8 decision tables, prior Decision Logs, reflections, handoffs, the ADR directory, `emerging-standards.md`, known-issues, and any harness memory. Record every hit as `path:line — what was decided — by whom`. Also read `.agent/context/current-focus.md`. If a prior ruling settles the question, apply it and cite it.
 
-1. **Web search** each surviving question using the harness `web_search_tool` (protocol §3 ladder: research MCP such as Pomera `tavily`/`exa` → native `WebSearch`/`search_web` → Codex `--search` → `research: unavailable`). Target queries at how production apps, established UX patterns (NNG, Material Design, industry-specific tools), or framework docs handle the same decision, plus one query for recent AI-era approaches. Aim for 2–3 searches per question and record the engine used.
+1. **Research** each open fact that can change the recommendation (protocol §3). Use again a source that already settles it. A local measurement (git history, a test run, a simulation) counts as research. For the web, use the harness `web_search_tool`. Look at how production apps, UX patterns or framework docs handle the same decision. Record the engine used.
 
 2. **Sequential thinking** to evaluate the research findings against project-specific constraints:
    ```
@@ -202,30 +202,31 @@ When Steps 2–2A surface design questions where the spec is silent or ambiguous
 
 3. **Apply the obviousness test** (protocol §4). A question the planner decides itself — precedent or sources converge, two-way door, no product fork, no new governance number — is resolved now: tag the acceptance criterion `Local Canon` or `Research-backed` in the sufficiency table and write an `autonomous` entry in the plan's `## Decision Log`. It does not appear as a question anywhere.
 
-4. **Document** every remaining (human-gated) question as a **Decision Brief** in the plan's `## Decision Log` section — the complete protocol §5 shape, recommendation first, then the alternatives compared against it:
+4. **Document** every remaining (human-gated) question as a **Decision Brief** in the plan's `## Decision Log` section, in the protocol §5 form, recommendation first:
 
    ```markdown
-   ### D-{n} — {question}
-   **Recommendation:** {Option A} — {why it is the right call}. **Reversibility:** {two-way | one-way-door}. **Default if unanswered:** {option}.
-   **Precedents:** {path:line — what it decided}. **Research:** {engine}; {source — takeaway} (or `unavailable — <reason>`).
+   ### D-n: <the question in plain words>
 
-   | Option | Source | Pros (vs. rec.) | Cons (vs. rec.) | Verdict |
-   |--------|--------|-----------------|-----------------|---------|
-   | A (recommended) | {precedent path:line, URL or doc} | — | — | ✅ |
-   | B | {URL or doc} | {what it does better than A} | {what it costs against A} | ⚠️ / ❌ |
+   **I recommend A: <what happens, in plain words>.** <Why: the decisive fact or precedent. The
+   concrete way that A can fail, and the undo cost.>
+
+   - B: <what happens, and what it costs compared with A.>
+
+   Refs: <precedent paths>, <sources>, <M-n>.
    ```
 
-   Each option must cite at least one source (precedent `path:line`, URL, doc path, or standard ID); pros and cons are stated relative to the recommendation, never as free-standing bullets. The human makes the final call at the §5c gate (or the reviewer, where the question is review-scoped and `plan_to_exec_gate` is `reviewer-auto`).
+   The Refs line cites the sources (precedent `path:line`, URL, doc path, or standard ID). The human makes the final call at the §5c gate (or the reviewer, where the question is review-scoped and `plan_to_exec_gate` is `reviewer-auto`).
 
 **Rules:**
 - Do not present questions with zero precedent sweep or research. If a question cannot be researched (e.g., pure product preference), mark it `Human-decision-required` with class `product-preference`, still lead with a recommendation, and say why research was insufficient. No search tool available → stamp `research: unavailable — <reason>`; never skip the sweep or the brief.
 - The reader should be able to decide from the brief alone — no additional research should be needed.
+- Search the tests for each string, number and field that the plan changes, and put the test changes into one question before the work starts.
 - Reference `emerging-standards.md` — if an existing standard (e.g., UX2, G23, G24) already resolves the question, cite it as the precedent instead of re-researching.
-- Every autonomous resolution is carried into the closeout reflection's `### Decisions Log` (Step 6 item 7) so the human reads the reasoning after the fact.
+- Record each autonomous resolution once, in the plan's `## Decision Log`. The closeout reflection lists only the choices that someone could want to reverse, each with a link (Step 6 item 7).
 
 ### 3. Reason About Project Scope
 
-If the project is scoped from a session-grouping file, carry its `## 8. Open Decisions` rows forward: every D-row (decided or `open`) becomes a row of the closeout reflection's `### Decisions Log` with stage `grouping`, and H2-2's reflection check passes that same file as `--decision-source {grouping-file}` — the validator refuses to reconcile a plan that declares a real `grouping_source` without it (`session-grouping.md` row 8 carry-forward rule).
+If the project is scoped from a session-grouping file, carry its `## 8. Open Decisions` rows forward: the closeout reads each declared D-row with stage `grouping`, and H2-2's reflection check passes that same file as `--decision-source {grouping-file}` — the validator refuses a plan that declares a real `grouping_source` without it (`session-grouping.md` row 8 carry-forward rule).
 
 Use sequential thinking to group the next set of pending MEUs into a coherent **project**. Apply these principles:
 
@@ -556,7 +557,7 @@ At the round cap:
    relative to it: (a) "continue review loop" for more rounds — {+ / −}; (b) direct execution
    with the open risks carried as guarded task rows — {+ / −}; (c) answer the human-decision
    items and resume — {+ / −}; (d) stop — {+ / −}. Reversibility: {two-way | one-way-door}.
-   Default if unanswered: {option}. The human decides; the recommendation never self-executes.
+   The human decides. The recommendation never self-executes.
 
    ## Decision Briefs (one per human-decision item, protocol §5)
    ```
@@ -678,7 +679,7 @@ After all MEU TDD cycles and handoffs are complete, **continue immediately** wit
    ```
    > **Why two steps?** `--check` provides drift evidence and catches accidental route changes. CI runs `--check` mode — if you forget to regenerate after a real change, CI catches it. Blindly regenerating with `-o` loses this safety net. Run step 2 only when step 1 reported drift.
 6. **Auto-dispatch `/execution-critical-review`** and loop corrections until APPROVED (see §6a below). This is NOT optional and is NOT a human gate — a standalone `/create-plan` run owns its own execution review (it does *not* hand off to `/execution-session`). The review now sees the final state (items 1–5). Do not write the reflection/metrics or report completion until the implementation review returns `approved` (or hits the round cap). If the correction loop changes code/tests, re-run the MEU gate (and re-touch items 2–5 if affected) before re-dispatching.
-7. Create reflection file at `docs/execution/reflections/` (see `execution-session.md` §5) — it must record the execution-review rounds/verdict from item 6 and, in its `### Decisions Log`, every decision the session resolved autonomously under `human-decision-protocol.md` §4 with its reasoning, plus every human-gated one with its `human_message_reference`.
+7. Create reflection file at `docs/execution/reflections/` (see `execution-session.md` §5) — it must record the execution-review rounds/verdict from item 6. Its `### Decisions Log` is a short list of the choices that the agent made without asking and that someone could want to reverse. Each item links to its stage-log entry. If there is no such choice, write `None.` (`human-decision-protocol.md` §6).
 8. Update metrics table in `docs/execution/metrics.md`
 10. Commit through the `COMMIT` and H2-6 rows (`TASK-TEMPLATE.md` v2.4): under `commit_exec: true` with a verified `exec_commit` grant, `COMMIT` runs `tools/commit_batch.py` from the H2-5 manifest; otherwise H2-5's proposed commit messages go to the human. Either way, no AI attribution trailers or generated-by statements
 

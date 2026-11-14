@@ -193,14 +193,15 @@ rtk proxy uv run python tools/export_openapi.py -o openapi.committed.json *> {{R
 ## Decision Log
 
 > [!WARNING]
-> {Every design decision the spec left open — the ones the planner resolved AND the ones that
-> still need the human — per `.agent/docs/human-decision-protocol.md`.}
+> {Each consequential design decision that the spec left open — the ones the planner resolved
+> AND the ones that still need the human. Record them per `.agent/docs/human-decision-protocol.md` §6.
+> A decision that applies an existing ruling gets no new entry.}
 >
 > **Precedent sweep and web research first (create-plan §2B), then the obviousness test.**
 > A question that passes the test is decided here (`resolution: autonomous`, tagged `Local Canon`
 > or `Research-backed`) with its reasoning — it is never asked. A question that fails it is a
-> **Decision Brief**: recommendation first with why, then the alternatives compared against it
-> (pros/cons relative, not free-standing), sources, reversibility, and the default if unanswered.
+> **Decision Brief** in the protocol §5 form: the question in plain words, the recommendation
+> first with why and how it can fail, the other options compared with it, and a Refs line.
 > Never a bare question that stops the turn. Only mark a brief `Human-decision-required` (and
 > route it through the §5 review loop's human-gate exit) when it is a one-way door, a product
 > preference, a source conflict, or a governance value. An unresolved brief is not, by itself, a
@@ -221,15 +222,14 @@ decision_log:
     human_message_reference: "{USER_EXPLICIT YYYY-MM-DD '<quote>' — human-resolved entries only; omit otherwise}"
 ```
 
-### D-{n} — {human-gated question}
+### D-n: <the question in plain words>
 
-**Recommendation:** {Option A} — {why it is the right call}. **Reversibility:** {two-way | one-way-door}. **Default if unanswered:** {option}.
-**Precedents:** {path:line — what it decided}. **Research:** {engine}; {source — takeaway} (or `unavailable — <reason>`).
+**I recommend A: <what happens, in plain words>.** <Why: the decisive fact or precedent. The
+concrete way that A can fail, and the undo cost.>
 
-| Option | Source | Pros (vs. rec.) | Cons (vs. rec.) | Verdict |
-|--------|--------|-----------------|-----------------|---------|
-| {Option A} (recommended) | {precedent path:line / URL} | — | — | ✅ |
-| {Option B} | {URL} | {what it does better than A} | {what it costs against A} | ⚠️ / ❌ |
+- B: <what happens, and what it costs compared with A.>
+
+Refs: <precedent paths>, <sources>, <M-n>.
 
 ---
 

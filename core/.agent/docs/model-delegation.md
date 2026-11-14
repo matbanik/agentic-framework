@@ -53,6 +53,8 @@ The `coordinator` class holds planning, correctness-critical reasoning, and orch
 - Keep the harness-resolved `coordinator` as the main-loop orchestrator; reserve frontier effort on the `independent_reviewer` chain for the correctness class.
 - **Never delegate** the correctness class, review verdict authorship, commit/push, or any
   human-approval gate — those stay inline on the `coordinator` or on the external reviewer chain.
+- **Open decisions.** The coordinator owns each question to the human. A subagent that finds an
+  open decision returns it with its facts and a recommendation, and does not ask the human.
 
 ## Why
 

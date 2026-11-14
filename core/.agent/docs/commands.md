@@ -114,6 +114,7 @@ pytest --cov=packages/core --cov-report=term            # Coverage (advisory)
 | CLI Dispatch | `.agent/skills/cli-dispatch/SKILL.md` | External CLI routing: the Codex wrapper and the headless Claude wrapper (`tools/Invoke-ClaudeDispatch.ps1`), with session resume and fork. Isolated workers run on headless Claude through the wrapper; independent review follows the chain in `.agent/docs/model-routing.md`. |
 | Deep Research Prompting | `.agent/skills/deep-research-prompting/SKILL.md` | Portal-ready deep research prompt procedure: Pomera MCP preflight hard gate, provider capability recon query bank (Tavily/Exa routing), 14-day capability snapshots, D1/D2/D3 prompt templates, triangulation synthesis. Driven by `/inspiration-research`. |
 | 1M Context Switch | `.agent/skills/context-1m/SKILL.md` | Claude Code only, human-invoked: `/context-1m on\|off\|status` sets or removes `env.CLAUDE_CODE_DISABLE_1M_CONTEXT` in `~/.claude/settings.json` for every session on the machine. Installed into `~/.claude/skills/` (`ADOPTION-GUIDE.md` §1M context switch). |
+| Expert Pass | `.agent/skills/expert-pass/SKILL.md` | The packet for one expert pass on a set of briefs (HDP §5a). The reviewer reads only, and asks the three questions. |
 
 ## MCP Servers
 

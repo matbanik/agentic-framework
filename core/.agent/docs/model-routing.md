@@ -197,6 +197,7 @@ Fallback — do **not** self-review.
 | Classifying/triaging a big list, pure routing | `router` |
 | Sweeping many files for one answer (where is X, who calls Y) when only the conclusion is needed | `scout` |
 | A second, advisory read of a correctness-critical diff or plan before the independent review | `peer_reviewer` (advisory; the verdict stays with `independent_reviewer`) |
+| An expert pass on a set of briefs before the human sees them (HDP §5a) | `peer_reviewer` in a fresh context (advisory). The human names `architect` for one set |
 | Reviewing a plan or a diff (independent) | `independent_reviewer` → `fallback_reviewer` (`Invoke-ClaudeDispatch.ps1 -ModelClass fallback_reviewer`, only on a rate-limit receipt, flagged same-vendor) → **a human** (HARD STOP); see §Independent-reviewer chain — this row is a summary of it, never a variant |
 | Many independent tasks in parallel / overnight | `isolated_worker`, one per worktree; prefer the in-harness Agent tool, else `Invoke-ClaudeDispatch.ps1 -ModelClass isolated_worker` |
 | Very large single-shot architecture reasoning | `architect` (only on explicit human direction or a grouping row flagged `architecture-risk: yes`) |

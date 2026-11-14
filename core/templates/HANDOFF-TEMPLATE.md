@@ -168,7 +168,7 @@ _Optional. Skip this section if no items are deferred._
 
 ## Decision Log
 
-<!-- Every .agent/docs/human-decision-protocol.md decision made during this MEU, autonomous or human-ruled, as ONE fenced decision_log: YAML block with the plan's entry shape, or exactly `None.` (delete the example below in that case). This comment may stay; any other prose here is refused. The closeout validator reconciles every entry with the reflection's Decisions Log; an example left unfilled is refused, not ignored. -->
+<!-- Each human ruling and each consequential new choice of this MEU (.agent/docs/human-decision-protocol.md §6), as ONE fenced decision_log: YAML block with the plan's entry shape, or exactly `None.` (delete the example below in that case). This comment may stay; any other prose here is refused. The closeout validator checks each entry and refuses an example left unfilled. -->
 
 ```yaml
 decision_log:

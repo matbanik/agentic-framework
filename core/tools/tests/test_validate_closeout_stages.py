@@ -1090,3 +1090,64 @@ def test_vec_v4_012_publication_never_on_the_branch_fails(tmp_path: Path) -> Non
     orphan = bf.git(fx.repo, "commit-tree", tree, "-m", "fixture: never published")
     out = _audit(fx, [{"op": "op-exec", "ref_old": old, "ref_new": orphan}])
     assert out["result"] == "failed", out
+
+
+# -- the decision record lives in the stage log only (human-decision-protocol.md §6) ---------
+
+
+def _stage_log_item(**fields: str) -> str:
+    """One ``decision_log`` item as ``decision_entries`` reads it (marker already blanked)."""
+    base = {
+        "id": "D-1",
+        "stage": "planning",
+        "question": '"Which store?"',
+        "chosen": '"SQLite"',
+        "reasoning": '"precedent converges"',
+    }
+    base.update(fields)
+    return "".join(f"  {key}: {value}\n" for key, value in base.items())
+
+
+def test_decision_entry_stated_in_full_is_read() -> None:
+    """A stage-log entry with question, chosen and reasoning is read as ``(id, stage)``."""
+    assert _vca().decision_entries([_stage_log_item()], "plan") == [("D-1", "planning")]
+
+
+def test_decision_entry_pending_chosen_is_refused() -> None:
+    """A ``chosen`` that starts with ``pending`` is refused: the ruling is not recorded yet."""
+    vca = _vca()
+    with pytest.raises(vca.Refuse, match="still pending"):
+        vca.decision_entries([_stage_log_item(chosen='"pending the human ruling"')], "plan")
+
+
+def test_decision_entry_non_text_chosen_is_refused() -> None:
+    """A number, a boolean or an empty ``chosen`` is no statement of the choice."""
+    vca = _vca()
+    for value in ("3", "true", "null", '""', "[a, b]"):
+        with pytest.raises(vca.Refuse, match="blank or non-text chosen"):
+            vca.decision_entries([_stage_log_item(chosen=value)], "plan")
+
+
+def test_decision_entry_blank_reasoning_is_refused() -> None:
+    """A blank ``reasoning`` is refused by field name."""
+    vca = _vca()
+    with pytest.raises(vca.Refuse, match="blank or non-text reasoning"):
+        vca.decision_entries([_stage_log_item(reasoning='""')], "plan")
+
+
+def test_reflection_decisions_log_template_example_is_refused(tmp_path: Path) -> None:
+    """The template's example list line left in the Decisions Log is refused; a link list passes."""
+    vca = _vca()
+    template = tmp_path / "REFLECTION-TEMPLATE.md"
+    template.write_text(vca._GOOD_REFLECTION_TEMPLATE, encoding="utf-8")
+    example = "- _{the choice in plain words}_ — [D-1](_{path to the stage log}_)\n"
+    real = "- Chose SQLite for the store — [D-1](plan.md)\n"
+    for body, refused in ((example, True), (real, False)):
+        text = vca._GOOD_REFLECTION.replace("### Decisions Log\n\nNone.\n", "### Decisions Log\n\n" + body)
+        path = tmp_path / "reflection.md"
+        path.write_text(text, encoding="utf-8")
+        if refused:
+            with pytest.raises(vca.Refuse, match="template example"):
+                vca.check_reflection(text, str(path), str(template), None)
+        else:
+            vca.check_reflection(text, str(path), str(template), None)
