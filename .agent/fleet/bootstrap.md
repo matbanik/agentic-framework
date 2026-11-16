@@ -55,6 +55,8 @@ On the member, `$FleetHome` is `$HOME\.agent\fleet`, for the user the member run
    New-NetFirewallRule -DisplayName 'Fleet hub 8770' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8770 -RemoteAddress <local subnet> -Profile Private
    ```
 
+   The USB kit's receiver on the orchestrator machine uses a separate rule, `Fleet USB receive 8771` (TCP 8771, Private profile). The kit's README, [usb/README.md](usb/README.md), gives its line. This step does not make it, and `Fleet hub 8770` does not cover it.
+
 4. On the member, pair it with the pin from the pairing line and a name for the machine. This writes
    `member.json` without printing the key, and prints a code.
 

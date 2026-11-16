@@ -219,3 +219,68 @@ issues:
   priority: P4
   effort: S
   resolution_path: Decide whether to port -ValidateOnly; if yes, add it with a wrapper-contract arm.
+- id: FLEET-AGY-RETIRED-NAME
+  title: fleet.py still lists the retired tool name agy, and a test expects it
+  severity: low
+  component: infrastructure
+  status: open
+  discovered: '2026-11-15'
+  root_cause: CAPABILITY_TOOLS and FORBIDDEN_COMMANDS in .agent/fleet/fleet.py still hold agy, the retired name of a tool, and test_ac32_forbidden_commands_are_unchanged in scripts/tests/test_fleet_agent.py
+    pins that list.
+  blast_radius: A fleet manifest can still require or name agy. Removing the name needs a change to the test in the same step.
+- id: FLEET-UNIX-MEMBER-BOOTSTRAP-EMPTY
+  title: bootstrap.md has empty Linux and macOS sections, so a Unix machine cannot become a fleet.py member
+  severity: medium
+  component: infrastructure
+  status: open
+  discovered: '2026-11-15'
+  root_cause: The USB kit ends at SSH admin access (core/MANIFEST.md) and the kit's setup-unix.sh does not pair the machine as a fleet.py member. The Linux and macOS sections of .agent/fleet/bootstrap.md
+    hold no steps.
+  blast_radius: A Linux or macOS machine that the kit set up is reachable over SSH, but the hub's agent cannot run the member jobs on it until a person writes those steps and tests them on real machines.
+- id: FLEET-INSTALLERS-UNVERIFIED
+  title: The kit and setup-member.ps1 run downloaded installers with no signature check
+  severity: medium
+  component: infrastructure
+  status: open
+  discovered: '2026-11-15'
+  root_cause: setup-windows.ps1, setup-unix.sh and .agent/fleet/setup-member.ps1 fetch the vendor installers for uv, Claude Code, Codex, Homebrew and PowerShell over HTTPS and run them as they are. Only
+    the RustDesk files are checked, by sha256.
+  blast_radius: A compromised installer host would run its code with the account's rights. The 2026-11-15 plan puts security hardening out of scope, so the checks are left to a later plan.
+- id: FLEET-RUSTDESK-WAYLAND
+  title: Unattended RustDesk access is limited in a Wayland session
+  severity: medium
+  component: infrastructure
+  status: open
+  discovered: '2026-11-15'
+  root_cause: Stable RustDesk cannot capture the screen or send input to a Wayland session without a person at the machine, so the kit's RustDesk step records session_type wayland but cannot repair it.
+  blast_radius: An Ubuntu machine with a Wayland login shows a RustDesk ID that the hub cannot use unattended. The README says to use an Xorg (X11) session.
+- id: FLEET-AC38-BILLING-LINE-PIN
+  title: test_ac38 pins fixed line numbers of a skill file whose rule moved
+  severity: low
+  component: infrastructure
+  status: open
+  discovered: '2026-11-15'
+  root_cause: test_ac38_the_skills_hold_the_member_route_and_the_billing_rule in scripts/tests/test_fleet_agent.py reads lines 340 to 343 of a skill file, and the billing rule moved to line 362 in fb2d26d.
+    The test fails on a clean HEAD.
+  blast_radius: One known red test. The USB-kit plan lists it in KNOWN_FAILURES of its checker and does not edit the test (G36).
+- id: FLEET-INSTALL-RETAINED-CREDITS-TESTS
+  title: The Linux install keeps credits test files that import tests it removes
+  severity: medium
+  component: infrastructure
+  status: open
+  discovered: '2026-11-15'
+  root_cause: The instantiate script keeps retained credits Python test files that import test modules it removes, so test_no_retained_python_file_needs_a_removed_tool and test_retained_python_tests_collect
+    in scripts/tests/test_instantiate_credits_nonwin.py fail on a clean HEAD since fb00d40.
+  blast_radius: Two known red tests, and a Linux install whose kept tests cannot collect. The USB-kit plan lists both in KNOWN_FAILURES of its checker and edits neither the tests nor the instantiate script
+    (EA-2).
+- id: FLEET-DOCKER-CI-LANE-UNTRACKED
+  title: The Docker CI-runner lane files of the dedicated Linux CI member are not in the framework
+  severity: medium
+  component: infrastructure
+  status: open
+  discovered: '2026-11-15'
+  root_cause: The files that set up the Docker CI lane (the runner image Dockerfile and its entry point, docker_setup.sh, host_prep.sh, zv-slot.sh, zv-slot@.service, zv-jit, slots.conf, the seccomp
+    profile and the hub's JIT feeder) were written on 2026-11-14 in the hub's private fleet folder only. On 2026-11-15 the image got a fix there (openssh-client, because GitHub's ubuntu-24.04 image
+    ships ssh-keygen and the commit-signing unit tests call it).
+  blast_radius: A new Linux CI member would be set up without these files or the fix, and would fail the same tests. Move the files into .agent/fleet/ with the host names and addresses taken out, and
+    connect them to the Linux section of bootstrap.md (FLEET-UNIX-MEMBER-BOOTSTRAP-EMPTY).

@@ -110,7 +110,10 @@ The script needs PowerShell 7 (`pwsh`). Windows PowerShell 5.1 can't open a whol
 The same drive installs every machine. It doesn't change when it's used, so it needs no rewriting between
 machines.
 
-Then connect the machine to the hub with the Linux steps in [../usb/README.md](../usb/README.md).
+Then connect the machine to the hub with the Linux steps in [../usb/README.md](../usb/README.md). Those steps
+also install Claude Code and Codex.
+
+To start the kit in a terminal, use the `bash` line in [../usb/README.md](../usb/README.md), with no `sudo`.
 
 ## After the setup
 
