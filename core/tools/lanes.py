@@ -149,6 +149,7 @@ import collections
 import contextlib
 import ctypes
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -166,6 +167,7 @@ import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
 
 if sys.platform == "win32":
@@ -976,6 +978,16 @@ def _write_card(
                 card, others, now=datetime.now(timezone.utc), ignorecase=ignorecase
             )
             if reason is not None:
+                if reason.startswith("owns_overlap:"):
+                    # MEU-943 S5: the path that another lane owns, and that lane.
+                    _, holder, entry = reason.split(":", 2)
+                    _record_event(
+                        kind="busy_observed",
+                        writer="lanes",
+                        reason="claim_overlap",
+                        scope=_scope_token(entry),
+                        blocker=holder,
+                    )
                 raise Refusal(reason, _conflict_detail(reason, lanes_dir, others))
         else:
             if current is None:
@@ -2461,6 +2473,7 @@ def _cmd_commit(
         if proc.returncode != 0 or after == before:
             kind = _commit_failure(worktree, proc) if proc.returncode != 0 else "git"
             print(f"commit_fail:{kind}")
+            _record_refusal(f"commit_fail:{kind}", args)
             for stream in (proc.stdout, proc.stderr):
                 text = stream.decode("utf-8", "replace").strip()
                 if text:
@@ -2472,6 +2485,7 @@ def _cmd_commit(
             kind, detail = defect
             print(f"commit_fail:{kind}")
             print(detail)
+            _record_refusal(f"commit_fail:{kind}", args)
             _roll_back_commit(worktree, branch, before, after)
             return EXIT_REFUSED
     finally:
@@ -2644,6 +2658,15 @@ def _op_lease(
             poll_s=poll_s,
         )
     except os_lease.Busy as busy:
+        # MEU-943 S7: the op is held by another process (OL wrote os_lease_busy too);
+        # the blocker is the holder pid of the lease body (execution review R1-F8).
+        _record_event(
+            kind="busy_observed",
+            writer="lanes",
+            reason="op_busy",
+            scope=op,
+            blocker=os_lease._holder_pid(busy.holder_body),
+        )
         print("op_busy")
         print(_busy_detail(busy, OP_LEASE_WAIT_S, f"the op lease of {op}"))
         return None
@@ -2668,12 +2691,16 @@ def _recovery_card(common: Path, land: LandOp) -> Card:
         )
     path = _card_path(common, land.lane)
     if not path.is_file():
+        # MEU-943 S9: the op can no longer close.
+        _record_superseded(land)
         raise Refusal(
             "card_superseded",
             f"the journal of {land.op} names lane {land.lane}, which has no card",
         )
     card = _load_card(path)
     if card["generation"] != land.generation or card["op"] not in (None, land.op):
+        # MEU-943 S9: recovery never touches another generation or op.
+        _record_superseded(land)
         raise Refusal(
             "card_superseded",
             f"the card of {land.lane} is generation {card['generation']} with op "
@@ -2908,6 +2935,16 @@ def _recover_abandon(
             poll_s=poll_s,
             argv=argv,
         )
+    # MEU-943 S9: the op ends abandoned. The card can already be active (the rebase step
+    # set it back after a refusal, execution review R1-F3); the writer keeps one
+    # land_ended per op, so a second recovery writes no record (R1-F6).
+    _record_event(
+        kind="land_ended",
+        writer="lanes",
+        reason="land_abandoned",
+        scope=land.op,
+        outcome="abandoned",
+    )
     print(f"land_abandoned:{land.op}")
     return 0
 
@@ -3333,7 +3370,7 @@ def _rebase(
         )
         if violation is not None:
             raise violation
-    except Refusal:
+    except Refusal as exc:
         _remove_candidate(top, candidate)
         _set_card(
             common,
@@ -3347,6 +3384,15 @@ def _rebase(
         )
         if conflicted:
             _journal(land, LAND_CONFLICT, done=True)
+        # MEU-943 S9 (execution review R1-F3): the card is active again and the op can
+        # never close; it ends abandoned, with the refusal code as the reason.
+        _record_event(
+            kind="land_ended",
+            writer="lanes",
+            reason=exc.reason.partition(":")[0],
+            scope=land.op,
+            outcome="abandoned",
+        )
         raise
     return rebased
 
@@ -5188,6 +5234,21 @@ def _ready(
     return tree
 
 
+def _record_superseded(land: LandOp) -> None:
+    """MEU-943 S9: one ``land_ended`` ``superseded`` for an op that can no longer close.
+
+    A recovery that runs again writes no second record: the writer keeps one
+    ``land_ended`` per op (execution review R1-F6).
+    """
+    _record_event(
+        kind="land_ended",
+        writer="lanes",
+        reason="card_superseded",
+        scope=land.op,
+        outcome="superseded",
+    )
+
+
 def _landing_card(card: Card, land: LandOp) -> None:
     """A step after step 3 needs the card ``landing`` with this op.
 
@@ -5195,6 +5256,8 @@ def _landing_card(card: Card, land: LandOp) -> None:
         Refusal: ``card_superseded``.
     """
     if card["state"] != "landing" or card["op"] != land.op:
+        # MEU-943 S9: the op can no longer close (found by SITE_CENSUS).
+        _record_superseded(land)
         raise Refusal(
             "card_superseded",
             f"the card of {land.lane} is {card['state']} with op {card['op']}; "
@@ -6388,6 +6451,7 @@ def _cmd_landed(args: argparse.Namespace) -> int:
         print(f"not_landed:{exc.reason}")
         if exc.detail:
             sys.stderr.write(f"{exc.detail}\n")
+        _record_refusal(exc.reason, args)
         return EXIT_REFUSED
     print(f"landed:{l0}:{landed}")
     return 0
@@ -6432,13 +6496,16 @@ def _cmd_ownership_check(args: argparse.Namespace) -> int:
         )
         sessions = _parse_session_ownership(block)
     except Refusal as exc:
-        print(f"ownership_bad:{exc.reason.removeprefix('ownership_bad:')}")
+        code = exc.reason.removeprefix("ownership_bad:")
+        print(f"ownership_bad:{code}")
         if exc.detail:
             sys.stderr.write(f"{exc.detail}\n")
+        _record_refusal(code, args)
         return EXIT_REFUSED
     except (OSError, UnicodeDecodeError) as exc:
         print("ownership_bad:io_error")
         sys.stderr.write(f"{exc}\n")
+        _record_refusal("io_error", args)
         return EXIT_REFUSED
     overlaps = _session_overlaps(sessions, ignorecase=ignorecase)
     for line in overlaps:
@@ -6448,6 +6515,7 @@ def _cmd_ownership_check(args: argparse.Namespace) -> int:
             "same-tier sessions own overlapping paths: move one to another tier "
             "or split the owns entries\n"
         )
+        _record_refusal(overlaps[0], args)
         return EXIT_REFUSED
     print("ownership_ok")
     return 0
@@ -6528,6 +6596,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
     for line in findings:
         print(line)
     if findings:
+        _record_refusal(findings[0], args)
         return EXIT_REFUSED
     print("check_ok")
     return 0
@@ -7158,7 +7227,7 @@ def _lease_free(lease: str) -> bool:
         return True
     try:
         probe = os_lease.acquire(
-            path, wait_s=0.0, body=_lock_body([*_DEPS_ARGV, "probe"])
+            path, wait_s=0.0, body=_lock_body([*_DEPS_ARGV, "probe"]), record=False
         )
     except os_lease.Busy:
         return False
@@ -7740,10 +7809,99 @@ def main(
         print(f"refused: {exc.reason}")
         if exc.detail:
             print(exc.detail)
+        _record_refusal(exc.reason, args)
         return EXIT_REFUSED
     except OSError as exc:
         print(f"refused: io_error\n{exc}")
+        _record_refusal("io_error", args)
         return EXIT_REFUSED
+
+
+# --- MEU-943: the coordination-event records (design item 3a) -------------------------
+
+_CE_FILE = "coordination_events.py"
+_ce_cache: list[ModuleType | None] = []
+
+
+def _load_ce() -> ModuleType | None:
+    """The coordination-event writer, loaded by file path; ``None`` when it cannot load.
+
+    No module-level import and no ``sys.path`` change (MEU-943 design item 3a): a copy
+    of this file without the writer beside it behaves as before.
+    """
+    path = Path(__file__).with_name(_CE_FILE)
+    try:
+        if not path.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location(
+            "_lanes_coordination_events", path
+        )
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception:  # noqa: BLE001 - a writer that cannot load writes nothing (§5.4)
+        return None
+    return module
+
+
+def _record_refusal(printed: object, args: argparse.Namespace) -> None:
+    """MEU-943 S10: the ``refused`` record of a refusal exit of the command.
+
+    ``main`` calls it for a raised refusal, and a handler for a refusal that it returns
+    (execution review R1-F2); each refusal exit writes one record. ``reason`` is the
+    printed code before the first ``:`` and ``blocker`` the rest (``split_code``);
+    ``scope`` is the op of the call, else the command.
+    """
+    if not _ce_cache:
+        _ce_cache.append(_load_ce())
+    module = _ce_cache[0]
+    if module is None:
+        return
+    try:
+        reason, blocker = module.split_code(printed)
+        scope = module.token(getattr(args, "op", None)) or module.token(args.command)
+    except Exception:  # noqa: BLE001 - a record never changes the caller (§5.4)
+        return
+    _record_event(
+        kind="refused",
+        writer="lanes",
+        reason=reason,
+        scope=scope or "main",
+        blocker=blocker,
+    )
+
+
+def _scope_token(value: object) -> str | None:
+    """``value`` as a record token that keeps its identity (execution review R1-F4).
+
+    A valid owns entry can hold a space or a non-ASCII letter; ``scope_token`` encodes
+    it. ``None`` when the writer cannot load; the record is then not written anyway.
+    """
+    if not _ce_cache:
+        _ce_cache.append(_load_ce())
+    module = _ce_cache[0]
+    if module is None:
+        return None
+    try:
+        encoded = module.scope_token(value)
+    except Exception:  # noqa: BLE001 - a record never changes the caller (§5.4)
+        return None
+    return encoded if isinstance(encoded, str) else None
+
+
+def _record_event(**fields: object) -> None:
+    """Write one coordination-event record; never raises, and the result is ignored."""
+    if not _ce_cache:
+        _ce_cache.append(_load_ce())
+    module = _ce_cache[0]
+    if module is None:
+        return
+    try:
+        fields["blocker"] = module.token(fields.get("blocker"))
+        module.record(**fields)
+    except Exception:  # noqa: BLE001 - a record never changes the caller (§5.4)
+        return
 
 
 if __name__ == "__main__":

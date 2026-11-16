@@ -53,6 +53,8 @@ R48_COMPONENTS: tuple[str, ...] = (
     "tools/lanes.py",
     "tools/os_lease.py",
     "tools/ref_guard.py",
+    # MEU-943 S12: the coordination-event writer.
+    "tools/coordination_events.py",
 )
 GOVERNANCE = ".agent/run-parameters/governance"
 GOVERNANCE_DIFFS: dict[str, str] = {

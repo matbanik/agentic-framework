@@ -36,6 +36,7 @@ import argparse
 import base64
 import binascii
 import contextlib
+import importlib.util
 import json
 import os
 import re
@@ -51,6 +52,7 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from types import ModuleType
 from typing import Any, Protocol, TypedDict, cast
 
 from tools import os_lease
@@ -1015,6 +1017,14 @@ def _bind_parent(repo: rp.Repo, branch: str, parent: str) -> None:
         raise rp.Refusal("detached_head", head or "detached")
     current = _ref(repo, branch)
     if current != parent:
+        # MEU-943 S6: the branch moved under the packet; the blocker is its tip.
+        _record_event(
+            kind="busy_observed",
+            writer="commit_batch",
+            reason="parent_moved",
+            scope=branch,
+            blocker=current,
+        )
         raise rp.Refusal("parent_moved", f"{parent}!={current}")
 
 
@@ -1337,7 +1347,38 @@ def _land_entry(
     _check_land_evidence(phase, payload, f"{ctx.op} {phase}")
     _append(ctx, phase, status, payload)
     ctx.raw = rp._json_bytes(ctx.record)
+    _land_event(ctx, phase, status)
     rp._crash(ctx.repo, f"{phase}:{status}")
+
+
+def _land_event(ctx: LandOp, phase: str, status: str) -> None:
+    """MEU-943 S8/S9: the coordination record of one land journal entry, if it has one.
+
+    The first entry of the journal opens the op (``land_started``); ``land:closed`` done is
+    the ``closed`` outcome (it follows the ref update that landed the batch); a refused
+    ``land:sync`` is a ``step_refused`` record, because ``land recover`` resumes that phase
+    and the op stays open (plan review R1-F7).
+    """
+    if len(ctx.journal) == 1:
+        _record_event(
+            kind="land_started",
+            writer="commit_batch",
+            reason="land_opened",
+            scope=ctx.op,
+        )
+    if phase == "land:closed" and status == "done":
+        _record_event(
+            kind="land_ended",
+            writer="commit_batch",
+            reason="land_closed",
+            scope=ctx.op,
+            outcome="closed",
+        )
+    elif phase == "land:sync" and status.startswith("refused:"):
+        code = status.removeprefix("refused:").partition(":")[0]
+        _record_event(
+            kind="step_refused", writer="commit_batch", reason=code, scope=ctx.op
+        )
 
 
 def land_start(
@@ -1957,6 +1998,16 @@ def _update_ref(ctx: Op, commit: str) -> None:
     if proc.returncode != 0:
         current = _ref(ctx.repo, ctx.packet.branch)
         _append(ctx, "published", "refused:publish_refused", {"ref": current})
+        if isinstance(ctx, _LandCandidate):
+            # MEU-943 S9: ``land recover`` has no rule for this point (recovery_unclear).
+            _record_event(
+                kind="land_ended",
+                writer="commit_batch",
+                reason="publish_refused",
+                scope=ctx.op,
+                blocker=current,
+                outcome="refused",
+            )
         raise rp.Refusal("publish_refused", current)
 
 
@@ -2189,6 +2240,15 @@ def _step_reconciled(ctx: Op, resume: bool) -> None:
         "reconciled",
         {key: summary[key] for key in ("commit", "parent", "tree", "index")},
     )
+    if ctx.act != LAND_ACT and not isinstance(ctx, _LandCandidate):
+        # MEU-943 S14 (plan review R1-F6): a land op is counted by its ``land_ended``.
+        _record_event(
+            kind="committed",
+            writer="commit_batch",
+            reason="packet_reconciled",
+            scope=ctx.op,
+            blocker=summary.get("commit"),
+        )
 
 
 STEPS: dict[str, Callable[[Op, bool], None]] = {
@@ -2323,7 +2383,7 @@ def _os_lease_held(path: Path) -> bool:
     if not path.is_file():
         return False
     try:
-        lease = os_lease.acquire(path, wait_s=0, body=b"")
+        lease = os_lease.acquire(path, wait_s=0, body=b"", record=False)
     except os_lease.Busy:
         return True
     except OSError as exc:
@@ -2629,6 +2689,15 @@ def land_blocker(repo: rp.Repo, op: str) -> rp.Refusal | None:
                 f"land {land.op} is between publication and close; run lanes.py land "
                 f"recover --op {land.op}",
             )
+    if busy is not None:
+        # MEU-943 S7: the publication of ``op`` waits for the other land op.
+        _record_event(
+            kind="busy_observed",
+            writer="commit_batch",
+            reason="land_busy",
+            scope=op,
+            blocker=busy.reason.partition(":")[2],
+        )
     return busy
 
 
@@ -4740,6 +4809,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         code, out = handler(repo, args)
     except rp.Refusal as exc:
         rp._log("commit_refused", reason=exc.reason, detail=exc.detail)
+        _record_refusal(exc.reason, getattr(args, "op", None))
         _emit({"result": "refused", "reason": exc.reason})
         return rp.EXIT_REFUSED
     except Stopped as exc:
@@ -4755,6 +4825,73 @@ def main(argv: Sequence[str] | None = None) -> int:
         return rp.EXIT_CRASH
     _emit(out)
     return code
+
+
+# --- MEU-943: the coordination-event records (design item 3a) -------------------------
+
+_CE_FILE = "coordination_events.py"
+_ce_cache: list[ModuleType | None] = []
+
+
+def _load_ce() -> ModuleType | None:
+    """The coordination-event writer, loaded by file path; ``None`` when it cannot load.
+
+    No module-level import and no ``sys.path`` change (MEU-943 design item 3a): a copy
+    of this file without the writer beside it behaves as before.
+    """
+    path = Path(__file__).with_name(_CE_FILE)
+    try:
+        if not path.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location(
+            "_commit_batch_coordination_events", path
+        )
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception:  # noqa: BLE001 - a writer that cannot load writes nothing (§5.4)
+        return None
+    return module
+
+
+def _record_refusal(printed: object, op: object) -> None:
+    """MEU-943 S10: the ``refused`` record of a refusal exit of ``main``.
+
+    ``reason`` is the printed code before the first ``:`` and ``blocker`` the rest when it is
+    a token; ``scope`` is the op of the call, or ``main`` when the call names none.
+    """
+    if not _ce_cache:
+        _ce_cache.append(_load_ce())
+    module = _ce_cache[0]
+    if module is None:
+        return
+    try:
+        reason, blocker = module.split_code(printed)
+        scope = module.token(op) or "main"
+    except Exception:  # noqa: BLE001 - a record never changes the caller (§5.4)
+        return
+    _record_event(
+        kind="refused",
+        writer="commit_batch",
+        reason=reason,
+        scope=scope,
+        blocker=blocker,
+    )
+
+
+def _record_event(**fields: object) -> None:
+    """Write one coordination-event record; never raises, and the result is ignored."""
+    if not _ce_cache:
+        _ce_cache.append(_load_ce())
+    module = _ce_cache[0]
+    if module is None:
+        return
+    try:
+        fields["blocker"] = module.token(fields.get("blocker"))
+        module.record(**fields)
+    except Exception:  # noqa: BLE001 - a record never changes the caller (§5.4)
+        return
 
 
 if __name__ == "__main__":

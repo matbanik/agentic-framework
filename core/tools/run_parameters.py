@@ -177,6 +177,9 @@ REQUIRED_COMPONENTS: tuple[str, ...] = (
     "tools/lanes.py",
     "tools/os_lease.py",
     "tools/ref_guard.py",
+    # MEU-943 S12 (parking design §5.4): the coordination-event writer that the lane
+    # tools and this module load by file path.
+    "tools/coordination_events.py",
 )
 #: Opt-in, so not in ``REQUIRED_COMPONENTS``: a repository that has this file must pin it.
 LANE_ROUTE = ".agent/lane-route.json"
@@ -6986,6 +6989,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
             )
             return EXIT_OK
+        _record_refusal(exc.reason, verb)
         _emit(_refusal(exc.reason, effective=effective))
         return EXIT_REFUSED
     except NonAuthorizing as exc:
@@ -7002,8 +7006,79 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         )
         return EXIT_CRASH
+    if code == EXIT_REFUSED and out.get("result") == "refused":
+        # MEU-943 S10 (execution review R1-F2): a refusal that the handler returns
+        # (``_refusal``) writes its record as a raised one does.
+        _record_refusal(out.get("reason"), verb)
     _emit(out)
     return code
+
+
+# --- MEU-943: the coordination-event records (design item 3a) -------------------------
+
+_CE_FILE = "coordination_events.py"
+_ce_cache: list[ModuleType | None] = []
+
+
+def _load_ce() -> ModuleType | None:
+    """The coordination-event writer, loaded by file path; ``None`` when it cannot load.
+
+    No module-level import and no ``sys.path`` change (MEU-943 design item 3a): a copy
+    of this file without the writer beside it behaves as before.
+    """
+    path = Path(__file__).with_name(_CE_FILE)
+    try:
+        if not path.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location(
+            "_run_parameters_coordination_events", path
+        )
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception:  # noqa: BLE001 - a writer that cannot load writes nothing (§5.4)
+        return None
+    return module
+
+
+def _record_refusal(printed: object, scope: object) -> None:
+    """MEU-943 S10: the ``refused`` record of a refusal exit of ``main``.
+
+    ``reason`` is the printed code before the first ``:`` and ``blocker`` the rest when it is
+    a token; ``scope`` is the verb of the call.
+    """
+    if not _ce_cache:
+        _ce_cache.append(_load_ce())
+    module = _ce_cache[0]
+    if module is None:
+        return
+    try:
+        reason, blocker = module.split_code(printed)
+        where = module.token(scope) or "main"
+    except Exception:  # noqa: BLE001 - a record never changes the caller (§5.4)
+        return
+    _record_event(
+        kind="refused",
+        writer="run_parameters",
+        reason=reason,
+        scope=where,
+        blocker=blocker,
+    )
+
+
+def _record_event(**fields: object) -> None:
+    """Write one coordination-event record; never raises, and the result is ignored."""
+    if not _ce_cache:
+        _ce_cache.append(_load_ce())
+    module = _ce_cache[0]
+    if module is None:
+        return
+    try:
+        fields["blocker"] = module.token(fields.get("blocker"))
+        module.record(**fields)
+    except Exception:  # noqa: BLE001 - a record never changes the caller (§5.4)
+        return
 
 
 if __name__ == "__main__":

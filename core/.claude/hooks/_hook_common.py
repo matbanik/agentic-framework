@@ -19,6 +19,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 # Segment separators for a shell command line. A pipeline inside one segment is the
 # unit both hooks reason about; ``;``, ``&&``, ``||`` and newlines start a new segment.
@@ -523,11 +524,36 @@ def emit_decision(decision: str, reason: str) -> None:
     sys.stdout.flush()
 
 
-def append_log(hook: str, data: HookInput, decision: str) -> None:
+# MEU-943 AC-943.1: the reason code of a hook-log line (design §5.1, PK1-D3).
+LOG_REASON_RE = re.compile(r"^[a-z][a-z0-9_:-]{0,63}$")
+INVALID_REASON = "invalid_reason"
+
+
+def log_ts() -> str:
+    """The current UTC time as ISO 8601 with milliseconds and a ``Z`` suffix."""
+    stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return stamp.replace("+00:00", "Z")
+
+
+def log_reason(reason: object, decision: object) -> str:
+    """``reason`` when it fits ``LOG_REASON_RE``; with no reason, the decision.
+
+    Any other value gives ``invalid_reason``, so a bad code never raises.
+    """
+    code = decision if reason is None else reason
+    if isinstance(code, str) and LOG_REASON_RE.fullmatch(code):
+        return code
+    return INVALID_REASON
+
+
+def append_log(
+    hook: str, data: HookInput, decision: str, reason: str | None = None
+) -> None:
     """Append one JSON line to ``{{PROJECT_NAME_UPPER}}_HOOK_LOG`` when set; never raises.
 
     A write failure is swallowed (fail-open): the audit log is evidence for the
-    smoke receipt, and logging must never be able to block a tool call.
+    smoke receipt, and logging must never be able to block a tool call. The line
+    keeps its five keys and adds ``ts`` and ``reason`` after them (AC-943.1).
     """
     target = os.environ.get("{{PROJECT_NAME_UPPER}}_HOOK_LOG")
     if not target:
@@ -539,6 +565,8 @@ def append_log(hook: str, data: HookInput, decision: str) -> None:
             "permission_mode": data.permission_mode,
             "command": data.command,
             "decision": decision,
+            "ts": log_ts(),
+            "reason": log_reason(reason, decision),
         }
     )
     try:

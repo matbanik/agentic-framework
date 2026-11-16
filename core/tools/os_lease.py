@@ -18,11 +18,15 @@ all of them speak one on-disk protocol (design §10b):
 from __future__ import annotations
 
 import errno
+import importlib.util
+import json
 import os
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 if sys.platform == "win32":
     import msvcrt
@@ -123,11 +127,73 @@ def _write_body(fd: int, body: bytes) -> None:
         view = view[written:]
 
 
-def acquire(path: Path, *, wait_s: float, body: bytes, poll_s: float = POLL_S) -> Lease:
+_CE_FILE = "coordination_events.py"
+_ce_cache: list[ModuleType | None] = []
+
+
+def _load_ce() -> ModuleType | None:
+    """The coordination-event writer, loaded by file path; ``None`` when it cannot load.
+
+    No module-level import and no ``sys.path`` change (MEU-943 design item 3a): a copy
+    of this file without the writer beside it behaves as before.
+    """
+    path = Path(__file__).with_name(_CE_FILE)
+    try:
+        if not path.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location(
+            "_os_lease_coordination_events", path
+        )
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception:  # noqa: BLE001 - a writer that cannot load writes nothing (§5.4)
+        return None
+    return module
+
+
+def _record_event(**fields: Any) -> None:
+    """Write one coordination-event record; never raises, and the result is ignored."""
+    if not _ce_cache:
+        _ce_cache.append(_load_ce())
+    module = _ce_cache[0]
+    if module is None:
+        return
+    try:
+        fields["blocker"] = module.token(fields.get("blocker"))
+        module.record(**fields)
+    except Exception:  # noqa: BLE001 - a record never changes the caller (§5.4)
+        return
+
+
+def _holder_pid(body: bytes) -> str | None:
+    """The ``pid`` of a holder body as text, or ``None`` when the body names none."""
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    pid = data.get("pid") if isinstance(data, dict) else None
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        return str(pid)
+    return None
+
+
+def acquire(
+    path: Path,
+    *,
+    wait_s: float,
+    body: bytes,
+    poll_s: float = POLL_S,
+    record: bool = True,
+) -> Lease:
     """Take the lock on ``path``, polling up to ``wait_s``, then write ``body``.
 
     ``wait_s`` 0 is one attempt. The body is written only after the lock is
-    held; no token is exported and the environment is not changed.
+    held; no token is exported and the environment is not changed. A busy
+    result writes one ``busy_observed`` record (``os_lease_busy``, MEU-943 S4)
+    unless ``record`` is ``False``: a probe that finds the lease busy is not a
+    wait.
 
     Raises:
         ValueError: ``wait_s`` is negative or not finite, ``poll_s`` is not
@@ -160,7 +226,16 @@ def acquire(path: Path, *, wait_s: float, body: bytes, poll_s: float = POLL_S) -
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise Busy(path, _read_lease_fd(fd))
+                holder = _read_lease_fd(fd)
+                if record:
+                    _record_event(
+                        kind="busy_observed",
+                        writer="os_lease",
+                        reason="os_lease_busy",
+                        scope=Path(path).name,
+                        blocker=_holder_pid(holder),
+                    )
+                raise Busy(path, holder)
             time.sleep(min(poll_s, remaining))
     except BaseException:
         os.close(fd)

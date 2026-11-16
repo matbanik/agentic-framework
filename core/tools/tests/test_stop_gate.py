@@ -18,6 +18,7 @@ import importlib
 import io
 import json
 import os
+import re
 import sys
 import types
 from pathlib import Path
@@ -371,12 +372,18 @@ def test_main_appends_one_log_line_per_decision(
     _make_plan(tmp_path, "2026-06-22-open", _TASK_DONE)
     assert _run_main(monkeypatch, tmp_path, _STOP_PAYLOAD) == 0
     capsys.readouterr()
-    assert _log_lines(log)[-1] == {
+    # MEU-943 AC-943.1 (design §5.1): ts and reason follow the existing keys.
+    last = _log_lines(log)[-1]
+    assert last == {
         "hook": "stop_gate",
         "session_id": "sess-1",
         "decision": "allow",
         "blocks": 0,
+        "ts": last.get("ts"),
+        "reason": "allow",
     }
+    assert list(last)[-2:] == ["ts", "reason"]
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", str(last["ts"]))
 
 
 def test_main_without_hook_log_env_writes_nothing(
@@ -739,6 +746,13 @@ def test_main_release_notifies_once_as_blocked(
     assert notifier.classify("Stop", call["payload"], gate) == "blocked"
 
 
+def _without_ts(lines: list[dict[str, object]]) -> list[dict[str, object]]:
+    """The log lines without the ``ts`` key (MEU-943 AC-943.1), for run-to-run comparison."""
+    return [
+        {key: value for key, value in line.items() if key != "ts"} for line in lines
+    ]
+
+
 def _gate_run(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -794,7 +808,10 @@ def test_notifier_failure_changes_nothing_but_the_log(
     assert broken[2] == base[2]
     errors = [line for line in broken[3] if "notify_error" in line.values()]
     assert len(errors) == 1
-    assert [line for line in broken[3] if line not in errors] == base[3]
+    # MEU-943 AC-943.1: each line carries its own write time; compare the other keys.
+    assert _without_ts([line for line in broken[3] if line not in errors]) == (
+        _without_ts(base[3])
+    )
     assert not any("notify_error" in line.values() for line in base[3])
 
 

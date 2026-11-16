@@ -102,6 +102,22 @@ permission to spawn. Do not reload completed independent rows wholesale after re
 3. Load only the next unchecked row's direct inputs; do not reconstruct state from the
    transcript or reload completed independent rows wholesale.
 
+#### Wait records
+
+When a row cannot run because another session holds a resource, write wait records. The stage 3 report uses them to measure how long sessions wait and what they do during the wait. Write each record with one command:
+
+`uv run python tools/coordination_events.py record --kind <kind> --session <session id> --plan <plan folder name> --row <row id> --reason <code> --scope <resource>`
+
+Write each session kind at its moment:
+
+- `wait_started`: a row cannot run because a resource is busy, for example after `quiet_busy`, `land_busy` or `op_busy`.
+- `continued_elsewhere`: after `wait_started`, the session runs another ready row or works in an isolated copy.
+- `parked`: the session stops all work on the plan.
+- `resumed`: the session starts work on the plan again.
+- `ended`: the wait ends. Add `--outcome` with one of `resumed_work`, `gave_up` or `handed_back`.
+
+Use the same `--session`, `--plan` and `--scope` in all the records of one wait. When you know the holder (a pid, an op or a lane slug), add `--blocker <holder>`. The tools write their own records (`busy_observed`, the land records and the refusals), so do not write those kinds yourself. The command writes the record to the file of `--log`, else to `coordination-events.jsonl` beside the hook log that `{{PROJECT_NAME_UPPER}}_HOOK_LOG` names. With neither, it writes nothing and prints `record_skipped no_destination`. An invalid field gives exit 2 and `record_invalid <field>`, and no record.
+
 #### Lanes (tasks with a `## Lane Ownership` section)
 
 These steps apply to a task that has a `## Lane Ownership` section, which is the default for a plan that runs in an executor worktree (`TASK-TEMPLATE.md` v2.6). A main-tree plan that omits the section with a recorded basis runs unchanged: skip this subsection.

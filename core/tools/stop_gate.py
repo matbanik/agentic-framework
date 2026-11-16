@@ -109,6 +109,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 
@@ -842,14 +843,47 @@ def _clear_counter(path: Path) -> None:
         pass
 
 
+# MEU-943 AC-943.1: the reason code of a hook-log line (design §5.1, PK1-D3).
+_LOG_REASON_RE = re.compile(r"^[a-z][a-z0-9_:-]{0,63}$")
+_INVALID_REASON = "invalid_reason"
+
+
+def _log_ts() -> str:
+    """The current UTC time as ISO 8601 with milliseconds and a ``Z`` suffix."""
+    stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return stamp.replace("+00:00", "Z")
+
+
+def _log_reason(reason: object, decision: object) -> str:
+    """``reason`` when it fits ``_LOG_REASON_RE``; with no reason, the decision.
+
+    Any other value gives ``invalid_reason``, so a bad code never raises.
+    """
+    code = decision if reason is None else reason
+    if isinstance(code, str) and _LOG_REASON_RE.fullmatch(code):
+        return code
+    return _INVALID_REASON
+
+
+def _decision_reason(prefix: str, kind: object) -> str:
+    """``<prefix>:<kind>`` when it is a reason code, else ``prefix`` (PK1-EA-8)."""
+    code = f"{prefix}:{kind}" if isinstance(kind, str) and kind else prefix
+    return code if _LOG_REASON_RE.fullmatch(code) else prefix
+
+
 def _append_log(
-    session_id: str, decision: str, blocks: int, plan: str | None = None
+    session_id: str,
+    decision: str,
+    blocks: int,
+    plan: str | None = None,
+    reason: str | None = None,
 ) -> None:
     """Append one JSON line to ``{{PROJECT_NAME_UPPER}}_HOOK_LOG`` when set; never raises.
 
     Fail-open by design: the log is evidence for the smoke receipt, and a write
     failure must never change the verdict or wedge the turn. ``plan`` (a run-parameters
-    plan) adds a ``plan`` field; legacy lines keep their four fields.
+    plan) adds a ``plan`` field; legacy lines keep their four fields. ``ts`` and
+    ``reason`` follow them (AC-943.1); with no ``reason`` the reason is the decision.
     """
     fields: dict[str, object] = {
         "hook": "stop_gate",
@@ -859,15 +893,25 @@ def _append_log(
     }
     if plan is not None:
         fields["plan"] = plan
-    _append_log_line(fields)
+    _append_log_line(fields, reason)
 
 
-def _append_log_line(fields: dict[str, object]) -> None:
-    """Append ``fields`` as one JSON line to ``{{PROJECT_NAME_UPPER}}_HOOK_LOG`` when set; never raises."""
+def _append_log_line(fields: dict[str, object], reason: str | None = None) -> None:
+    """Append ``fields`` as one JSON line to ``{{PROJECT_NAME_UPPER}}_HOOK_LOG`` when set; never raises.
+
+    ``ts`` and ``reason`` are added after ``fields`` (AC-943.1); with no ``reason``
+    the reason is the ``decision`` field.
+    """
     target = os.environ.get("{{PROJECT_NAME_UPPER}}_HOOK_LOG")
     if not target:
         return
-    line = json.dumps(fields)
+    line = json.dumps(
+        {
+            **fields,
+            "ts": _log_ts(),
+            "reason": _log_reason(reason, fields.get("decision")),
+        }
+    )
     try:
         with open(target, "a", encoding="utf-8") as handle:
             handle.write(line + "\n")
@@ -1032,7 +1076,9 @@ def main(argv: list[str] | None = None) -> int:
     if blocks > MAX_CONSECUTIVE_BLOCKS:
         _clear_counter(counter_file)
         if plan is None:
-            _append_log(session_id, "release", blocks)
+            _append_log(
+                session_id, "release", blocks, reason=_decision_reason("release", kind)
+            )
         else:
             # A run-parameters plan: the loop-breaker is a non-DONE emergency release.
             _append_log(session_id, "emergency_release", blocks, plan)
@@ -1045,7 +1091,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0  # fail-open: never wedge a stuck turn
 
     _write_counter(counter_file, blocks)
-    _append_log(session_id, "block", blocks)
+    _append_log(session_id, "block", blocks, reason=_decision_reason("block", kind))
     print(json.dumps({"decision": "block", "reason": reason}))  # stdout = verdict
     return 0
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,8 @@ UPPER = "ADOPTER" if _UPPER.startswith("{" * 2) else _UPPER
 APPROVED = f"{UPPER}_COMMIT_APPROVED"
 GRANT = f"{UPPER}_COMMIT_GRANT"
 HOOK_LOG_ENV = "{{PROJECT_NAME_UPPER}}_HOOK_LOG"
+# MEU-943 AC-943.1: the ts of a hook-log record (UTC, ISO 8601, milliseconds, Z).
+HOOK_LOG_TS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
 
 COMMIT_GATE_COMMAND = 'python "${CLAUDE_PROJECT_DIR}/.claude/hooks/commit_gate.py"'
 # D-19 A (M7 H-8, D-40 A): the canonical push, merge and tag spellings are harness ``ask``
@@ -305,13 +308,18 @@ class TestCommitGate:
         _decision(_run(COMMIT_GATE, json.dumps(_payload("git status")), env))
         lines = _read_log(log)
         assert len(lines) == 1
+        # MEU-943 AC-943.1 (design §5.1): ts and reason follow the five keys.
         assert lines[0] == {
             "hook": "commit_gate",
             "session_id": "sess-test",
             "permission_mode": "bypassPermissions",
             "command": "git commit -m x",
             "decision": "deny",
+            "ts": lines[0].get("ts"),
+            "reason": "deny",
         }
+        assert list(lines[0])[-2:] == ["ts", "reason"]
+        assert HOOK_LOG_TS.fullmatch(str(lines[0]["ts"]))
 
 
 # --- run-parameters B-3: the commit_gate classifier (R§4.7) ----------------------------

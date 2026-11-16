@@ -86,6 +86,10 @@ uv run python tools/lanes.py deps end --worktree <path>  # After the dependency 
 pwsh -NoProfile -File tools/Invoke-CodexDispatch.ps1 -ModelClass <non-review class> -NonReviewDispatch -ResumeDispatchId <id> | -ForkDispatchId <id> -DispatchId <new> ...  # Continue (resume) or branch (fork) the Codex session recorded in <OutputDir>/<id>/status.json session_id; the switches are exclusive; review classes, -Kind and -LoopId dispatches refuse both (resume_refused_review_class); every refusal is named resume_* on stderr, exit 1, before any launch. POSIX: tools/Invoke-CodexDispatch.sh --ResumeDispatchId|--ForkDispatchId
 pwsh -NoProfile -File tools/Invoke-ClaudeDispatch.ps1 -ModelClass <class> [-ResumeDispatchId <id> | -ForkDispatchId <id>] -ValidateOnly ...  # Headless Claude through the wrapper (registry class for the claude-p harness, --session-id recorded in status.json); -ValidateOnly checks the arguments, paths and continuation source and prints dispatch_args_ok without launching claude; same resume_* refusals as the Codex wrapper
 
+# Coordination events (wait records and the stage 3 metrics, MEU-943)
+uv run python tools/coordination_events.py record --kind <kind> --session <session> --plan <plan> --row <row> --reason <code> --scope <resource> [--blocker <holder>] [--outcome <outcome>]   # One record; exit 2 and record_invalid <field> on a bad field
+uv run python tools/coordination_events.py report --log <events.jsonl> [--hook-log <hook-log.jsonl>] [--as-of <ts>] [--json]   # One line per metric, or one JSON object
+
 # Development (current scaffold)
 pytest --cov=packages/core --cov-report=term            # Coverage (advisory)
 
