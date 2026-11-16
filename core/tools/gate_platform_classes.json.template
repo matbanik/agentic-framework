@@ -1,0 +1,10 @@
+{
+ "schema": "gate-platform/1",
+ "stage_source": {
+  "path": "",
+  "name": ""
+ },
+ "stages": {},
+ "suites": {},
+ "tests": []
+}

@@ -134,6 +134,7 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 | `tools/Invoke-ClaudeDispatch.ps1` | `core/tools/` | scrub (see §Accepted divergences) |
 | `tools/issue_triage.py` + `tools/issue_triage/**` | `core/tools/` |
 | `tools/meu_status.py` + `tools/meu_status/**` | `core/tools/` |
+| `tools/gate_platform.py` | `core/tools/gate_platform.py` | **Re-copy.** Byte-identical. Package-authored: `core/tools/gate_platform_classes.json.template` (empty `stages`, `suites`, `tests`) and `core/tools/tests/test_gate_platform.py` |
 | `tools/agent_notify.py` | `core/tools/agent_notify.py` | **Re-copy.** Byte-identical (stop notifications, ADOPTION-GUIDE Step 4d) |
 | `tests/unit/test_agent_notify.py` | `core/tools/tests/test_agent_notify.py` | **Re-copy.** Byte-identical; it never opens a socket |
 | _(package)_ | `core/.claude/settings.notify.example.json` | opt-in `Stop` / `Notification` / `StopFailure` hook block; never wired by default |

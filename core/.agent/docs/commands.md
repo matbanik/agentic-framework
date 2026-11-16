@@ -90,6 +90,10 @@ pwsh -NoProfile -File tools/Invoke-ClaudeDispatch.ps1 -ModelClass <class> [-Resu
 uv run python tools/coordination_events.py record --kind <kind> --session <session> --plan <plan> --row <row> --reason <code> --scope <resource> [--blocker <holder>] [--outcome <outcome>]   # One record; exit 2 and record_invalid <field> on a bad field
 uv run python tools/coordination_events.py report --log <events.jsonl> [--hook-log <hook-log.jsonl>] [--as-of <ts>] [--json]   # One line per metric, or one JSON object
 
+# Gate platform classes
+uv run python tools/gate_platform.py show --json   # Stage and test platform classes (read-only JSON)
+uv run python tools/gate_platform.py check         # Fails on a stage with no class
+
 # Development (current scaffold)
 pytest --cov=packages/core --cov-report=term            # Coverage (advisory)
 
