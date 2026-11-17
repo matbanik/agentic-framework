@@ -480,9 +480,10 @@ any more) plus one must-pass arm naming a tool that really is shipped.
 
       Do **not** add `Test-CliDispatch.ps1 -Test wrapper-contract` to this loop. It is a
       *package* gate, and several of its arms assert that `{{...}}` tokens are still
-      present and that a placeholder receipts dir is refused — both correctly false once
-      the tree is instantiated. Expect 4 failures and 1 skip there and read them as the
-      arms being inapplicable, not as a defect. Run that suite from the source repo.
+      present, which is correctly false once the tree is instantiated. Read those failures
+      and the one skip as the arms being inapplicable, not as a defect. The placeholder
+      receipts-dir arm is not among them: it assembles its token at run time, so it
+      passes in an instantiated tree too. Run that suite from the source repo.
 - [ ] `python core/tools/lint_task_contract.py --task core/templates/TASK-TEMPLATE.md --template-mode`
       → OK, and the exempt rows named in that line are still only the placeholder-command
       and `view_file` rows (a new exemption means a row stopped being checked)

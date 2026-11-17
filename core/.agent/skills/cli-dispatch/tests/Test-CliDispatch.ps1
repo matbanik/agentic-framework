@@ -611,13 +611,15 @@ sys.exit(0)
             $ok1 = ($null -eq $r1) -and ($script:OutputDirError -match 'receipts_dir_required')
             Write-TestResult "receipts dir unset refused" $ok1 "returned='$r1' err='$($script:OutputDirError)'" $sw.Elapsed.TotalSeconds
 
-            # 2. An uninstantiated placeholder. Rooted under the real temp dir on
-            #    purpose: creating it would genuinely SUCCEED, so this arm proves the
-            #    guard fired rather than that the OS happened to reject the path.
+            # 2. An uninstantiated placeholder. The token is assembled at run time from
+            #    braces and its name, because instantiation rewrites any literal token in
+            #    this file. The path sits in a fresh folder under the real temp folder, so
+            #    creating it would genuinely SUCCEED: a pass proves the guard fired.
             $sw.Restart()
             $script:ResolvedOutputDir = $null; $script:OutputDirError = $null
-            $phBase = Join-Path ([System.IO.Path]::GetTempPath()) '{{PROJECT_NAME}}'
-            $env:RECEIPTS_DIR = Join-Path $phBase 'receipts'
+            $phToken = ('{' * 2) + 'PROJECT_NAME' + ('}' * 2)
+            $phBase = Join-Path ([System.IO.Path]::GetTempPath()) ('cli-dispatch-ph-' + [guid]::NewGuid().ToString('N'))
+            $env:RECEIPTS_DIR = Join-Path (Join-Path $phBase $phToken) 'receipts'
             $r2 = Get-OutputDir
             $ok2 = ($null -eq $r2) -and ($script:OutputDirError -match 'uninstantiated_output_dir')
             Write-TestResult "placeholder receipts dir refused" $ok2 "returned='$r2' err='$($script:OutputDirError)'" $sw.Elapsed.TotalSeconds
