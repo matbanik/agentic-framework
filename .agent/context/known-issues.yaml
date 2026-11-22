@@ -281,6 +281,9 @@ issues:
   discovered: '2026-11-15'
   root_cause: The files that set up the Docker CI lane (the runner image Dockerfile and its entry point, docker_setup.sh, host_prep.sh, zv-slot.sh, zv-slot@.service, zv-jit, slots.conf, the seccomp
     profile and the hub's JIT feeder) were written on 2026-11-14 in the hub's private fleet folder only. On 2026-11-15 the image got a fix there (openssh-client, because GitHub's ubuntu-24.04 image
-    ships ssh-keygen and the commit-signing unit tests call it).
+    ships ssh-keygen and the commit-signing unit tests call it). On 2026-11-21 zv-slot.sh got a second fix there: it now also passes PYTEST_XDIST_AUTO_NUM_WORKERS=$WORKERS into each
+    container. Without it, `pytest -n auto` asks psutil for the physical core count, which sees every host core and not the container cpuset (24 on the 2026-11-14 host). The coverage job then
+    started 24 workers of about 570 MB each in an 8 GB container, and the kernel memory cgroup killed them and pytest (exit 137). A running slot loop keeps the old script until its service
+    restarts, so restart each slot only after its job ends (touch slot<n>.pause first).
   blast_radius: A new Linux CI member would be set up without these files or the fix, and would fail the same tests. Move the files into .agent/fleet/ with the host names and addresses taken out, and
     connect them to the Linux section of bootstrap.md (FLEET-UNIX-MEMBER-BOOTSTRAP-EMPTY).
