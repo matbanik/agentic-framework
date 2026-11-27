@@ -145,6 +145,7 @@ sessions in one tier whose ``owns`` sets overlap. A failed check prints
 from __future__ import annotations
 
 import argparse
+import base64
 import collections
 import contextlib
 import ctypes
@@ -3300,6 +3301,62 @@ def _freeze(
     return land, landing, parent, owns, mnt
 
 
+class ReplayConflict(Exception):
+    """A rebase of ``_replay_onto`` stopped on conflicts; ``paths`` lists them, sorted.
+
+    The rebase is aborted before this is raised, so the candidate is back at the tip.
+    Each caller turns it into its own refusal (the lane ``land_conflict`` with its
+    journal entry, the replay ``land_conflict`` with the candidate removed).
+    """
+
+    def __init__(self, onto: str, tip: str, paths: Sequence[str]) -> None:
+        super().__init__(f"rebasing {tip} onto {onto} conflicts: {', '.join(paths)}")
+        self.onto = onto
+        self.tip = tip
+        self.paths = sorted(paths)
+
+
+def _replay_onto(candidate: Path, onto: str, upstream: str, tip: str) -> str:
+    """Rebase the commits ``upstream``..``tip`` onto ``onto`` in ``candidate`` (L1).
+
+    The candidate's detached ``HEAD`` moves to ``tip`` first when it is elsewhere,
+    then ``git -c core.longpaths=true -c rebase.updateRefs=false rebase --onto
+    <onto> <upstream>`` runs, so no branch of any repository moves. The lane
+    land (``_rebase``) and the replay land (``land replay``) share this step.
+
+    Returns:
+        The rebased ``HEAD`` of the candidate.
+
+    Raises:
+        ReplayConflict: the rebase stopped on unmerged paths (it is aborted first).
+        Refusal: ``git_failed`` for any other git failure.
+    """
+    head = _git(candidate, "rev-parse", "--verify", "HEAD")
+    if head.returncode != 0 or head.stdout.decode("utf-8", "replace").strip() != tip:
+        _git_text(candidate, "checkout", "--quiet", "--detach", tip)
+    proc = _git(
+        candidate,
+        *GIT_LONGPATHS,
+        "-c",
+        "rebase.updateRefs=false",
+        "rebase",
+        "--onto",
+        onto,
+        upstream,
+    )
+    if proc.returncode != 0:
+        conflicted: list[str] = []
+        unmerged = _git(candidate, "diff", "--name-only", "--diff-filter=U", "-z")
+        if unmerged.returncode == 0:
+            conflicted = sorted(_split_z(unmerged.stdout))
+        _git(candidate, "rebase", "--abort")
+        if conflicted:
+            raise ReplayConflict(onto, tip, conflicted)
+        output = (proc.stderr or proc.stdout).decode("utf-8", "replace").strip()
+        raise Refusal("git_failed", f"git rebase exited {proc.returncode}: {output}")
+    return _git_text(candidate, "rev-parse", "--verify", "HEAD").strip()
+
+
 def _rebase(
     land: LandOp,
     card: Card,
@@ -3331,34 +3388,17 @@ def _rebase(
     try:
         _add_candidate(top, candidate, land, l0)
         base = _git_text(candidate, "merge-base", parent, l0).strip()
-        proc = _git(
-            candidate,
-            *GIT_LONGPATHS,
-            "-c",
-            "rebase.updateRefs=false",
-            "rebase",
-            "--onto",
-            parent,
-            base,
-        )
-        if proc.returncode != 0:
-            unmerged = _git(candidate, "diff", "--name-only", "--diff-filter=U", "-z")
-            if unmerged.returncode == 0:
-                conflicted = sorted(_split_z(unmerged.stdout))
-            _git(candidate, "rebase", "--abort")
-            if conflicted:
-                _journal(land, LAND_CONFLICT, done=False)
-                raise Refusal(
-                    f"land_conflict:{','.join(conflicted)}",
-                    f"rebasing {l0} onto {parent} conflicts; the lane stays at "
-                    f"{l0} and the card is active again. Bring main into the "
-                    "lane, commit, and land again.",
-                )
-            output = (proc.stderr or proc.stdout).decode("utf-8", "replace").strip()
+        try:
+            rebased = _replay_onto(candidate, parent, base, l0)
+        except ReplayConflict as conflict:
+            conflicted = conflict.paths
+            _journal(land, LAND_CONFLICT, done=False)
             raise Refusal(
-                "git_failed", f"git rebase exited {proc.returncode}: {output}"
-            )
-        rebased = _git_text(candidate, "rev-parse", "--verify", "HEAD").strip()
+                f"land_conflict:{','.join(conflicted)}",
+                f"rebasing {l0} onto {parent} conflicts; the lane stays at "
+                f"{l0} and the card is active again. Bring main into the "
+                "lane, commit, and land again.",
+            ) from None
         _journal(land, LAND_REBASE, done=True, evidence={"L1": rebased})
         violation = _owns_violation(
             candidate,
@@ -4016,6 +4056,54 @@ def _land_focus(candidate: Path, land: LandOp) -> None:
     _rewrite_text(path, _focus_with_landed(text, lane=land.lane, op=land.op, l0=l0))
 
 
+def _apply_requests(
+    candidate: Path, plan: str, *, lane: str, generation: str
+) -> list[str]:
+    """Apply the plan's integration requests in ``candidate``; the applied ids (L2).
+
+    The canonical handoff set of the candidate (``_handoff_set``; a handoff that
+    is not there has no requests) is read in order as one table. Every row is
+    parsed (ids ``<lane>/<generation>/<n>``) and checked first, so a bad request
+    refuses before anything changes; then each request is applied once, in
+    order. A conflict is left out and listed (``request_conflict:<id>``). The
+    derived files regenerate. The lane land (``_integrate``: the lane and the
+    card generation) and the replay land (``land replay``: the plan folder slug
+    and ``B[:16]``, EA-3) share this step.
+
+    Raises:
+        Refusal: ``junction_unreadable:handoff`` (a handoff cannot be read) and
+            every refusal of ``_parse_requests``, ``_check_request``,
+            ``_apply_request`` and ``_regenerate``.
+    """
+    rows: list[tuple[str, str]] = []
+    for rel in _handoff_set(candidate, plan):
+        handoff = _repo_file(candidate, rel)
+        if handoff is None:
+            continue
+        try:
+            rows += _request_rows(handoff.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            raise Refusal(
+                "junction_unreadable:handoff", f"cannot read {handoff}: {exc}"
+            ) from None
+    requests = _parse_requests(rows, lane=lane, generation=generation)
+    payloads = {
+        request.rid: _check_request(candidate, request, plan) for request in requests
+    }
+    applied: list[str] = []
+    derived: set[str] = set()
+    for request in requests:
+        if not _apply_request(candidate, request, payloads[request.rid]):
+            continue
+        applied.append(request.rid)
+        if request.form == "meu-status":
+            derived.add("meu_status.py")
+        elif request.form in ("ki-file", "ki-close"):
+            derived.add("issue_triage.py")
+    _regenerate(candidate, derived)
+    return applied
+
+
 def _integrate(
     land: LandOp,
     card: Card,
@@ -4047,33 +4135,9 @@ def _integrate(
     _journal(land, LAND_INTEGRATE, done=False)
     try:
         plan = str(card["plan"]).rstrip("/")
-        rows: list[tuple[str, str]] = []
-        for rel in _handoff_set(candidate, plan):
-            handoff = _repo_file(candidate, rel)
-            if handoff is None:
-                continue
-            try:
-                rows += _request_rows(handoff.read_bytes().decode("utf-8"))
-            except (OSError, UnicodeDecodeError) as exc:
-                raise Refusal(
-                    "junction_unreadable:handoff", f"cannot read {handoff}: {exc}"
-                ) from None
-        requests = _parse_requests(rows, lane=land.lane, generation=land.generation)
-        payloads = {
-            request.rid: _check_request(candidate, request, plan)
-            for request in requests
-        }
-        applied: list[str] = []
-        derived: set[str] = set()
-        for request in requests:
-            if not _apply_request(candidate, request, payloads[request.rid]):
-                continue
-            applied.append(request.rid)
-            if request.form == "meu-status":
-                derived.add("meu_status.py")
-            elif request.form in ("ki-file", "ki-close"):
-                derived.add("issue_triage.py")
-        _regenerate(candidate, derived)
+        applied = _apply_requests(
+            candidate, plan, lane=land.lane, generation=land.generation
+        )
         _land_focus(candidate, land)
         integrated = _commit_t(candidate, land, l1)
         scanned = _scan_secrets(top, land, candidate, integrated)
@@ -7577,6 +7641,817 @@ def _cmd_deps(args: argparse.Namespace, *, wait_s: float, poll_s: float) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# land replay: a fetched result snapshot onto main (MEU-949 L3, L4; AG3-D3)
+# ---------------------------------------------------------------------------
+
+# The result ledger that ``tools/result_snapshot.py fetch`` writes (S2). lanes reads
+# it by its file shape only and never imports that module (AC-949.1, row 949-G3).
+RESULT_REF_PREFIX = "refs/fleet/result/"
+RESULT_LEDGER_FOLDER = "{{PROJECT_NAME}}-results"
+RESULT_LEDGER_SCHEMA = "result-ledger/1"
+RESULT_LEDGER_KEYS = frozenset(
+    {
+        "schema",
+        "run",
+        "clone",
+        "base",
+        "commit",
+        "tree",
+        "session",
+        "author_vendor",
+    }
+)
+REPLAY_RUN_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,60}")
+REPLAY_OID_RE = re.compile(r"[0-9a-f]{40}")
+REPLAY_TASK_RE = re.compile(r"docs/execution/plans/([^/]+)/task\.md")
+REPLAY_BATCH_NAME = "replay-batch.json"
+REPLAY_CANDIDATE_PREFIX = "replay-"
+REPLAY_HOOKS_FOLDER = "replay-no-hooks"
+REPLAY_FILE_MODES = frozenset({"100644", "100755"})
+
+
+@dataclass(frozen=True)
+class ReplaySource:
+    """The snapshot S of one run, its base B and the plan it lands for.
+
+    ``plan`` is the repository-relative plan folder (``docs/execution/plans/<slug>``)
+    and ``slug`` its last part, the packet's ``plan`` and the request lane (EA-3).
+    """
+
+    run: str
+    base: str
+    commit: str
+    top: Path
+    common: Path
+    task: Path
+    plan: str
+    slug: str
+
+
+def _replay_ledger(common: Path, run: str) -> dict[str, str | None]:
+    """The ledger entry ``<common>/{{PROJECT_NAME}}-results/<run>.json`` with its keys checked.
+
+    Raises:
+        Refusal: ``replay_bad:no_ledger`` (no entry) or ``replay_bad:ledger`` (it
+            cannot be read, or its shape, run, base or commit is wrong).
+    """
+    path = common / RESULT_LEDGER_FOLDER / f"{run}.json"
+    if not path.is_file():
+        raise Refusal(
+            "replay_bad:no_ledger",
+            f"no result ledger at {path}; run result_snapshot.py fetch first",
+        )
+    try:
+        data: object = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise Refusal("replay_bad:ledger", f"cannot read {path}: {exc}") from None
+    if not isinstance(data, dict) or set(data) != RESULT_LEDGER_KEYS:
+        raise Refusal(
+            "replay_bad:ledger",
+            f"{path} does not hold exactly the keys {sorted(RESULT_LEDGER_KEYS)}",
+        )
+    entry: dict[str, str | None] = {}
+    for key, value in cast(dict[str, object], data).items():
+        if value is not None and not isinstance(value, str):
+            raise Refusal("replay_bad:ledger", f"{path} key {key!r} is not a string")
+        entry[key] = value
+    shaped = (
+        entry["schema"] == RESULT_LEDGER_SCHEMA
+        and entry["run"] == run
+        and REPLAY_OID_RE.fullmatch(entry["base"] or "") is not None
+        and REPLAY_OID_RE.fullmatch(entry["commit"] or "") is not None
+    )
+    if not shaped:
+        raise Refusal(
+            "replay_bad:ledger",
+            f"{path} is not a {RESULT_LEDGER_SCHEMA} entry of run {run} with a "
+            "40-hex base and commit",
+        )
+    return entry
+
+
+def _replay_source(snapshot: str, task_arg: str) -> ReplaySource:
+    """Read S and B from the ledger and the plan from ``--task`` (L3).
+
+    The ref must be ``refs/fleet/result/<run>``; it must name the ledger's commit
+    in the repository of the working folder, and that commit's only parent must be
+    the ledger's base. The task must be ``docs/execution/plans/<slug>/task.md`` of
+    that repository.
+
+    Raises:
+        Refusal: ``replay_bad:snapshot_ref``, ``replay_bad:snapshot``,
+            ``replay_bad:task`` and the ``_replay_ledger`` refusals.
+    """
+    run = snapshot[len(RESULT_REF_PREFIX) :]
+    if not snapshot.startswith(RESULT_REF_PREFIX) or not REPLAY_RUN_RE.fullmatch(run):
+        raise Refusal(
+            "replay_bad:snapshot_ref",
+            f"{snapshot!r} is not {RESULT_REF_PREFIX}<run> with run "
+            f"{REPLAY_RUN_RE.pattern}",
+        )
+    top, common = _repo_dirs(Path.cwd())
+    entry = _replay_ledger(common, run)
+    base, commit = str(entry["base"]), str(entry["commit"])
+    shown = _git(top, "rev-parse", "--verify", "-q", f"{snapshot}^{{commit}}")
+    named = shown.stdout.decode("utf-8", "replace").strip()
+    if shown.returncode != 0 or named != commit:
+        raise Refusal(
+            "replay_bad:snapshot",
+            f"{snapshot} names {named or 'nothing'}, not the ledger commit {commit}",
+        )
+    parents = _git_text(top, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+    if parents != [base]:
+        raise Refusal(
+            "replay_bad:snapshot",
+            f"{commit} has the parents {parents or '-'}, not the ledger base {base}",
+        )
+    task = Path(task_arg).resolve()
+    try:
+        rel = task.relative_to(top).as_posix()
+    except ValueError:
+        rel = ""
+    match = REPLAY_TASK_RE.fullmatch(rel)
+    if match is None or not task.is_file():
+        raise Refusal(
+            "replay_bad:task",
+            f"{task_arg} is not docs/execution/plans/<slug>/task.md of {top}",
+        )
+    plan = rel.rsplit("/", 1)[0]
+    return ReplaySource(
+        run=run,
+        base=base,
+        commit=commit,
+        top=top,
+        common=common,
+        task=task,
+        plan=plan,
+        slug=match.group(1),
+    )
+
+
+def _replay_branch(top: Path) -> str:
+    """The short name of the branch ``HEAD`` of ``top`` is on.
+
+    Raises:
+        Refusal: ``replay_bad:detached`` (``HEAD`` is on no branch).
+    """
+    proc = _git(top, "symbolic-ref", "--quiet", "--short", "HEAD")
+    branch = proc.stdout.decode("utf-8", "replace").strip()
+    if proc.returncode != 0 or not branch:
+        raise Refusal(
+            "replay_bad:detached",
+            f"HEAD of {top} is on no branch; a replay lands on a branch",
+        )
+    return branch
+
+
+def _replay_signer(top: Path) -> tuple[tuple[str, str], str]:
+    """The author (``user.name``, ``user.email``) and the signing fingerprint of ``top``.
+
+    Raises:
+        Refusal: the commit_batch refusals (``signing_unconfigured``, ``disabled``).
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - the land verbs only
+    from tools import run_parameters as rp  # noqa: PLC0415 - the land verbs only
+
+    try:
+        return commit_batch._signing_identity(rp._open_repo(top))
+    except _batch_errors() as exc:
+        raise _as_refusal(exc, "the replay packet") from None
+
+
+def _replay_candidate_path(run: str) -> Path:
+    """``<gate-candidate root>/replay-<run>``, checked to stay inside that root.
+
+    Raises:
+        Refusal: ``replay_bad:candidate`` (the path leaves the root).
+    """
+    _batch_path()
+    from tools import executor_worktree as ew  # noqa: PLC0415 - the land verbs only
+
+    path = ew.gate_candidate_root() / f"{REPLAY_CANDIDATE_PREFIX}{run}"
+    if not ew._gate_candidate_contained(path):
+        raise Refusal(
+            "replay_bad:candidate",
+            f"{path} is not strictly inside {ew.gate_candidate_root()}",
+        )
+    return path
+
+
+def _drop_replay_candidate(path: Path) -> None:
+    """Delete the replay candidate C (its links as links first); idempotent.
+
+    Raises:
+        Refusal: ``candidate_remove`` (the folder stays on disk).
+    """
+    _batch_path()
+    from tools import executor_worktree as ew  # noqa: PLC0415 - the land verbs only
+
+    if not path.exists():
+        return
+    try:
+        ew._delete_clone_tree(path)
+    except OSError as exc:
+        raise Refusal(
+            "candidate_remove", f"cannot remove the replay candidate {path}: {exc}"
+        ) from None
+
+
+def _make_replay_candidate(
+    top: Path, path: Path, parent: str, identity: Mapping[str, str]
+) -> None:
+    """C: a ``git clone --shared`` of ``top`` at ``path``, detached at ``parent``.
+
+    The PK3 clone recipe (no checkout, ``core.autocrlf=false``, then a detached
+    checkout and no ``refs/heads``), so nothing of ``top`` changes. C's own
+    configuration holds the checked identity of ``top``, no commit signing and an
+    empty hooks folder, so the rebase commits run no hook of anyone.
+
+    Raises:
+        Refusal: ``candidate_remove`` (an old C stays), ``candidate_root`` (the
+            root cannot be made) or ``git_failed``.
+    """
+    _drop_replay_candidate(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise Refusal("candidate_root", f"cannot create {path.parent}: {exc}") from None
+    _git_text(
+        top,
+        *GIT_LONGPATHS,
+        "clone",
+        "--quiet",
+        "--shared",
+        "--no-checkout",
+        "--config",
+        "core.autocrlf=false",
+        "--",
+        top.as_posix(),
+        path.as_posix(),
+    )
+    hooks = path / ".git" / REPLAY_HOOKS_FOLDER
+    try:
+        hooks.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise Refusal("candidate_root", f"cannot create {hooks}: {exc}") from None
+    for key, value in (
+        ("user.name", identity["GIT_AUTHOR_NAME"]),
+        ("user.email", identity["GIT_AUTHOR_EMAIL"]),
+        ("commit.gpgsign", "false"),
+        ("core.longpaths", "true"),
+        ("core.hooksPath", hooks.as_posix()),
+    ):
+        _git_text(path, "config", "--local", key, value)
+    _git_text(path, *GIT_LONGPATHS, "checkout", "--quiet", "--detach", parent)
+    heads = _git_text(path, "for-each-ref", "--format=%(refname)", "refs/heads")
+    for ref in heads.split():
+        _git_text(path, "update-ref", "-d", ref)
+
+
+def _replay_tree(candidate: Path) -> str:
+    """T: the tree of C's ``HEAD`` with every working change of C (the requests)."""
+    _git_text(candidate, *GIT_LONGPATHS, "add", "-A", "--", ".")
+    return _git_text(candidate, *GIT_LONGPATHS, "write-tree").strip()
+
+
+def _replay_entries(candidate: Path, parent: str, tree: str) -> list[dict[str, Any]]:
+    """The packet entries of ``tree`` against ``parent``: the blobs of C, or a delete.
+
+    Raises:
+        Refusal: ``replay_bad:mode:<rel>`` (a link or submodule, which a packet
+            cannot carry) or ``git_failed``.
+    """
+    proc = _git(
+        candidate,
+        *GIT_LONGPATHS,
+        "diff-tree",
+        "-r",
+        "-z",
+        "--no-renames",
+        "--name-status",
+        parent,
+        tree,
+    )
+    if proc.returncode != 0:
+        raise Refusal(
+            "git_failed",
+            f"git diff-tree {parent} {tree} exited {proc.returncode}: "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}",
+        )
+    fields = _split_z(proc.stdout)
+    entries: list[dict[str, Any]] = []
+    for status, rel in zip(fields[0::2], fields[1::2]):
+        if status == "D":
+            entries.append({"path": rel, "delete": True})
+            continue
+        listed = _git_text(candidate, *GIT_LONGPATHS, "ls-tree", "-z", tree, "--", rel)
+        meta = listed.split("\t", 1)[0].split()
+        if len(meta) != 3 or meta[0] not in REPLAY_FILE_MODES or meta[1] != "blob":
+            raise Refusal(
+                f"replay_bad:mode:{rel}",
+                f"{rel} has the mode {meta[0] if meta else '-'} in {tree}; a packet "
+                f"carries only the modes {sorted(REPLAY_FILE_MODES)}",
+            )
+        blob = _git(candidate, "cat-file", "blob", meta[2])
+        if blob.returncode != 0:
+            raise Refusal(
+                "git_failed",
+                f"git cat-file blob {meta[2]} exited {blob.returncode}: "
+                f"{blob.stderr.decode('utf-8', 'replace').strip()}",
+            )
+        entries.append(
+            {
+                "path": rel,
+                "mode": meta[0],
+                "data": base64.b64encode(blob.stdout).decode("ascii"),
+            }
+        )
+    return entries
+
+
+def _replay_message(source: ReplaySource) -> str:
+    """The packet message: a conventional subject and the snapshot it replays."""
+    return (
+        f"feat(replay): land result {source.run}\n\n"
+        f"Replay of the result snapshot {source.commit} (base {source.base}) "
+        f"for the plan {source.slug}.\n"
+    )
+
+
+def _replay_batch(
+    source: ReplaySource,
+    candidate: Path,
+    *,
+    branch: str,
+    parent: str,
+    tree: str,
+) -> dict[str, Any]:
+    """The ``commit-batch/1`` of one packet ``C - P``, checked to build exactly T.
+
+    Raises:
+        Refusal: ``replay_bad:tree`` (the packet does not build T on P), the
+            packet refusals of commit_batch, ``replay_bad:mode:<rel>`` and
+            ``git_failed``.
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - the land verbs only
+
+    (name, email), fingerprint = _replay_signer(source.top)
+    packet: dict[str, Any] = {
+        "schema": commit_batch.PACKET_SCHEMA,
+        "plan": source.slug,
+        "branch": branch,
+        "parent": parent,
+        "message": _replay_message(source),
+        "author": {"name": name, "email": email},
+        "signing_fingerprint": fingerprint,
+        "entries": _replay_entries(candidate, parent, tree),
+    }
+    try:
+        built = commit_batch.batch_tree(
+            candidate, parent, [commit_batch._parse_packet(packet)]
+        )
+    except _batch_errors() as exc:
+        raise _as_refusal(exc, "the replay packet") from None
+    except (commit_batch.rp.GitError, OSError) as exc:
+        raise Refusal("git_failed", f"building the packet tree failed: {exc}") from None
+    if built != tree:
+        raise Refusal(
+            "replay_bad:tree",
+            f"the packet builds {built} on {parent}, not the candidate tree {tree}",
+        )
+    return {
+        "schema": commit_batch.BATCH_SCHEMA,
+        "plan": source.slug,
+        "branch": branch,
+        "count": 1,
+        "packets": [packet],
+    }
+
+
+def _replay_owns(violation: Refusal) -> Refusal:
+    """The ``_owns_violation`` refusal on the replay route (EA-4, AC-951.5).
+
+    ``owns_violation:<rel>`` becomes ``replay_bad:owns:<rel>``; a ``link_path``
+    refusal stays as it is.
+    """
+    prefix = "owns_violation:"
+    if violation.reason.startswith(prefix):
+        rel = violation.reason[len(prefix) :]
+        return Refusal(f"replay_bad:owns:{rel}", violation.detail)
+    return violation
+
+
+def _replay_build(source: ReplaySource, *, check_only: bool) -> int:
+    """L3: replay S onto P in C, check owns, apply the requests and write the batch.
+
+    Nothing of the main repository changes but the batch file under its run folder
+    ``<common>/{{PROJECT_NAME}}-results/<run>/`` (EA-4): no ref, index, working file or
+    reflog. A refusal removes C; ``--check-only`` removes C after the batch.
+    """
+    top = source.top
+    owns, mnt = _read_ownership(source.task)
+    parent = _git_text(top, "rev-parse", "--verify", "HEAD").strip()
+    branch = _replay_branch(top)
+    identity = _checked_identity(top)
+    candidate = _replay_candidate_path(source.run)
+    try:
+        _make_replay_candidate(top, candidate, parent, identity)
+        try:
+            _replay_onto(candidate, parent, source.base, source.commit)
+        except ReplayConflict as conflict:
+            raise Refusal(
+                f"land_conflict:{','.join(conflict.paths)}",
+                f"replaying {source.commit} onto {parent} conflicts; nothing is "
+                "written to main. Resolve the paths in the session and take a new "
+                "result.",
+            ) from None
+        violation = _owns_violation(
+            candidate,
+            source.base,
+            source.commit,
+            owns=owns,
+            mnt=mnt,
+            ignorecase=_ignorecase(top),
+        )
+        if violation is not None:
+            raise _replay_owns(violation)
+        applied = _apply_requests(
+            candidate, source.plan, lane=source.slug, generation=source.base[:16]
+        )
+        tree = _replay_tree(candidate)
+        if tree == _git_text(top, "rev-parse", f"{parent}^{{tree}}").strip():
+            raise Refusal(
+                "replay_bad:empty",
+                f"replaying {source.commit} onto {parent} changes nothing",
+            )
+        batch = _replay_batch(
+            source, candidate, branch=branch, parent=parent, tree=tree
+        )
+        folder = source.common / RESULT_LEDGER_FOLDER / source.run
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise Refusal("io_error", f"cannot create {folder}: {exc}") from None
+        path = folder / REPLAY_BATCH_NAME
+        _replace_atomically(
+            path, (json.dumps(batch, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        )
+    except (Refusal, OSError):
+        _drop_replay_candidate(candidate)
+        raise
+    if applied:
+        print(f"replay_requests {','.join(applied)}", flush=True)
+    print(
+        f"replay_ready {source.run} parent={parent} tree={tree} "
+        f"batch={path.as_posix()}",
+        flush=True,
+    )
+    if check_only:
+        _drop_replay_candidate(candidate)
+    return 0
+
+
+def _replay_tree_file(top: Path, commit: str, rel: str) -> tuple[str, str] | None:
+    """The ``(mode, blob id)`` of ``rel`` in ``commit``; ``None`` when it has no file there.
+
+    Raises:
+        Refusal: ``replay_bad:target_dirty:<rel>`` (a link or submodule there) or
+            ``git_failed``.
+    """
+    listed = _git_text(top, *GIT_LONGPATHS, "ls-tree", "-z", commit, "--", rel)
+    if not listed:
+        return None
+    meta = listed.split("\t", 1)[0].split()
+    if len(meta) != 3 or meta[0] not in REPLAY_FILE_MODES or meta[1] != "blob":
+        raise Refusal(
+            f"replay_bad:target_dirty:{rel}",
+            f"{rel} is not a regular file in {commit}",
+        )
+    return meta[0], meta[2]
+
+
+def _replay_oid(top: Path, commit: str, rel: str) -> str | None:
+    """The blob id of ``rel`` in ``commit``; ``None`` when ``commit`` has no file there.
+
+    Raises:
+        Refusal: ``replay_bad:target_dirty:<rel>`` (a link or submodule there) or
+            ``git_failed``.
+    """
+    found = _replay_tree_file(top, commit, rel)
+    return None if found is None else found[1]
+
+
+def _replay_work_mode(top: Path, parent: str, rel: str) -> str:
+    """The mode that git reads for the existing main working file ``rel`` (R1-F5).
+
+    On POSIX, the owner execute bit of the file gives ``100755``, else ``100644``: the
+    bit that git reads with ``core.filemode`` on. Windows has no execute bit, so git
+    keeps the mode of the parent P there; a path that P does not have is ``100644``.
+
+    Raises:
+        Refusal: ``replay_bad:target_dirty:<rel>`` (the file cannot be read, or P
+            has a link or submodule there) or ``git_failed``.
+    """
+    if os.name != "nt":
+        path = top / rel
+        try:
+            info = path.stat()
+        except OSError as exc:
+            raise Refusal(
+                f"replay_bad:target_dirty:{rel}",
+                f"cannot read the mode of {path}: {exc}",
+            ) from None
+        return "100755" if info.st_mode & stat.S_IXUSR else "100644"
+    found = _replay_tree_file(top, parent, rel)
+    return "100644" if found is None else found[0]
+
+
+def _replay_blob(top: Path, oid: str | None) -> bytes | None:
+    """The bytes of the blob ``oid``; ``None`` for ``None`` (no file there).
+
+    Raises:
+        Refusal: ``git_failed``.
+    """
+    if oid is None:
+        return None
+    blob = _git(top, "cat-file", "blob", oid)
+    if blob.returncode != 0:
+        raise Refusal(
+            "git_failed",
+            f"git cat-file blob {oid} exited {blob.returncode}: "
+            f"{blob.stderr.decode('utf-8', 'replace').strip()}",
+        )
+    return blob.stdout
+
+
+def _replay_work_oids(top: Path, paths: Sequence[str]) -> dict[str, str | None]:
+    """The blob id that git gives each existing working file of ``paths`` (EA-28).
+
+    git reads a working file through its clean filters (``.gitattributes`` ``eol``), so
+    a CRLF checkout of an LF blob is the same file to git. ``commit_batch`` compares the
+    working files the same way at the land, so the sync uses its reader.
+
+    Raises:
+        Refusal: ``git_failed`` (``git hash-object`` failed).
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - the land verbs only
+
+    present = [rel for rel in paths if (top / rel).is_file()]
+    if not present:
+        return {}
+    try:
+        return commit_batch._work_oids(
+            top, present, commit_batch._work_ids(top, present)
+        )
+    except commit_batch.rp.GitError as exc:
+        raise Refusal(
+            "git_failed", f"git hash-object of the working files: {exc}"
+        ) from None
+
+
+def _blob_oid(top: Path, data: bytes) -> str:
+    """The blob id of ``data`` in the object format of the repository at ``top``.
+
+    Raises:
+        Refusal: ``git_failed`` (the object format cannot be read) or
+            ``replay_bad:object_format:<name>`` (a format that hashlib does not have).
+    """
+    name = _git_text(top, "rev-parse", "--show-object-format").strip() or "sha1"
+    try:
+        digest = hashlib.new(name)
+    except ValueError:
+        raise Refusal(
+            f"replay_bad:object_format:{name}",
+            f"the repository object format {name} has no hashlib digest",
+        ) from None
+    digest.update(b"blob %d\0" % len(data))
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def _replay_render_ki(yaml_bytes: bytes) -> bytes:
+    """``issue_triage.py render`` of ``yaml_bytes``: the ``known-issues.md`` it derives.
+
+    The render runs in a scratch folder with this repository's own tool, so it writes
+    nothing in the main working tree.
+
+    Raises:
+        Refusal: ``replay_bad:render:<known-issues.md>`` (the render cannot start or
+            fails).
+    """
+    root = Path(__file__).resolve().parent.parent
+    env = dict(_git_env(), PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1")
+    reason = f"replay_bad:render:{KI_MD_FILE}"
+    with tempfile.TemporaryDirectory(prefix="replay-render-") as scratch:
+        folder = Path(scratch)
+        source = folder / "known-issues.yaml"
+        target = folder / "known-issues.md"
+        source.write_bytes(yaml_bytes)
+        command = [
+            sys.executable,
+            str(root / "tools" / "issue_triage.py"),
+            "--yaml",
+            str(source),
+            "--md",
+            str(target),
+            "render",
+        ]
+        try:
+            proc = subprocess.run(
+                command,
+                cwd=str(root),
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                env=env,
+                check=False,
+            )
+        except OSError as exc:
+            raise Refusal(reason, f"cannot run issue_triage.py: {exc}") from None
+        if proc.returncode != 0 or not target.is_file():
+            output = (proc.stderr or proc.stdout).decode("utf-8", "replace").strip()
+            raise Refusal(
+                reason,
+                f"issue_triage.py render exited {proc.returncode}: {output}",
+            )
+        return target.read_bytes()
+
+
+def _replay_working(top: Path, rel: str) -> bytes | None:
+    """The bytes of the main working file ``rel``; ``None`` when it does not exist.
+
+    Raises:
+        Refusal: ``replay_bad:link:<rel>`` (the path passes a link or reparse
+            point) or ``replay_bad:target_dirty:<rel>`` (not a regular file).
+    """
+    if _through_link(top, rel):
+        raise Refusal(
+            f"replay_bad:link:{rel}", f"{rel} passes a link or reparse point of {top}"
+        )
+    path = top / rel
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise Refusal(f"replay_bad:target_dirty:{rel}", f"{path} is not a regular file")
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise Refusal(
+            f"replay_bad:target_dirty:{rel}", f"cannot read {path}: {exc}"
+        ) from None
+
+
+def _replay_merge(rel: str, current: bytes, base: bytes, target: bytes) -> bytes:
+    """``git merge-file -p <working> <P blob> <C blob>``: the clean three-way merge.
+
+    Raises:
+        Refusal: ``replay_bad:target_dirty:<rel>`` (the merge conflicts or fails).
+    """
+    with tempfile.TemporaryDirectory(prefix="replay-merge-") as scratch:
+        folder = Path(scratch)
+        for name, data in (("current", current), ("base", base), ("target", target)):
+            (folder / name).write_bytes(data)
+        proc = _git(folder, "merge-file", "-p", "current", "base", "target")
+    if proc.returncode != 0:
+        raise Refusal(
+            f"replay_bad:target_dirty:{rel}",
+            f"the main working file {rel} differs from the parent and does not merge "
+            f"cleanly with the replay (git merge-file exited {proc.returncode})",
+        )
+    return proc.stdout
+
+
+def _replay_writes(
+    top: Path,
+    parent: str,
+    paths: Sequence[str],
+    files: Mapping[str, tuple[str, bytes]],
+) -> list[tuple[str, bytes | None, str]]:
+    """The ``(rel, bytes or None for a delete, mode)`` writes that sync main to the packet.
+
+    Reads only; ``_replay_sync`` writes them after every path is checked.
+
+    Raises:
+        Refusal: ``replay_bad:target_dirty:<rel>``, ``replay_bad:link:<rel>``,
+            ``replay_bad:render:<rel>`` or ``git_failed``.
+    """
+    currents = {rel: _replay_working(top, rel) for rel in paths}
+    work_oids = _replay_work_oids(top, paths)
+    derived = KI_MD_FILE in files and KI_YAML_FILE in files
+    writes: list[tuple[str, bytes | None, str]] = []
+    for rel in paths:
+        if derived and rel == KI_MD_FILE:
+            continue
+        mode, target = files.get(rel, ("", None))
+        current = currents[rel]
+        # R1-F5: equal content is not enough; a mode-only entry still writes its mode.
+        if current == target:
+            if target is not None and _replay_work_mode(top, parent, rel) != mode:
+                writes.append((rel, target, mode))
+            continue
+        base_oid = _replay_oid(top, parent, rel)
+        work_oid = work_oids.get(rel)
+        if work_oid == base_oid:
+            writes.append((rel, target, mode))
+            continue
+        if target is not None and work_oid == _blob_oid(top, target):
+            if _replay_work_mode(top, parent, rel) != mode:
+                writes.append((rel, target, mode))
+            continue
+        base = _replay_blob(top, base_oid)
+        if current is None or base is None or target is None:
+            raise Refusal(
+                f"replay_bad:target_dirty:{rel}",
+                f"the main working file {rel} differs from the parent, and the "
+                "replay adds or deletes it",
+            )
+        writes.append((rel, _replay_merge(rel, current, base, target), mode))
+    if derived:
+        mode, target_md = files[KI_MD_FILE]
+        _yaml_mode, target_yaml = files[KI_YAML_FILE]
+        written = [data for rel, data, _mode in writes if rel == KI_YAML_FILE]
+        final_yaml = written[0] if written else currents[KI_YAML_FILE]
+        if final_yaml is None or final_yaml == target_yaml:
+            md = target_md
+        else:
+            md = _replay_render_ki(final_yaml)
+        if (
+            currents[KI_MD_FILE] != md
+            or _replay_work_mode(top, parent, KI_MD_FILE) != mode
+        ):
+            writes.append((KI_MD_FILE, md, mode))
+    return writes
+
+
+def _replay_sync(source: ReplaySource, batch_file: Path) -> int:
+    """L4: write the packet bytes into the main working files before the land.
+
+    ``HEAD`` must still be the packet's parent P (``replay_bad:main_moved``). For
+    each path: a working file equal to the target stays; one equal to P's blob
+    takes the target; any other is merged three ways and a conflict refuses
+    ``replay_bad:target_dirty:<rel>``. Every path is checked before the first
+    write, so a refusal writes nothing. R1-F5: a working file with the target
+    content but another mode (``100644`` or ``100755``) takes the target again, so
+    the write sets the packet mode.
+
+    EA-28: a working file equals a blob when git reads it as that blob (its clean
+    filters on), so a CRLF checkout of P's LF blob is at P. When the packet writes
+    both ``known-issues.yaml`` and ``known-issues.md``, the md is derived: it is the
+    target md when the final yaml is the target yaml, else the render of the final
+    (merged) yaml. A text merge of two renders is never used.
+    """
+    _batch_path()
+    from tools import commit_batch  # noqa: PLC0415 - the land verbs only
+
+    try:
+        packets, _is_batch = commit_batch._read_input(batch_file, True)
+    except _batch_errors() as exc:
+        raise _as_refusal(exc, "the replay batch") from None
+    if len(packets) != 1 or packets[0].plan != source.slug:
+        raise Refusal(
+            "replay_bad:batch",
+            f"{batch_file} must hold one packet of the plan {source.slug}",
+        )
+    packet = packets[0]
+    top = source.top
+    head = _git_text(top, "rev-parse", "--verify", "HEAD").strip()
+    if head != packet.parent:
+        raise Refusal(
+            "replay_bad:main_moved",
+            f"HEAD is {head}, not the replay parent {packet.parent}; replay again "
+            "onto the moved main",
+        )
+    branch = _replay_branch(top)
+    if branch != packet.branch:
+        raise Refusal(
+            "replay_bad:branch",
+            f"HEAD is on {branch}, not the packet branch {packet.branch}",
+        )
+    writes = _replay_writes(top, packet.parent, packet.paths, packet.files)
+    for rel, data, mode in writes:
+        path = top / rel
+        if data is None:
+            path.unlink(missing_ok=True)
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _replace_atomically(path, data)
+        if mode == "100755" and os.name != "nt":
+            path.chmod(0o755)
+    print(f"replay_synced {source.run} paths={len(packet.paths)}", flush=True)
+    return 0
+
+
+def _cmd_land_replay(args: argparse.Namespace) -> int:
+    """``land replay --snapshot <ref> --task <task.md> [--check-only | --sync <batch>]``."""
+    source = _replay_source(str(args.snapshot), str(args.task))
+    if args.sync is not None:
+        return _replay_sync(source, Path(args.sync))
+    return _replay_build(source, check_only=bool(args.check_only))
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lanes.py",
@@ -7666,6 +8541,31 @@ def _parser() -> argparse.ArgumentParser:
     )
     publish.add_argument("--session", help="the session of the typed direction")
     publish.add_argument("--message-uuid", help="the typed direction's message uuid")
+    replay = land_sub.add_parser(
+        "replay",
+        help="MEU-949: replay a fetched result snapshot onto main in a disposable "
+        "candidate and write its commit batch; --sync writes the batch into the "
+        "main working files",
+    )
+    replay.add_argument(
+        "--snapshot", required=True, help=f"the result ref {RESULT_REF_PREFIX}<run>"
+    )
+    replay.add_argument(
+        "--task",
+        required=True,
+        help="the plan's task.md (its Lane Ownership is the write set)",
+    )
+    replay_mode = replay.add_mutually_exclusive_group()
+    replay_mode.add_argument(
+        "--check-only",
+        action="store_true",
+        help="write the batch, then remove the candidate",
+    )
+    replay_mode.add_argument(
+        "--sync",
+        metavar="BATCH",
+        help="the replay-batch.json to write into the main working files",
+    )
     landed = sub.add_parser(
         "landed", help="read-only: is the lane worktree's work published on main?"
     )
@@ -7790,6 +8690,8 @@ def main(
             return _cmd_land_prepare(
                 args, wait_s=wait_s, poll_s=poll_s, argv=holder_argv
             )
+        if args.command == "land" and args.land_command == "replay":
+            return _cmd_land_replay(args)
         if args.command == "land":
             return _cmd_land_recover(
                 args, wait_s=wait_s, poll_s=poll_s, argv=holder_argv
