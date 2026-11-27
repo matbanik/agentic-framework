@@ -1,5 +1,6 @@
 {
   "schema": "lane-route/1",
   "required": false,
+  "new_lanes": false,
   "exempt": []
 }

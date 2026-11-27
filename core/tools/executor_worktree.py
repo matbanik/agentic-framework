@@ -13,6 +13,18 @@ without a commit::
     uv run python tools/executor_worktree.py land <path>
     uv run python tools/executor_worktree.py sync <path> <rel>...
     uv run python tools/executor_worktree.py remove <path> [--discard | --ad-hoc]
+    uv run python tools/executor_worktree.py clone <slug> [--base REV]
+    uv run python tools/executor_worktree.py gate-candidate <slug> --packet FILE
+
+``clone`` makes the session's scratch clone ``WORKTREE_PARENT/.clones/<slug>``,
+the default route: a shared clone with a detached ``HEAD``, no branch, a marker
+that records its parent, and its own runtime. ``gate-candidate`` makes
+``WORKTREE_PARENT/.gate-candidates/<slug>``, the checkout the full gate runs in:
+the packet batch's tree on the main ``HEAD``, built by ``tools/commit_batch.py``'s
+``batch_tree`` as the land builds it. ``remove`` deletes either one by its marker.
+Under ``"new_lanes": false`` in ``.agent/lane-route.json``, ``create`` makes no
+new lane worktree (``worktree_bad:new_lane_closed``); a credits run's worktree
+is still made.
 
 ``create`` checks the base out with LF endings into ``WORKTREE_PARENT/<slug>``
 (``{{PROJECT_ROOT}}-wt``, B-8; commit candidates go under its ``.candidates``), carries
@@ -112,6 +124,7 @@ import hashlib
 import importlib
 import json
 import os
+import posixpath
 import re
 import secrets
 import shutil
@@ -124,10 +137,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from tools.commit_batch import LaneRoute
+    from tools.commit_batch import LaneRoute, Packet
 
 if sys.platform == "win32":
     import msvcrt
@@ -167,6 +180,30 @@ LEASE_BODY_SCHEMA = 1
 # and no environment variable moves it; tests patch the constant.
 WORKTREE_PARENT = Path("{{PROJECT_ROOT}}-wt")
 CANDIDATE_FOLDER = ".candidates"
+# Every scratch clone sits under WORKTREE_PARENT/CLONE_FOLDER. The marker in the
+# clone's own .git folder names its main tree and its parent.
+CLONE_FOLDER = ".clones"
+CLONE_MARKER = "scratch-clone.json"
+CLONE_SCHEMA = "scratch-clone/1"
+CLONE_MARKER_KEYS = ("schema", "main", "slug", "parent", "created")
+# A clone gets its own Node trees by ``npm ci`` in each tracked folder that holds
+# LOCK_FILE, when the worktree config's ``linked_trees`` names NODE_TREE.
+NODE_TREE = "node_modules"
+LOCK_FILE = "package-lock.json"
+NPM_CI_ARGS = ("ci", "--prefer-offline")
+# Every gate candidate sits under WORKTREE_PARENT/GATE_CANDIDATE_FOLDER. Its marker
+# names the batch tree it holds; a project gate that runs in the candidate reads the
+# marker and records its ``candidate`` keys, which ``tools/commit_batch.py --gated``
+# checks.
+GATE_CANDIDATE_FOLDER = ".gate-candidates"
+GATE_CANDIDATE_MARKER = "gate-candidate.json"
+GATE_CANDIDATE_SCHEMA = "gate-candidate/1"
+GATE_CANDIDATE_KEYS = frozenset(
+    {"schema", "parent", "tree", "batch_sha256", "clone", "plan"}
+)
+# The per-repository ignore file of a candidate: its dependency-tree links go there,
+# so no ignore rule of the tree decides whether a link is an untracked file.
+GIT_INFO_EXCLUDE = "info/exclude"
 # AC-G.2: the lanes made beside the repository before B-8. Each matches by the path
 # it is given, never by resolving it, so neither a link nor a rename inherits it.
 # A new adopter has none; a project that moves to B-8 lists its old lanes here.
@@ -663,7 +700,9 @@ def _run_git(
 def _main_root_of(worktree: Path) -> Path:
     """The main tree of ``worktree``: the parent of git's common directory.
 
-    For the main tree itself this is the tree's own root.
+    For the main tree itself this is the tree's own root. A scratch clone names
+    its main tree in its marker; a gate candidate names its scratch clone, whose
+    marker names the main tree.
 
     Raises:
         _GitFailure: git cannot resolve the common directory.
@@ -671,7 +710,16 @@ def _main_root_of(worktree: Path) -> Path:
     common = _git_text(
         ["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=worktree
     )
-    return Path(common).parent
+    top = Path(common).parent
+    marker = _clone_marker(top)
+    if marker is not None:
+        return Path(marker["main"])
+    gated = _gate_candidate_marker(top)
+    if gated is not None:
+        clone = _clone_marker(Path(gated["clone"]))
+        if clone is not None:
+            return Path(clone["main"])
+    return top
 
 
 def _pinned_python(main_root: Path) -> str:
@@ -1592,6 +1640,9 @@ def _cmd_create(
     A create with the run identity (a credits worktree) keeps the old route and
     needs no ``--lane-plan``.
     With ``--lane-plan`` the lane is claimed after the build.
+    Under ``new_lanes: false`` every create without the run identity refuses
+    ``worktree_bad:new_lane_closed`` before anything is made: the scratch clone
+    (``clone``) is the default route.
     """
     slug: str = ns.slug
     lane_plan: str | None = ns.lane_plan
@@ -1601,7 +1652,10 @@ def _cmd_create(
     if not WORKTREE_SLUG_RE.fullmatch(slug):
         raise _Refusal(["worktree_bad:slug"])
     identity = _identity(ns)
-    if _route_required(_lane_route(root), slug) and lane_plan is None and not identity:
+    policy = _lane_route(root)
+    if not policy["new_lanes"] and not identity:
+        raise _Refusal(["worktree_bad:new_lane_closed"])
+    if _route_required(policy, slug) and lane_plan is None and not identity:
         raise _Refusal(["worktree_bad:no_plan"])
     branch = _lane_branch(slug)
     if ns.branch is not None and ns.branch != branch:
@@ -2017,9 +2071,10 @@ def _cmd_remove(
     """``remove <path> [--discard | --ad-hoc]``: delete a worktree whose work has landed.
 
     A commit candidate is deleted as it stands: its content reaches the branch only
-    through ``tools/commit_batch.py``, so it has nothing to land. An executor worktree
-    must be contained (AC-G.2), must not hold this process's folder and must not be held
-    by another process (AC-G.3); a run's worktree gets the two H2-3c records (AC-G.4).
+    through ``tools/commit_batch.py``, so it has nothing to land. A scratch clone is
+    ``_remove_clone`` and a gate candidate ``_remove_gate_candidate``, each known by
+    its marker. An executor worktree must be contained (AC-G.2), must not hold this
+    process's folder and must not be held by another process (AC-G.3); a run's worktree gets the two H2-3c records (AC-G.4).
     Its lane branch is deleted when the tip is an ancestor of ``main``; an unlanded tip
     is ``worktree_bad:unlanded`` unless ``--discard``, which deletes it (AC-785.9). A
     stage-1 manifest without a lane branch deletes no branch (AC-785.10).
@@ -2040,6 +2095,11 @@ def _cmd_remove(
         return 0
     if ns.ad_hoc:
         return _remove_ad_hoc(root, path)
+    marker = _clone_marker(path)
+    if marker is not None:
+        return _remove_clone(path, marker, ns.discard)
+    if _gate_candidate_marker(path) is not None:
+        return _remove_gate_candidate(path)
     wt = _open_worktree(root, path)
     if not contained(path):
         raise _Refusal(["worktree_bad:containment"])
@@ -2142,11 +2202,661 @@ def _lane_route_landed(wt: _Worktree, tip: str | None) -> bool:
     return landed
 
 
+# ------------------------------------------------------------ scratch clone
+
+
+def clone_root() -> Path:
+    """The scratch-clone root ``WORKTREE_PARENT/CLONE_FOLDER``.
+
+    Read at each call, so a patched constant moves it (tests patch it).
+    """
+    return Path(WORKTREE_PARENT) / CLONE_FOLDER
+
+
+def clone_path(slug: str) -> Path:
+    """The folder ``clone <slug>`` makes: ``WORKTREE_PARENT/CLONE_FOLDER/<slug>``."""
+    return clone_root() / slug
+
+
+def _clone_contained(path: Path) -> bool:
+    """True when ``path`` resolves strictly inside the clone root, and that root
+    resolves strictly inside ``WORKTREE_PARENT`` (``clone_bad:containment``)."""
+    return _strictly_inside(clone_root(), path)
+
+
+def _strictly_inside(root: Path, path: Path) -> bool:
+    """True when ``path`` resolves strictly inside the folder ``root``, and ``root``
+    resolves strictly inside ``WORKTREE_PARENT`` (both resolved through links)."""
+    parent, folder, real = _real(WORKTREE_PARENT), _real(root), _real(path)
+    return (
+        folder != parent
+        and _within(parent, folder)
+        and real != folder
+        and _within(folder, real)
+    )
+
+
+def _clone_marker(path: Path) -> dict[str, str] | None:
+    """The scratch-clone marker of ``path``, or None when ``path`` is not a clone.
+
+    A clone holds a real ``.git`` folder (never a gitfile or a link) with the
+    marker ``scratch-clone.json`` whose keys are exactly CLONE_MARKER_KEYS and
+    whose ``schema`` is CLONE_SCHEMA. Any other shape is not a clone.
+    """
+    git_dir = path / ".git"
+    if _is_link(git_dir) or not git_dir.is_dir():
+        return None
+    try:
+        data: object = json.loads((git_dir / CLONE_MARKER).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    marker = cast(dict[str, object], data)
+    if set(marker) != set(CLONE_MARKER_KEYS) or marker.get("schema") != CLONE_SCHEMA:
+        return None
+    if not all(isinstance(value, str) for value in marker.values()):
+        return None
+    return {key: str(value) for key, value in marker.items()}
+
+
+def _clone_base(root: Path, flag: str | None) -> str:
+    """The commit ``clone`` checks out: ``--base``, else the main tree's ``HEAD``.
+
+    Raises:
+        _Refusal: ``clone_bad:base_unknown`` when the base names no commit.
+        OSError: git is not installed or ``root`` is not a directory.
+    """
+    base = flag or "HEAD"
+    proc = _run_git(
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{base}^{{commit}}"],
+        cwd=root,
+    )
+    commit = proc.stdout.decode("utf-8", "replace").strip()
+    if proc.returncode != 0 or not commit:
+        raise _Refusal(["clone_bad:base_unknown"])
+    return commit
+
+
+def _lock_roots(clone: Path) -> list[str]:
+    """The tracked folders of ``clone`` that hold a ``package-lock.json`` (``.`` first).
+
+    Raises:
+        _GitFailure: ``git ls-files`` failed.
+    """
+    listed = _git_text(["ls-files", "-z", "--", f"*{LOCK_FILE}"], cwd=clone)
+    roots = {
+        posixpath.dirname(rel) or "."
+        for rel in listed.split("\0")
+        if rel and posixpath.basename(rel) == LOCK_FILE
+    }
+    return sorted(roots, key=lambda rel: (rel != ".", rel))
+
+
+def _npm_ci(root: Path) -> int:
+    """``npm ci --prefer-offline`` in ``root``; return the exit code.
+
+    npm's output goes to stderr. A missing npm is exit 127 with a stderr line.
+    ``npm ci`` needs a ``package.json`` next to the lock file. A folder without
+    one is test data, not an npm project: it is skipped with a stderr line and
+    exit 0. Replaceable (tests stub this step).
+
+    Raises:
+        OSError: ``root`` is not a directory.
+    """
+    if not (root / "package.json").is_file():
+        sys.stderr.write(f"npm ci skipped: no package.json in {root}\n")
+        return 0
+    npm = shutil.which("npm")
+    if npm is None:
+        sys.stderr.write("npm is not on PATH\n")
+        return 127
+    proc = subprocess.run(  # noqa: S603 - fixed argv
+        [npm, *NPM_CI_ARGS],
+        cwd=str(root),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=False,
+    )
+    for stream in (proc.stdout, proc.stderr):
+        if stream:
+            sys.stderr.write(stream.decode("utf-8", "replace"))
+    return proc.returncode
+
+
+def _force_writable(
+    func: Callable[..., object], path: str, _exc: BaseException
+) -> None:
+    """``shutil.rmtree`` ``onexc``: clear the read-only bit (git packs) and retry once."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _delete_clone_tree(path: Path) -> None:
+    """Delete the clone at ``path``: every directory link as a link first, then the
+    clone's own files. Nothing outside ``path`` is changed.
+
+    Raises:
+        OSError: a link or a file cannot be deleted.
+    """
+    _drop_tree_links(path)
+    shutil.rmtree(path, onexc=_force_writable)
+
+
+def _copy_env_files(source: Path, path: Path, config: dict[str, object]) -> None:
+    """Copy each ``env_files`` entry of ``config`` that ``source`` holds into ``path``.
+
+    Raises:
+        OSError: a copy failed.
+    """
+    for rel in _strings(config, "env_files"):
+        if (source / rel).is_file():
+            (path / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / rel, path / rel)
+
+
+def _copy_frozen_dirs(source: Path, path: Path, config: dict[str, object]) -> None:
+    """Copy each ``frozen_dirs`` entry of ``config`` that ``source`` holds into ``path``.
+
+    Raises:
+        OSError: a copy failed.
+    """
+    for rel in _strings(config, "frozen_dirs"):
+        if (source / rel).is_dir():
+            shutil.copytree(source / rel, path / rel, symlinks=True, dirs_exist_ok=True)
+
+
+def _clone_runtime(root: Path, path: Path, config: dict[str, object]) -> None:
+    """Give the clone its own runtime from the worktree config: copies of the
+    ``env_files`` and ``frozen_dirs``, its own venv (``venv_build``) and, when
+    ``linked_trees`` names NODE_TREE, its own Node trees by ``npm ci``. Nothing
+    links to the main tree.
+
+    Raises:
+        _Refusal: ``clone_bad:runtime:venv`` or ``clone_bad:runtime:npm:<rel>``.
+        _GitFailure: ``git ls-files`` failed.
+        OSError: a copy failed.
+    """
+    _copy_env_files(root, path, config)
+    _copy_frozen_dirs(root, path, config)
+    if config["venv_build"] is not None and _build_venv(path, config) != 0:
+        raise _Refusal(["clone_bad:runtime:venv"])
+    if NODE_TREE not in _strings(config, "linked_trees"):
+        return
+    for rel in _lock_roots(path):
+        if _npm_ci(path if rel == "." else path / rel) != 0:
+            raise _Refusal([f"clone_bad:runtime:npm:{rel}"])
+
+
+def _cmd_clone(
+    root: Path, ns: argparse.Namespace, parser: argparse.ArgumentParser
+) -> int:
+    """``clone <slug> [--base <rev>]``: the scratch clone of the default route.
+
+    A shared clone of the main tree at ``WORKTREE_PARENT/CLONE_FOLDER/<slug>`` with a
+    detached ``HEAD`` at the main ``HEAD`` (or ``--base``) and no branch, in the
+    clone or in the main tree. The marker ``.git/scratch-clone.json`` records the
+    parent. The clone gets its own runtime and links nothing to the main tree.
+    Refusals print one line, exit 1 and leave nothing: ``clone_bad:slug``,
+    ``:containment``, ``:exists``, ``:base_unknown``, ``:runtime:<what>`` and
+    ``worktree_bad:config``. The last stdout line is
+    ``clone_ready <path> parent=<sha>``.
+    """
+    del parser
+    slug: str = ns.slug
+    if not WORKTREE_SLUG_RE.fullmatch(slug):
+        raise _Refusal(["clone_bad:slug"])
+    path = clone_path(slug)
+    if not _clone_contained(path):
+        raise _Refusal(["clone_bad:containment"])
+    if os.path.lexists(path):
+        raise _Refusal(["clone_bad:exists"])
+    config = _config(root)
+    parent = _clone_base(root, ns.base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _git(
+            [
+                "clone",
+                "--quiet",
+                "--shared",
+                "--no-checkout",
+                "--config",
+                "core.autocrlf=false",
+                "--",
+                str(root),
+                str(path),
+            ],
+            cwd=path.parent,
+        )
+        _git([*_LF_CHECKOUT, "checkout", "--quiet", "--detach", parent], cwd=path)
+        heads = _git_text(
+            ["for-each-ref", "--format=%(refname)", "refs/heads"], cwd=path
+        )
+        for ref in heads.splitlines():
+            if ref:
+                _git(["update-ref", "-d", ref], cwd=path)
+        marker = {
+            "schema": CLONE_SCHEMA,
+            "main": str(root),
+            "slug": slug,
+            "parent": parent,
+            "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        (path / ".git" / CLONE_MARKER).write_text(
+            json.dumps(marker, indent=2) + "\n", encoding="utf-8", newline="\n"
+        )
+        _clone_runtime(root, path, config)
+    except (_Refusal, _GitFailure, OSError):
+        if os.path.lexists(path):
+            _delete_clone_tree(path)
+        raise
+    _say(f"clone_ready {path.as_posix()} parent={parent}")
+    return 0
+
+
+def _clone_unlanded(path: Path, marker: dict[str, str]) -> list[str]:
+    """The paths of the clone whose change against its parent is not in ``main``.
+
+    A changed path counts as landed when its working-tree blob equals its blob at
+    ``MAIN_REF`` or the blob of the main working-tree file (the ``AP`` row wrote it
+    there before the packet lands), or when the clone deleted it and ``main`` does
+    not hold it at ``MAIN_REF`` or in its working tree.
+
+    Raises:
+        _GitFailure: a git call failed.
+    """
+    main = Path(marker["main"])
+    tip = _ref_commit(main, MAIN_REF) or _git_text(["rev-parse", "HEAD"], cwd=main)
+    tracked = _git_text(
+        [*EOL_PIN, "diff", "--name-only", "-z", marker["parent"], "--"], cwd=path
+    )
+    untracked = _git_text(
+        ["ls-files", "-z", "--others", "--exclude-standard"], cwd=path
+    )
+    changed = sorted(
+        {rel for rel in [*tracked.split("\0"), *untracked.split("\0")] if rel}
+    )
+    open_paths: list[str] = []
+    for rel in changed:
+        main_blob = _tip_blob(main, tip, rel)
+        main_file = main / rel
+        if not os.path.lexists(path / rel):
+            landed = main_blob is None or not os.path.lexists(main_file)
+        else:
+            have = _git_text([*EOL_PIN, "hash-object", "--", rel], cwd=path)
+            landed = have == main_blob or (
+                main_file.is_file()
+                and have == _git_text([*EOL_PIN, "hash-object", "--", rel], cwd=main)
+            )
+        if not landed:
+            open_paths.append(rel)
+    return open_paths
+
+
+def _tip_blob(main: Path, tip: str, rel: str) -> str | None:
+    """The blob of ``rel`` in the commit ``tip`` of ``main``; None when ``tip`` lacks it."""
+    proc = _run_git(
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{tip}:{rel}"],
+        cwd=main,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.decode("utf-8", "replace").strip() or None
+
+
+def _remove_clone(path: Path, marker: dict[str, str], discard: bool) -> int:
+    """``remove <clone> [--discard]``: delete a scratch clone whose work is in ``main``.
+
+    Raises:
+        _Refusal: ``worktree_bad:containment``, ``:cwd``, ``:held:<pid>`` or
+            ``:unlanded`` (without ``--discard``).
+        _GitFailure: a git call failed.
+        OSError: the deletion failed.
+    """
+    if not _clone_contained(path):
+        raise _Refusal(["worktree_bad:containment"])
+    _refuse_cwd(path)
+    _refuse_held(path)
+    if not discard:
+        open_paths = _clone_unlanded(path, marker)
+        for rel in open_paths:
+            sys.stderr.write(f"not in main: {rel}\n")
+        if open_paths:
+            raise _Refusal(["worktree_bad:unlanded"])
+    _delete_clone_tree(path)
+    _say(f"worktree_removed:{path.as_posix()}")
+    return 0
+
+
+# ------------------------------------------------------------ gate candidate
+
+
+def gate_candidate_root() -> Path:
+    """The gate-candidate root ``WORKTREE_PARENT/GATE_CANDIDATE_FOLDER``.
+
+    Read at each call, so a patched constant moves it (tests patch it).
+    """
+    return Path(WORKTREE_PARENT) / GATE_CANDIDATE_FOLDER
+
+
+def gate_candidate_path(slug: str) -> Path:
+    """The folder ``gate-candidate <slug>`` makes: ``<gate-candidate root>/<slug>``."""
+    return gate_candidate_root() / slug
+
+
+def _gate_candidate_contained(path: Path) -> bool:
+    """True when ``path`` resolves strictly inside the gate-candidate root, and that
+    root resolves strictly inside ``WORKTREE_PARENT``
+    (``gate_candidate_bad:containment``)."""
+    return _strictly_inside(gate_candidate_root(), path)
+
+
+def _gate_candidate_marker(path: Path) -> dict[str, str] | None:
+    """The gate-candidate marker of ``path``, or None when ``path`` is not a candidate.
+
+    A candidate holds a real ``.git`` folder (never a gitfile or a link) with the
+    marker GATE_CANDIDATE_MARKER whose keys are exactly GATE_CANDIDATE_KEYS, whose
+    values are strings and whose ``schema`` is GATE_CANDIDATE_SCHEMA. Any other
+    shape is not a candidate.
+    """
+    git_dir = path / ".git"
+    if _is_link(git_dir) or not git_dir.is_dir():
+        return None
+    try:
+        text = (git_dir / GATE_CANDIDATE_MARKER).read_text(encoding="utf-8")
+        data: object = json.loads(text)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    marker = cast(dict[str, object], data)
+    if set(marker) != set(GATE_CANDIDATE_KEYS):
+        return None
+    if marker.get("schema") != GATE_CANDIDATE_SCHEMA:
+        return None
+    if not all(isinstance(value, str) for value in marker.values()):
+        return None
+    return {key: str(value) for key, value in marker.items()}
+
+
+def _gate_candidate_packets(packet_file: Path) -> list[Packet]:
+    """The packets of ``packet_file``, a ``commit-packet/1`` or a ``commit-batch/1``.
+
+    ``tools/commit_batch.py`` parses it (``_read_input``), as the land does, so a
+    file the land would refuse makes no candidate.
+
+    Raises:
+        _Refusal: ``gate_candidate_bad:<reason>`` with commit_batch's refusal
+            reason (``packet_schema``, ``containment``, ``batch_count``, ...); the
+            detail goes to stderr.
+    """
+    batch = _commit_batch()
+    try:
+        packets, _is_batch = batch._read_input(packet_file, True)
+    except batch.rp.Refusal as refusal:
+        if refusal.detail:
+            sys.stderr.write(f"{refusal.reason}: {refusal.detail}\n")
+        raise _Refusal([f"gate_candidate_bad:{refusal.reason}"]) from None
+    return cast("list[Packet]", packets)
+
+
+def _gate_candidate_input(packet_file: Path) -> tuple[list[Packet], str]:
+    """The packets of ``packet_file`` and the SHA-256 of the bytes they came from.
+
+    The file is hashed before and after the parse, so the recorded ``batch_sha256``
+    always names the bytes the candidate was built from.
+
+    Raises:
+        _Refusal: ``gate_candidate_bad:packet_changed`` when the file changed during
+            the parse, or a ``_gate_candidate_packets`` refusal.
+        OSError: the file could not be read.
+    """
+    before = hashlib.sha256(packet_file.read_bytes()).hexdigest()
+    packets = _gate_candidate_packets(packet_file)
+    after = hashlib.sha256(packet_file.read_bytes()).hexdigest()
+    if before != after:
+        raise _Refusal(["gate_candidate_bad:packet_changed"])
+    return packets, before
+
+
+def _main_head(root: Path) -> str:
+    """P, the commit the main tree ``root`` has checked out (its ``HEAD``).
+
+    Raises:
+        _Refusal: ``gate_candidate_bad:main_head`` when ``HEAD`` names no commit.
+        OSError: git is not installed or ``root`` is not a directory.
+    """
+    proc = _run_git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], cwd=root)
+    commit = proc.stdout.decode("utf-8", "replace").strip()
+    if proc.returncode != 0 or not commit:
+        raise _Refusal(["gate_candidate_bad:main_head"])
+    return commit
+
+
+def _session_clone(root: Path, slug: str) -> Path:
+    """The session's scratch clone ``clone_path(slug)`` of the main tree ``root``.
+
+    The candidate takes its dependency trees from this clone, never from the main
+    tree, and its marker names it.
+
+    Raises:
+        _Refusal: ``gate_candidate_bad:no_clone`` when no contained scratch clone of
+            ``root`` is at ``clone_path(slug)``.
+    """
+    clone = clone_path(slug)
+    marker = _clone_marker(clone)
+    if (
+        marker is None
+        or not _clone_contained(clone)
+        or not _same_path(marker["main"], root)
+    ):
+        raise _Refusal(["gate_candidate_bad:no_clone"])
+    return clone
+
+
+def _clone_tree_links(clone: Path, config: dict[str, object]) -> list[str]:
+    """The clone's dependency trees (the config's ``linked_trees``) that the
+    candidate links to.
+
+    Raises:
+        _Refusal: ``gate_candidate_bad:runtime:link:<rel>`` when a tree of the clone
+            resolves outside the clone (a link into the main tree, say).
+        _GitFailure: ``git ls-files`` failed in the clone.
+    """
+    rels = _linked_trees(clone, _strings(config, "linked_trees"))
+    own = _real(clone)
+    outside = [rel for rel in rels if not _within(own, _real(clone / rel))]
+    if outside:
+        raise _Refusal([f"gate_candidate_bad:runtime:link:{rel}" for rel in outside])
+    return rels
+
+
+def _gate_candidate_runtime(
+    root: Path,
+    clone: Path,
+    path: Path,
+    links: Sequence[str],
+    config: dict[str, object],
+) -> None:
+    """Give the candidate its runtime: copies of the main tree's ``env_files``,
+    copies of the clone's ``frozen_dirs``, its own venv (``venv_build``) and a link
+    to each of the clone's dependency trees ``links``. Each link is also named in
+    the candidate's ``.git/info/exclude``, so it is ignored on every platform.
+
+    Raises:
+        _Refusal: ``gate_candidate_bad:runtime:venv``.
+        _GitFailure: git cannot resolve the candidate's main tree (``_build_venv``).
+        OSError: a copy, a link or the exclude write failed.
+    """
+    _copy_env_files(root, path, config)
+    _copy_frozen_dirs(clone, path, config)
+    if config["venv_build"] is not None and _build_venv(path, config) != 0:
+        raise _Refusal(["gate_candidate_bad:runtime:venv"])
+    linked: list[str] = []
+    for rel in links:
+        link = path / rel
+        if not link.parent.is_dir() or os.path.lexists(link):
+            continue
+        _make_dir_link(link, clone / rel)
+        linked.append(rel)
+    if linked:
+        exclude = path / ".git" / GIT_INFO_EXCLUDE
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write("".join(f"/{rel}\n" for rel in linked))
+
+
+def _verify_gate_candidate(path: Path, tree: str) -> None:
+    """The built candidate is exactly T: its index is ``tree`` and its working tree
+    holds no change and no untracked file that is not ignored.
+
+    Raises:
+        _Refusal: ``gate_candidate_bad:index`` or ``gate_candidate_bad:dirty:<rel>``
+            (the first path git reports; every path goes to stderr).
+        _GitFailure: a git call failed.
+    """
+    if _git_text(["write-tree"], cwd=path) != tree:
+        raise _Refusal(["gate_candidate_bad:index"])
+    changed = _z(
+        _git([*_LF_CHECKOUT, "diff", "--name-only", "--no-renames", "-z"], cwd=path)
+    )
+    untracked = _z(_git(["ls-files", "-z", "--others", "--exclude-standard"], cwd=path))
+    dirty = sorted({rel for rel in [*changed, *untracked] if rel})
+    for rel in dirty:
+        sys.stderr.write(f"candidate differs from the batch tree: {rel}\n")
+    if dirty:
+        raise _Refusal([f"gate_candidate_bad:dirty:{dirty[0]}"])
+
+
+def _cmd_gate_candidate(
+    root: Path, ns: argparse.Namespace, parser: argparse.ArgumentParser
+) -> int:
+    """``gate-candidate <slug> --packet <file>``: the checkout the full gate runs in.
+
+    P is the main tree's ``HEAD``. The packet file (one ``commit-packet/1`` or a
+    ``commit-batch/1``) is parsed as ``tools/commit_batch.py`` parses it, and every
+    packet must sit on P. T is ``commit_batch.batch_tree``, the function the land
+    builds its tree with. The candidate at ``<gate-candidate root>/<slug>`` is a
+    shared clone of the main tree, detached at P with no branch, whose index and
+    working tree are T (``read-tree --reset -u``). The marker
+    ``.git/gate-candidate.json`` records ``parent`` (P), ``tree`` (T),
+    ``batch_sha256`` (the sha256 of the packet file bytes), ``clone`` (the session's
+    scratch clone) and ``plan``. The candidate gets its own venv, links to the
+    clone's dependency trees (never the main tree's) and copies of the env files and
+    the clone's frozen directories.
+
+    Every refusal comes before the first write, except a runtime or verify failure,
+    which deletes the half-built candidate: each prints one line, exits 1 and
+    leaves nothing. The last stdout line is
+    ``gate_candidate_ready <path> parent=<P> tree=<T>``.
+
+    Raises:
+        _Refusal: ``gate_candidate_bad:slug``, ``:containment``, ``:exists``,
+            ``:no_clone``, ``:<packet reason>``, ``:main_head``, ``:parent_moved``,
+            ``:runtime:link:<rel>``, ``:runtime:venv``, ``:index``, ``:dirty:<rel>``
+            or ``worktree_bad:config``.
+        _GitFailure: a git call failed (``batch_tree`` for the tree build).
+        OSError: a file could not be read, copied or deleted.
+    """
+    del parser
+    slug: str = ns.slug
+    if not WORKTREE_SLUG_RE.fullmatch(slug):
+        raise _Refusal(["gate_candidate_bad:slug"])
+    path = gate_candidate_path(slug)
+    if not _gate_candidate_contained(path):
+        raise _Refusal(["gate_candidate_bad:containment"])
+    if os.path.lexists(path):
+        raise _Refusal(["gate_candidate_bad:exists"])
+    clone = _session_clone(root, slug)
+    config = _config(root)
+    packet_file = Path(os.path.abspath(ns.packet))
+    packets, batch_sha256 = _gate_candidate_input(packet_file)
+    parent = _main_head(root)
+    if any(packet.parent != parent for packet in packets):
+        raise _Refusal(["gate_candidate_bad:parent_moved"])
+    batch = _commit_batch()
+    try:
+        tree: str = batch.batch_tree(root, parent, packets)
+    except batch.rp.GitError as error:
+        raise _GitFailure("batch_tree", f"{error}\n".encode()) from None
+    links = _clone_tree_links(clone, config)
+
+    folder = path.parent
+    made_folder = not os.path.lexists(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        _git(
+            [
+                "clone",
+                "--quiet",
+                "--shared",
+                "--no-checkout",
+                "--config",
+                "core.autocrlf=false",
+                "--",
+                str(root),
+                str(path),
+            ],
+            cwd=folder,
+        )
+        _git([*_LF_CHECKOUT, "checkout", "--quiet", "--detach", parent], cwd=path)
+        heads = _git_text(
+            ["for-each-ref", "--format=%(refname)", "refs/heads"], cwd=path
+        )
+        for ref in heads.splitlines():
+            if ref:
+                _git(["update-ref", "-d", ref], cwd=path)
+        _git([*_LF_CHECKOUT, "read-tree", "--reset", "-u", tree], cwd=path)
+        marker = {
+            "schema": GATE_CANDIDATE_SCHEMA,
+            "parent": parent,
+            "tree": tree,
+            "batch_sha256": batch_sha256,
+            "clone": str(clone),
+            "plan": packets[0].plan,
+        }
+        (path / ".git" / GATE_CANDIDATE_MARKER).write_text(
+            json.dumps(marker, indent=2) + "\n", encoding="utf-8", newline="\n"
+        )
+        _gate_candidate_runtime(root, clone, path, links, config)
+        _verify_gate_candidate(path, tree)
+    except (_Refusal, _GitFailure, OSError):
+        if os.path.lexists(path):
+            _delete_clone_tree(path)
+        if made_folder and folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+        raise
+    _say(f"gate_candidate_ready {path.as_posix()} parent={parent} tree={tree}")
+    return 0
+
+
+def _remove_gate_candidate(path: Path) -> int:
+    """``remove <gate candidate>``: delete a gate candidate.
+
+    A candidate holds a copy of a packet batch that lands only through
+    ``tools/commit_batch.py``, so it has nothing to land and ``--discard`` changes
+    nothing. Its dependency-tree links are dropped as links first.
+
+    Raises:
+        _Refusal: ``worktree_bad:containment``, ``:cwd`` or ``:held:<pid>``.
+        OSError: the deletion failed.
+    """
+    if not _gate_candidate_contained(path):
+        raise _Refusal(["worktree_bad:containment"])
+    _refuse_cwd(path)
+    _refuse_held(path)
+    _delete_clone_tree(path)
+    _say(f"worktree_removed:{path.as_posix()}")
+    return 0
+
 # -------------------------------------------------------------------- main
 
 _Handler = Callable[[Path, argparse.Namespace, argparse.ArgumentParser], int]
 _HANDLERS: dict[str, _Handler] = {
     "create": _cmd_create,
+    "clone": _cmd_clone,
+    "gate-candidate": _cmd_gate_candidate,
     "check": _cmd_check,
     "land": _cmd_land,
     "sync": _cmd_sync,
@@ -2157,7 +2867,10 @@ _HANDLERS: dict[str, _Handler] = {
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="executor_worktree.py",
-        description="Create, check, land, sync and remove an executor worktree.",
+        description=(
+            "Create, check, land, sync and remove an executor worktree; "
+            "make and remove a scratch clone and a gate candidate."
+        ),
     )
     parser.add_argument(
         "--root",
@@ -2192,6 +2905,25 @@ def _parser() -> argparse.ArgumentParser:
     )
     create.add_argument("--session", help="the claim's session (with --lane-plan)")
 
+    clone = commands.add_parser(
+        "clone",
+        help="make the scratch clone <parent>/.clones/<slug> (the default route)",
+    )
+    clone.add_argument("slug", help="lowercase letters, digits and dashes")
+    clone.add_argument("--base", help="the commit to check out (default: HEAD)")
+
+    gate = commands.add_parser(
+        "gate-candidate",
+        help="make the gate candidate <parent>/.gate-candidates/<slug> of a batch",
+    )
+    gate.add_argument("slug", help="the slug of the session's scratch clone")
+    gate.add_argument(
+        "--packet",
+        required=True,
+        metavar="FILE",
+        help="the commit packet or commit batch the land will commit",
+    )
+
     check = commands.add_parser("check", help="validate the worktree's environment")
     check.add_argument("path")
 
@@ -2202,7 +2934,9 @@ def _parser() -> argparse.ArgumentParser:
     sync.add_argument("path")
     sync.add_argument("rel", nargs="+", help="root-relative file to refresh")
 
-    remove = commands.add_parser("remove", help="delete a landed worktree")
+    remove = commands.add_parser(
+        "remove", help="delete a landed worktree, a scratch clone or a gate candidate"
+    )
     remove.add_argument("path")
     mode = remove.add_mutually_exclusive_group()
     mode.add_argument(

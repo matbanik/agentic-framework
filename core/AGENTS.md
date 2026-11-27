@@ -12,7 +12,7 @@ The portable operating contract. Read linked procedures when triggered; a link d
 
 ## Session and Profile
 
-- Read `PROJECT-PROFILE.md` before the first workflow; if absent, run ADOPTION-GUIDE Step 1. Apply **EGRESS_PRECEDENCE**, **D6_ADOPTER_ARGV**, **D9_NO_BRANCH**, configured artifact homes and `TEMPLATE_HOME`.
+- Read `PROJECT-PROFILE.md` before the first workflow; if absent, run ADOPTION-GUIDE Step 1. Apply **EGRESS_PRECEDENCE**, **D6_ADOPTER_ARGV**, **D9_NO_BRANCH**, configured artifact homes and `TEMPLATE_HOME`. Every session edits in a scratch clone made by `tools/executor_worktree.py clone` at the current `main` with a detached `HEAD` and no branch, and lands only through a `tools/commit_batch.py` packet built against the clone's recorded parent; no new lane worktree is made; a lane in flight finishes on its route.
 - Resolve driver/host capabilities in [.agent/docs/harness-profiles.md](.agent/docs/harness-profiles.md): instruction loading, shell, compaction, dispatch and `plan_to_exec_gate`. Unknown capabilities use conservative defaults. Workflow tool names are capability placeholders.
 - **Decide before you ask.** Before you put a question, a choice or a decision to the human, run the Human Decision Protocol (`.agent/docs/human-decision-protocol.md`). If it settles the decision, state your decision in one line and continue. If not, ask once, early, with your recommendation first, in plain words about outcomes, and name the precedent and the sources that you used.
 - Read GUARDRAILS, `.agent/context/current-focus.md` and `.agent/context/known-issues.md`. Group related work by dependency; do not chain unrelated projects. Surface risks, conflicting evidence and uncertainty plainly; verify claims instead of defending memory.

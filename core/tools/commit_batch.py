@@ -90,7 +90,7 @@ HUMAN_ACT = "human_directed"
 # The lane-route policy: absent, or ``required: false``, keeps the old route.
 LANE_ROUTE_FILE = ".agent/lane-route.json"
 LANE_ROUTE_SCHEMA = "lane-route/1"
-LANE_ROUTE_KEYS = ("schema", "required", "exempt")
+LANE_ROUTE_KEYS = ("schema", "required", "exempt", "new_lanes")
 LANE_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,40}")
 LANE_BRANCH_PREFIX = "refs/heads/lane/"
 # The human route's op is ``human-<message uuid>``; its folder holds the direction claim that
@@ -1794,8 +1794,10 @@ def batch_tree(top: Path, parent: str, packets: Sequence[Packet]) -> str:
 
     The packets apply in order, each on the tree of the one before, as the land's
     sub-ops each commit on the commit before (``_step_blobs``), and as the intent of
-    the land journal (``land_journal.batch_intent``) names it. Only loose objects are
-    written: no ref, index or working-tree file of ``top``.
+    the land journal (``land_journal.batch_intent``) names it. The gate candidate
+    (``executor_worktree.py gate-candidate``) and the gated land (``_check_gated``)
+    both build T with this function. Only loose objects are written: no ref, index
+    or working-tree file of ``top``.
 
     Raises:
         rp.GitError: a git step failed (an unknown ``parent`` included).
@@ -4437,6 +4439,267 @@ def _standing_recheck(ctx: Op) -> None:
         raise rp.Refusal("no_authority", f"{plan}:{ctx.act}:{root_op}")
 
 
+# -- the gated land ------------------------------------------------------------------------
+
+#: The gate's run record in a ``--gated`` or ``--check-gated`` run folder.
+GATE_RECORD_NAME = "gate.json"
+#: The ``candidate`` keys of a gate record: the project gate writes them when it runs in a
+#: gate candidate (``executor_worktree.py gate-candidate``).
+GATE_CANDIDATE_KEYS = frozenset({"parent", "tree", "batch_sha256"})
+#: The ``task.md`` ``template_version`` from which a land needs ``--gated``.
+GATED_TEMPLATE = (2, 7)
+TEMPLATE_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*")
+#: The placeholder of the packet's plan slug in POST_GATE_PATHS.
+PLAN_TOKEN = "{plan}"
+#: The wildcard of a POST_GATE_PATHS entry: one or more characters other than ``/``.
+POST_GATE_WILDCARD = "*"
+#: The paths a land may change after the full gate ran on its candidate: the plan
+#: folder, the plan's closeout handoffs, reviews and reflection and the grouping files.
+#: The project's junction files (``junction_files`` of WORKTREE_CONFIG_FILE, the list
+#: ``tools/lanes.py`` reads) are post-gate paths too (``_post_gate_paths``). An entry
+#: that ends in ``/`` holds every path under it. In an entry, ``*`` stands for one or
+#: more characters other than ``/`` (the per-MEU handoffs).
+POST_GATE_PATHS = (
+    "docs/execution/plans/{plan}/",
+    ".agent/context/handoffs/{plan}-handoff.md",
+    ".agent/context/handoffs/{plan}-MEU-*-handoff.md",
+    ".agent/context/handoffs/{plan}-plan-critical-review.md",
+    ".agent/context/handoffs/{plan}-implementation-critical-review.md",
+    "docs/execution/reflections/{plan}-reflection.md",
+    ".agent/context/grouping/",
+)
+#: The adopter's worktree config, whose ``junction_files`` list adds post-gate paths.
+WORKTREE_CONFIG_FILE = ".agent/credits/worktree.json"
+
+
+def _post_gate_paths(top: Path) -> tuple[str, ...]:
+    """POST_GATE_PATHS and the ``junction_files`` of ``<top>/WORKTREE_CONFIG_FILE``.
+
+    A missing or unreadable config, or a ``junction_files`` value that is not a list of
+    strings, adds no path, so the gate check only gets stricter.
+    """
+    try:
+        value: object = json.loads(
+            (top / WORKTREE_CONFIG_FILE).read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, ValueError):
+        return POST_GATE_PATHS
+    if not isinstance(value, dict):
+        return POST_GATE_PATHS
+    junctions = cast(dict[str, object], value).get("junction_files")
+    if not isinstance(junctions, list):
+        return POST_GATE_PATHS
+    items = cast(list[object], junctions)
+    if not all(isinstance(item, str) and item for item in items):
+        return POST_GATE_PATHS
+    return (*POST_GATE_PATHS, *(cast(str, item) for item in items))
+
+
+def _post_gate(path: str, plan: str, entries: Sequence[str] = POST_GATE_PATHS) -> bool:
+    """True when ``path`` is an ``entries`` path of ``plan`` or under a folder entry.
+
+    The ``{plan}`` entries do not apply to a planless packet.
+    """
+    for entry in entries:
+        if PLAN_TOKEN in entry and plan == PLANLESS:
+            continue
+        name = entry.replace(PLAN_TOKEN, plan)
+        if POST_GATE_WILDCARD in name:
+            pattern = re.escape(name).replace(re.escape(POST_GATE_WILDCARD), "[^/]+")
+            if re.fullmatch(pattern, path):
+                return True
+            continue
+        if path == name or (name.endswith("/") and path.startswith(name)):
+            return True
+    return False
+
+
+def _read_gate_record(run_dir: Path) -> dict[str, Any]:
+    """The JSON object of ``<run_dir>/gate.json``.
+
+    Raises:
+        rp.Refusal: ``gate_missing`` when the folder or the file is missing or unreadable,
+            or the file is not a JSON object.
+    """
+    path = run_dir / GATE_RECORD_NAME
+    try:
+        data = rp._read_bytes(path)
+    except OSError as exc:
+        raise rp.Refusal("gate_missing", f"{path}: {exc}") from exc
+    if data is None:
+        raise rp.Refusal("gate_missing", str(path))
+    try:
+        value = rp._load_json(data)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise rp.Refusal("gate_missing", f"{path}: not JSON") from exc
+    if not isinstance(value, dict):
+        raise rp.Refusal("gate_missing", f"{path}: not a JSON object")
+    return cast(dict[str, Any], value)
+
+
+def _gate_candidate(record: Mapping[str, Any]) -> dict[str, str] | None:
+    """The record's ``candidate {parent, tree, batch_sha256}``; None when absent or malformed."""
+    value = record.get("candidate")
+    if not isinstance(value, dict):
+        return None
+    candidate = cast(dict[str, object], value)
+    if set(candidate) != GATE_CANDIDATE_KEYS:
+        return None
+    if not (
+        rp._match(rp.ROOT_RE, candidate["parent"])
+        and rp._match(rp.ROOT_RE, candidate["tree"])
+        and rp._match(rp.HEX64_RE, candidate["batch_sha256"])
+    ):
+        return None
+    return {key: cast(str, candidate[key]) for key in sorted(GATE_CANDIDATE_KEYS)}
+
+
+def _not_full_field(record: Mapping[str, Any]) -> str | None:
+    """The first field that shows the record is not a full phase gate; None when it is."""
+    checks = (
+        ("scope", record.get("scope") == "phase"),
+        ("tier", record.get("tier") == "full"),
+        ("check_only", "check_only" in record and record["check_only"] is None),
+        ("files", record.get("files") == []),
+    )
+    return next((name for name, ok in checks if not ok), None)
+
+
+def _check_gated(
+    repo: rp.Repo, run_dir: Path, packets: Sequence[Packet]
+) -> dict[str, str]:
+    """The gate of ``run_dir`` is a passing full gate of this batch's candidate.
+
+    The candidate's ``tree`` must equal the batch tree on its ``parent`` (``batch_tree``,
+    the function the gate candidate is built with), except for the post-gate paths
+    (``_post_gate_paths``). The
+    record's ``batch_sha256`` is not compared with the packet file: a land may carry
+    post-gate paths that the gated batch did not. Nothing but loose git objects is
+    written.
+
+    Returns:
+        ``{parent, tree}`` of the gated candidate.
+
+    Raises:
+        rp.Refusal: in this order, ``gate_missing``, ``gate_not_candidate``,
+            ``gate_failed``, ``gate_not_full:<field>``, ``gate_mismatch:parent``, then
+            ``gate_mismatch:tree`` (the candidate tree or the batch tree cannot be read)
+            or ``gate_mismatch:tree:<path>`` (the first differing path, sorted).
+    """
+    record = _read_gate_record(run_dir)
+    candidate = _gate_candidate(record)
+    if candidate is None:
+        raise rp.Refusal("gate_not_candidate", str(run_dir))
+    summary = record.get("summary")
+    passed = isinstance(summary, dict) and (
+        cast(dict[str, object], summary).get("passed") is True
+    )
+    if not passed or record.get("completed") is not True:
+        raise rp.Refusal("gate_failed", str(run_dir))
+    field_name = _not_full_field(record)
+    if field_name is not None:
+        raise rp.Refusal(f"gate_not_full:{field_name}", str(run_dir))
+    first = packets[0]
+    if first.parent != candidate["parent"]:
+        raise rp.Refusal(
+            "gate_mismatch:parent", f"{first.parent}!={candidate['parent']}"
+        )
+    gated = candidate["tree"]
+    if _run_git(repo.top, "cat-file", "-e", f"{gated}^{{tree}}").returncode != 0:
+        raise rp.Refusal(
+            "gate_mismatch:tree", f"{gated} is not a tree of {repo.display}"
+        )
+    try:
+        built = batch_tree(repo.top, first.parent, packets)
+    except (rp.GitError, OSError) as exc:
+        raise rp.Refusal("gate_mismatch:tree", str(exc)) from exc
+    proc = _run_git(
+        repo.top, "diff-tree", "-r", "-z", "--name-only", "--no-renames", gated, built
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise rp.Refusal("gate_mismatch:tree", detail)
+    names = proc.stdout.decode("utf-8", errors="replace").split("\0")
+    entries = _post_gate_paths(repo.top)
+    late = sorted(
+        name for name in names if name and not _post_gate(name, first.plan, entries)
+    )
+    if late:
+        raise rp.Refusal(
+            f"gate_mismatch:tree:{late[0]}",
+            f"{len(late)} path(s) differ from the gated tree {gated}",
+        )
+    return {"parent": candidate["parent"], "tree": gated}
+
+
+def _template_at_least(value: object, floor: tuple[int, ...]) -> bool:
+    """True when a ``template_version`` value is ``floor`` or later; unreadable is True."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return True
+    text = str(value).strip()
+    if TEMPLATE_VERSION_RE.fullmatch(text) is None:
+        return True
+    return tuple(int(part) for part in text.split(".")) >= floor
+
+
+def _gate_required(repo: rp.Repo, packets: Sequence[Packet]) -> bool:
+    """True when this land needs ``--gated``.
+
+    A plan whose ``task.md`` front matter has ``template_version`` GATED_TEMPLATE or later
+    needs the gate for a batch with any path outside the post-gate paths. A planless packet, a plan
+    without ``task.md`` or ``template_version``, and a batch of post-gate paths only need
+    none. A ``template_version`` that is not a dotted number needs the gate (fail closed).
+
+    Raises:
+        rp.Refusal: ``schema`` when the front matter is not a mapping.
+    """
+    plan = packets[0].plan
+    if plan == PLANLESS:
+        return False
+    entries = _post_gate_paths(repo.top)
+    if all(
+        _post_gate(path, plan, entries) for packet in packets for path in packet.paths
+    ):
+        return False
+    text = rp._carrier_text(repo, rp._plan_dir(repo, plan) / "task.md")
+    if text is None:
+        return False
+    meta = rp._frontmatter(text)
+    if meta is None or "template_version" not in meta:
+        return False
+    return _template_at_least(meta["template_version"], GATED_TEMPLATE)
+
+
+def _gate_land(repo: rp.Repo, gated: str | None, packets: Sequence[Packet]) -> None:
+    """The gate check of a land, before anything else is read or written.
+
+    Raises:
+        rp.Refusal: a ``_check_gated`` refusal when ``gated`` names a run folder, else
+            ``gate_required`` when ``_gate_required`` holds.
+    """
+    if gated is not None:
+        _check_gated(repo, Path(gated), packets)
+    elif _gate_required(repo, packets):
+        raise rp.Refusal(
+            "gate_required",
+            f"{packets[0].plan} is at template_version "
+            f"{'.'.join(map(str, GATED_TEMPLATE))} or later: build the gate "
+            "candidate (executor_worktree.py gate-candidate), run the full gate there "
+            "and land with --gated <run dir>",
+        )
+
+
+def _check_gated_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
+    """``--check-gated <run dir> --packet <file>``: the land's gate check, read-only.
+
+    Raises:
+        rp.Refusal: a ``_read_input`` or ``_check_gated`` refusal.
+    """
+    packets, _batch = _read_input(Path(cast(str, args.packet)), True)
+    gate = _check_gated(repo, Path(cast(str, args.check_gated)), packets)
+    return rp.EXIT_OK, {"result": "gated_ok", **gate}
+
+
 def _grant_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
     """``--phase``: an op of the phase's act under the plan's grant or the standing grant.
 
@@ -4444,7 +4707,8 @@ def _grant_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
     (``_stop_list``) before any write; a rerun of a started op goes straight on, so a crash
     after the commit never refuses its own dirt. Under the standing grant a planless packet
     is spent by its digest folder (``_planless_unspent``) and a plan's act by its
-    ``consumed`` entry (``_standing_reserve``).
+    ``consumed`` entry (``_standing_reserve``). The gate check (``_gate_land``) runs
+    first, right after the packets are read.
     """
     op = cast(str, args.op)
     run = cast(str, args.run or DEFAULT_RUN)
@@ -4453,6 +4717,7 @@ def _grant_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
     phase = cast(str, args.phase)
     act = ACT_FOR_PHASE[phase]
     packets, batch = _read_input(Path(cast(str, args.packet)), phase == "exec")
+    _gate_land(repo, cast("str | None", args.gated), packets)
     _candidate_root(repo)
     first = packets[0]
     if first.plan == PLANLESS and batch:
@@ -4487,13 +4752,15 @@ def _human_route(repo: rp.Repo, args: argparse.Namespace) -> Outcome:
     (``_scan_packets``, R1-F3), so a refused secret leaves the direction unclaimed. The scan
     reads only the packets' bytes and the parent's baseline, so a rerun of a pending attempt
     repeats it with the same result. The grant route's ownership stops (``foreign_delete``,
-    ``foreign_hunks``) do not apply: a typed direction names this commit.
+    ``foreign_hunks``) do not apply: a typed direction names this commit. The gate check
+    (``_gate_land``) runs first, right after the packets are read.
     """
     session = cast(str, args.session)
     uid = cast(str, args.message_uuid)
     _check_name(session)
     _check_name(uid)
     packets, batch = _read_input(Path(cast(str, args.packet)), True)
+    _gate_land(repo, cast("str | None", args.gated), packets)
     _candidate_root(repo)
     if packets[0].plan == PLANLESS and batch:
         raise rp.Refusal("planless_batch", f"{PLANLESS_PREFIX}{packets[0].digest[:8]}")
@@ -4685,6 +4952,7 @@ class LaneRoute(TypedDict):
 
     required: bool
     exempt: tuple[str, ...]
+    new_lanes: bool
 
 
 def _route_bad(why: str, detail: str) -> rp.Refusal:
@@ -4696,20 +4964,22 @@ def lane_route(main: Path) -> LaneRoute:
 
     The file is one JSON object with exactly the keys ``schema`` (``lane-route/1``),
     ``required`` (a JSON bool: ``1`` and ``"true"`` are refused) and ``exempt`` (a list of
-    unique slugs that match ``LANE_SLUG_RE``). A key may occur once: JSON keeps the
-    last of repeated keys, so ``"required": true, "required": false`` would turn the
-    refusals off without a word.
+    unique slugs that match ``LANE_SLUG_RE``), and the optional key ``new_lanes`` (a JSON
+    bool; absent is ``True``; ``false`` closes new lane worktrees). A key may occur once:
+    JSON keeps the last of repeated keys, so ``"required": true, "required": false``
+    would turn the refusals off without a word.
 
     Raises:
         rp.Refusal: ``lane_route_bad:<why>``, with ``<why>`` one of ``unreadable``,
             ``json``, ``key_repeated:<key>``, ``extra_key:<key>``, ``schema``,
-            ``required``, ``exempt``, ``exempt_slug`` and ``exempt_repeated``.
+            ``required``, ``exempt``, ``exempt_slug``, ``exempt_repeated`` and
+            ``new_lanes``.
     """
     path = main / LANE_ROUTE_FILE
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
-        return {"required": False, "exempt": ()}
+        return {"required": False, "exempt": (), "new_lanes": True}
     except OSError as exc:
         raise _route_bad("unreadable", f"cannot read {path}: {exc}") from None
 
@@ -4748,7 +5018,10 @@ def lane_route(main: Path) -> LaneRoute:
         if item in slugs:
             raise _route_bad("exempt_repeated", f"{path}: {item!r} is listed twice")
         slugs.append(item)
-    return {"required": required, "exempt": tuple(slugs)}
+    new_lanes = policy.get("new_lanes", True)
+    if not isinstance(new_lanes, bool):
+        raise _route_bad("new_lanes", f"{path}: new_lanes is not a JSON bool")
+    return {"required": required, "exempt": tuple(slugs), "new_lanes": new_lanes}
 
 
 def _refuse_lane_worktree(repo: rp.Repo) -> None:
@@ -4812,6 +5085,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--scope-manifest")
     parser.add_argument("--message-file")
     parser.add_argument("--descriptor")
+    # The gate run folder of the batch's candidate (the gated land).
+    parser.add_argument("--gated", metavar="RUN_DIR")
+    parser.add_argument("--check-gated", metavar="RUN_DIR")
     return parser
 
 
@@ -4819,7 +5095,11 @@ Handler = Callable[[rp.Repo, argparse.Namespace], Outcome]
 
 
 def _route(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Handler:
-    """Exactly one complete route; anything else is a usage error (exit 2)."""
+    """Exactly one complete route; anything else is a usage error (exit 2).
+
+    The routes are ``--phase``, ``--human-directed``, ``--step`` and the read-only
+    ``--check-gated``; ``--gated`` belongs to the first two.
+    """
     grant = args.phase is not None or args.op is not None or args.run is not None
     human = (
         bool(args.human_directed)
@@ -4837,10 +5117,19 @@ def _route(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Handler
             args.descriptor,
         )
     )
-    if [grant, human, step].count(True) != 1:
-        parser.error("choose exactly one route: --phase, --human-directed or --step")
+    check = args.check_gated is not None
+    if [grant, human, step, check].count(True) != 1:
+        parser.error(
+            "choose exactly one route: --phase, --human-directed, --step or --check-gated"
+        )
     if exact and not step:
         parser.error("the exact parameters belong to --step")
+    if args.gated is not None and not (grant or human):
+        parser.error("--gated belongs to --phase or --human-directed")
+    if check:
+        if args.packet is None:
+            parser.error("--check-gated needs --packet")
+        return _check_gated_route
     if grant:
         if args.phase is None or args.op is None or args.packet is None:
             parser.error("--phase needs --op and --packet")

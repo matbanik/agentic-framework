@@ -77,6 +77,9 @@ CAPTURE_CALL = "credits_msg.py landing --part product"
 REMOVE_CALL = "executor_worktree.py remove"
 RELEASED_DONE = "released:done"
 SEAL_CALL = "credits_msg.py landing --part closeout"
+# H2-3c names the clone route first, then the lane route, then the old route (v2.7).
+CLONE_CALL = "executor_worktree.py clone"
+LANE_LAND_CALL = "tools/lanes.py land prepare"
 HEADLESS_HEADING = "Scheduled headless run"
 
 SCHEDULER_ROW_NAME = "headless `claude -p` under the credits scheduler"
@@ -709,11 +712,20 @@ def test_template_gains_rows_h2_3a_to_h2_3c() -> None:
     assert names[index : index + 5] == ["H2-3", "H2-3a", "H2-3b", "H2-3c", "H2-4"], names
 
 
+def _old_route(text: str, where: str) -> str:
+    """``text`` from the old route on, after the clone route and the lane route (v2.7)."""
+    _assert_order(text, (CLONE_CALL, LANE_LAND_CALL, LAND_CALL), where)
+    return text[text.find(LAND_CALL) :]
+
+
 def test_template_h2_3c_splits_land_capture_remove() -> None:
-    """AC-J.5: H2-3c runs land → product capture → remove, the capture only with
-    ``CREDITS_RUN_ID``; an interactive run keeps land → remove."""
+    """AC-J.5: H2-3c names the clone route, then the lane route, then the old route; the old
+    route runs land → product capture → remove, the capture only with ``CREDITS_RUN_ID``; an
+    interactive run keeps land → remove."""
     row = _template_rows()["H2-3c"]
-    _assert_order(row, (LAND_CALL, CAPTURE_CALL, REMOVE_CALL), "H2-3c")
+    _assert_order(
+        _old_route(row, "H2-3c"), (LAND_CALL, CAPTURE_CALL, REMOVE_CALL), "H2-3c"
+    )
     assert "CREDITS_RUN_ID" in row
     assert re.search(
         r"no `CREDITS_RUN_ID`|`CREDITS_RUN_ID` is not set|without `CREDITS_RUN_ID`", row
@@ -738,9 +750,14 @@ def test_template_seal_row_follows_h2_5_after_released_done() -> None:
 
 
 def test_template_four_calls_in_order() -> None:
-    """AC-J.5: across the template, land → capture → remove → seal."""
+    """AC-J.5: from the H2-3c old route on, land → capture → remove → seal."""
+    text = _text(TASK_TEMPLATE)
+    row = _template_rows()["H2-3c"]
+    start = text.find(row)
+    assert start >= 0, "the H2-3c row is missing"
+    old = len(row) - len(_old_route(row, "H2-3c"))
     _assert_order(
-        _text(TASK_TEMPLATE),
+        text[start + old :],
         (LAND_CALL, CAPTURE_CALL, REMOVE_CALL, SEAL_CALL),
         "TASK-TEMPLATE.md",
     )

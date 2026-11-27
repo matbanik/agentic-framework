@@ -31,10 +31,9 @@ Design choices (the tests pin each one):
   tiers may overlap: exit 0, no ``overlap:`` and no ``ownership_bad`` line. A tier below
   1 is ``ownership_bad:tier:<session>``; an unknown key, at the top or in a session, is
   ``ownership_bad:extra_key:<key>``; both exit 1.
-* The documents: the TASK-TEMPLATE Lane Ownership section names the default (every plan
-  in an executor worktree) and the main-tree exception with a recorded basis, in a
-  sentence that keeps ``optional``; the start procedure is
-  ``executor_worktree.py create <slug> --lane-plan <plan dir>``; H1-3, H2-3, H2-3a and
+* The documents: the TASK-TEMPLATE Lane Ownership section names the default (every
+  plan) with no main-tree exception; the start procedure is
+  ``executor_worktree.py clone <slug>`` (v2.7, the scratch clone route); H1-3, H2-3, H2-3a and
   H2-3b name their integration request forms; the H2-3c Task cell names
   ``tools/lanes.py land prepare`` before ``executor_worktree.py land``; ``create-plan.md``
   Step 4 runs ``tools/lanes.py ownership-check --task`` as a check that blocks Step 5;
@@ -68,6 +67,7 @@ JUNCTION_ENTRY = ".agent/context/meu-status.yaml"
 LANE_PREPARE = "tools/lanes.py land prepare"
 OLD_LAND = "executor_worktree.py land"
 START_FORM = "executor_worktree.py create <slug> --lane-plan "
+CLONE_START_FORM = "executor_worktree.py clone <slug>"
 ROW_FORMS: dict[str, tuple[str, ...]] = {
     "H1-3": ("meu-status",),
     "H2-3": ("metrics-row",),
@@ -365,28 +365,44 @@ def test_ac828_2_unknown_key_is_extra_key(tmp_path: Path, extra: str, key: str) 
 
 
 # ---------------------------------------------------------------------------
-# TASK-TEMPLATE.md v2.6
+# TASK-TEMPLATE.md v2.7
 # ---------------------------------------------------------------------------
 
 
 def test_ac828_3_lane_ownership_is_the_default() -> None:
-    """the default for executor-worktree plans and the main-tree exception."""
+    """The default for every plan, with no main-tree exception (v2.7).
+
+    Spec change of the scratch clone route: the clone route needs ``owns`` for every
+    plan, so the main-tree exception with a basis goes.
+    """
     section = _section(_text(TASK_TEMPLATE), "## Lane Ownership")
     sentences = _sentences(section)
-    default = [s for s in sentences if "default" in s and "executor worktree" in s]
-    assert default, "no sentence makes the section the default in an executor worktree"
+    default = [
+        s
+        for s in sentences
+        if "default" in s and "every plan" in s and "executor worktree" not in s
+    ]
+    assert default, "no sentence makes the section the default for every plan"
     exception = [
         s
         for s in sentences
         if "optional" in s and re.search(r"main[- ]tree", s) and "basis" in s
     ]
-    assert exception, "no sentence keeps `optional` for a main-tree plan with a basis"
+    assert exception == [], f"the main-tree exception is still there: {exception}"
     assert "Keep it only when the plan runs as a lane" not in _flat(section)
 
 
 def test_ac828_3_start_procedure_names_lane_plan() -> None:
-    """the start procedure is ``executor_worktree.py create <slug> --lane-plan``."""
-    assert START_FORM in _text(TASK_TEMPLATE)
+    """The start procedure is the scratch clone (v2.7).
+
+    Spec change of the scratch clone route: ``executor_worktree.py clone <slug>``
+    replaces ``create <slug> --lane-plan`` as the start procedure.
+    """
+    section = _section(_text(TASK_TEMPLATE), "## Lane Ownership")
+    start = [s for s in _sentences(section) if "start procedure" in s]
+    assert start, "no sentence names the start procedure"
+    assert all(CLONE_START_FORM in s for s in start), start
+    assert START_FORM not in _flat(section)
 
 
 @pytest.mark.parametrize("row_id", sorted(ROW_FORMS))

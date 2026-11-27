@@ -12,12 +12,13 @@ review_limits:  # optional (v2.4): create-plan.md Step 0; equal to task.md's; ab
   execution_tokens: "{integer >= 1 | off}"
   basis: "{repo | tightened | loosened}"
 status: "draft"
-template_version: "2.4"
+template_version: "2.5"
 ---
 
 # Implementation Plan: {Project Title}
 
 > **Project**: `{YYYY-MM-DD}-{project-slug}`
+> **Route**: the scratch clone (`executor_worktree.py clone <slug>`, `execution-session.md` §4), the default since v2.5 | a lane in flight (`lane/<slug>`)
 > **Build Plan Section(s)**: {bp section reference(s)}
 > **Status**: `draft` | `approved` | `changes_required`
 
