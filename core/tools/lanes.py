@@ -1478,6 +1478,57 @@ def _repo_dirs(cwd: Path) -> tuple[Path, Path]:
     return Path(top).resolve(), Path(common).resolve()
 
 
+# MEU-953 (953-e): the land journal of ``tools/land_journal.py``, read here without an
+# import of it (AG4-D4). A STOP marker that does not parse counts as present (fail closed).
+LAND_JOURNAL_FOLDER = "{{PROJECT_NAME}}-land-journal"
+LAND_JOURNAL_STOP = "STOP"
+
+
+def _land_journal_block(common: Path) -> None:
+    """Refuse a land while the land journal holds a STOP or a land waits for its sync.
+
+    Raises:
+        Refusal: ``land_blocked:journal_stop:<run>`` (``unknown`` for a STOP that does
+            not parse); ``land_blocked:sync_pending:<run>`` for a journal whose last
+            step is ``ref_moved``.
+    """
+    folder = common / LAND_JOURNAL_FOLDER
+    stop = folder / LAND_JOURNAL_STOP
+    if stop.exists():
+        run = "unknown"
+        try:
+            value = json.loads(stop.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            value = None
+        if isinstance(value, dict) and isinstance(value.get("run"), str):
+            run = str(value["run"])
+        raise Refusal(
+            f"land_blocked:journal_stop:{run}",
+            f"{stop} exists; a human clears it with land_journal.py clear-stop",
+        )
+    if not folder.is_dir():
+        return
+    for path in sorted(folder.glob("*.jsonl")):
+        try:
+            lines = [
+                line
+                for line in path.read_bytes().decode("utf-8").split("\n")
+                if line.strip()
+            ]
+        except (OSError, UnicodeDecodeError):
+            continue
+        try:
+            last = json.loads(lines[-1]) if lines else None
+        except json.JSONDecodeError:
+            continue
+        if isinstance(last, dict) and last.get("step") == "ref_moved":
+            raise Refusal(
+                f"land_blocked:sync_pending:{path.stem}",
+                f"land {path.stem} moved the ref but did not sync; run "
+                f"land_journal.py recover --run {path.stem}",
+            )
+
+
 def _ignorecase(cwd: Path) -> bool:
     proc = _git(cwd, "config", "--bool", "--get", "core.ignorecase")
     if proc.returncode == 1:
@@ -6090,6 +6141,7 @@ def _publish(
     _batch_path()
     from tools import commit_batch  # noqa: PLC0415 - the land verbs only
 
+    _land_journal_block(common)
     parent = str(land.fields()["P"])
     try:
         with _registry_lock(common, wait_s=wait_s, poll_s=poll_s, argv=argv):
@@ -6301,6 +6353,7 @@ def _cmd_land_publish(
     """
     op = str(args.op)
     top, common = _repo_dirs(Path.cwd())
+    _land_journal_block(common)
     land = _land_journal(top, op)
     if land is None:
         raise Refusal(

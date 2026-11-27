@@ -1749,33 +1749,73 @@ def _hash_blob(repo: rp.Repo, data: bytes) -> str:
     return _git_ok(repo.top, "hash-object", "-w", "--no-filters", "--stdin", data=data)
 
 
-def _step_blobs(ctx: Op, resume: bool) -> None:
-    """Step 2: store every blob, then build tree T from P and the manifest in a temp index."""
-    if not resume:
-        _start(ctx, "blobs_stored")
+def _packet_tree(
+    top: Path, base: str, packet: Packet, index: Path
+) -> tuple[dict[str, str], str]:
+    """Store the packet's blobs, then build its tree on ``base`` in the temp index ``index``.
+
+    ``base`` is a commit or a tree. The packet's files are written with their exact bytes
+    and modes and its deletes removed; nothing but loose objects is written, and ``index``
+    is removed before and after.
+
+    Returns:
+        ``({path: blob oid}, tree oid)``.
+
+    Raises:
+        rp.GitError: a git step failed (an unknown ``base`` included).
+    """
     oids = {
-        path: _hash_blob(ctx.repo, data)
-        for path, (_mode, data) in ctx.packet.files.items()
+        path: _git_ok(top, "hash-object", "-w", "--no-filters", "--stdin", data=data)
+        for path, (_mode, data) in packet.files.items()
     }
-    temp = ctx.folder / "tree.index"
-    rp._unlink(temp)
-    env = {"GIT_INDEX_FILE": str(temp)}
+    rp._unlink(index)
+    env = {"GIT_INDEX_FILE": str(index)}
     try:
-        _git_ok(ctx.repo.top, "read-tree", ctx.parent, env=env)
+        _git_ok(top, "read-tree", base, env=env)
         lines = [
-            f"{ctx.packet.files[path][0]} {oid}\t{path}\0" for path, oid in oids.items()
-        ] + [f"0 {ZERO_OID}\t{path}\0" for path in ctx.packet.deletes]
+            f"{packet.files[path][0]} {oid}\t{path}\0" for path, oid in oids.items()
+        ] + [f"0 {ZERO_OID}\t{path}\0" for path in packet.deletes]
         _git_ok(
-            ctx.repo.top,
+            top,
             "update-index",
             "-z",
             "--index-info",
             env=env,
             data="".join(lines).encode("utf-8"),
         )
-        tree = _git_ok(ctx.repo.top, "write-tree", env=env)
+        tree = _git_ok(top, "write-tree", env=env)
     finally:
-        rp._unlink(temp)
+        rp._unlink(index)
+    return oids, tree
+
+
+def batch_tree(top: Path, parent: str, packets: Sequence[Packet]) -> str:
+    """The tree a land of ``packets`` on ``parent`` ends with (MEU-946, PK3-D7).
+
+    The packets apply in order, each on the tree of the one before, as the land's
+    sub-ops each commit on the commit before (``_step_blobs``), and as the intent of
+    the land journal (``land_journal.batch_intent``) names it. Only loose objects are
+    written: no ref, index or working-tree file of ``top``.
+
+    Raises:
+        rp.GitError: a git step failed (an unknown ``parent`` included).
+        OSError: the temp index folder could not be made.
+    """
+    tree = _git_ok(top, "rev-parse", "--verify", "-q", f"{parent}^{{tree}}")
+    with tempfile.TemporaryDirectory(prefix="batch-tree-") as scratch:
+        index = Path(scratch) / "tree.index"
+        for packet in packets:
+            _oids, tree = _packet_tree(top, tree, packet, index)
+    return tree
+
+
+def _step_blobs(ctx: Op, resume: bool) -> None:
+    """Step 2: store every blob, then build tree T from P and the manifest in a temp index."""
+    if not resume:
+        _start(ctx, "blobs_stored")
+    oids, tree = _packet_tree(
+        ctx.repo.top, ctx.parent, ctx.packet, ctx.folder / "tree.index"
+    )
     _effect(ctx, "blobs_stored")
     _finish(ctx, "blobs_stored", {"oids": oids, "tree": tree})
 
@@ -2714,6 +2754,36 @@ def _check_sync_pending(repo: rp.Repo) -> None:
                 f"land {land.op} is published but the main checkout is not synced; "
                 f"run lanes.py land recover --op {land.op}",
             )
+
+
+# MEU-953 (953-e): the STOP marker of ``tools/land_journal.py``, read here without an
+# import of it (AG4-D4). A marker that does not parse counts as present (fail closed).
+LAND_JOURNAL_STOP = Path("{{PROJECT_NAME}}-land-journal") / "STOP"
+
+
+def _check_journal_stop(repo: rp.Repo) -> None:
+    """A STOP of the land journal blocks every route, before any consumption or ref move.
+
+    Raises:
+        rp.Refusal: ``land_blocked:journal_stop:<run>`` (``unknown`` when it does not parse).
+    """
+    path = repo.common / LAND_JOURNAL_STOP
+    data = rp._read_bytes(path)
+    if data is None:
+        return
+    run = "unknown"
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        value = None
+    if isinstance(value, dict):
+        named = cast(dict[str, Any], value).get("run")
+        if isinstance(named, str):
+            run = named
+    raise rp.Refusal(
+        f"land_blocked:journal_stop:{run}",
+        f"{path} exists; a human clears it with land_journal.py clear-stop",
+    )
 
 
 def _git_config(repo: rp.Repo, key: str) -> str | None:
@@ -4806,6 +4876,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         repo = rp._open_repo(Path(cast(str, args.repo)))
         _refuse_lane_worktree(repo)
         _check_sync_pending(repo)
+        _check_journal_stop(repo)
         code, out = handler(repo, args)
     except rp.Refusal as exc:
         rp._log("commit_refused", reason=exc.reason, detail=exc.detail)
