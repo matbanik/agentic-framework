@@ -118,6 +118,7 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 | `.agent/skills/issue-triage/SKILL.md` | **required for issue→MEU loop** |
 | `.agent/skills/meu-status/SKILL.md` | **required for issue→MEU loop** |
 | `.agent/skills/deep-research-prompting/{SKILL.md,templates/**,scripts/**}` | **required for `/inspiration-research`** (Pomera MCP — manual adopter edit if substituting). **Do not** copy `capabilities/` (machine-local dated snapshots; an adopter's first run writes its own). Source is the machine-global `P:/.agent/skills/deep-research-prompting/`; `tools/_fw_sync.py --file <dest>` per closure file, never `--scope all`. The workflow stub's `## Project Setting` table (`project_output_root`, optional domain overlay) is the adopter knob |
+| `.agent/skills/session-wait/SKILL.md` | **Re-copy.** Byte-identical; it names no project, no drive path and no model |
 | `.agent/skills/agent-notify/SKILL.md` | **hand-merge, never recopy** — the package copy drops the source's stop-gate wiring, plan paths and `uv run`, and writes receipts under `{{RECEIPTS_DIR}}` |
 | `~/.claude/skills/context-1m/{SKILL.md,scripts/toggle_1m.py}` (machine-global user skill, not in the source repo) | `core/.agent/skills/context-1m/` — **hand-merge, never recopy.** The package copy replaces the source's model tier names with "models that offer a native 1M window" (sanitize Gate 2), uses `$HOME` and the OS temp directory instead of fixed user paths, reads a missing settings file as `on` and creates it on `off`, and adds the no-headless-toggle rule and `scripts/tests/`. Re-run those tests after a merge |
 
@@ -137,6 +138,9 @@ Skip a full refresh for product-only work (UI, API, populated MEU registries, El
 | `tools/gate_platform.py` | `core/tools/gate_platform.py` | **Re-copy.** Byte-identical. Package-authored: `core/tools/gate_platform_classes.json.template` (empty `stages`, `suites`, `tests`) and `core/tools/tests/test_gate_platform.py` |
 | `tools/agent_notify.py` | `core/tools/agent_notify.py` | **Re-copy.** Byte-identical (stop notifications, ADOPTION-GUIDE Step 4d) |
 | `tests/unit/test_agent_notify.py` | `core/tools/tests/test_agent_notify.py` | **Re-copy.** Byte-identical; it never opens a socket |
+| `tools/session_wait.py` | `core/tools/session_wait.py` | **Re-copy.** Byte-identical (the session wait skill); it imports `os_lease` from its own folder |
+| `tests/tooling/test_session_wait.py` | `core/tools/tests/test_session_wait.py` | **Re-copy.** Byte-identical; it finds the repository root from its own location (`parents[2]`) |
+| `tests/tooling/test_session_wait_inputs.py` | `core/tools/tests/test_session_wait_inputs.py` | **Re-copy.** Byte-identical; it finds the repository root from its own location (`parents[2]`) |
 | _(package)_ | `core/.claude/settings.notify.example.json` | opt-in `Stop` / `Notification` / `StopFailure` hook block; never wired by default |
 | _(package seeds, not live YAML)_ | `core/.agent/context/known-issues.yaml` (empty) |
 | _(package seeds)_ | `core/.agent/context/meu-status.yaml` (starter phase only) |
