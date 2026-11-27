@@ -1010,7 +1010,7 @@ def _start_index(indexes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def test_ac_894_7_schema_v8_migrates_under_each_crash_point(tmp_path: Path) -> None:
     """AC-894.7: v7 → v8 with the columns and the partial unique index; a crash leaves v7 or v8; v9 is refused."""
     cs = importlib.import_module("tools.credits_state")
-    assert cs.SCHEMA_VERSION == 8
+    assert cs.SCHEMA_VERSION >= 8
     base = tmp_path / "v7" / "state.db"
     _v7_store(base, cs)
     for point in cs.CRASH_POINTS["init"]:
@@ -1024,15 +1024,18 @@ def test_ac_894_7_schema_v8_migrates_under_each_crash_point(tmp_path: Path) -> N
             assert not set(NEW_REQUEST_COLUMNS) & columns, (point, columns)
             assert _start_index(indexes) == [], (point, indexes)
         else:
-            assert version == 8, (point, version)
+            assert version == cs.SCHEMA_VERSION, (point, version)
             assert set(NEW_REQUEST_COLUMNS) <= columns, (point, columns)
             assert len(_start_index(indexes)) == 1, (point, indexes)
-        assert version == (8 if point == "after_commit" else 7), (point, version)
+        assert version == (cs.SCHEMA_VERSION if point == "after_commit" else 7), (
+            point,
+            version,
+        )
 
         out = run_cli(db, "init")
         assert out.code == 0, f"{point}: {out.show()}"
         version, columns, indexes = _shape(db)
-        assert version == 8 and set(NEW_REQUEST_COLUMNS) <= columns
+        assert version == cs.SCHEMA_VERSION and set(NEW_REQUEST_COLUMNS) <= columns
         found = _start_index(indexes)
         assert len(found) == 1, indexes
         where = re.sub(r"\s+", " ", str(found[0]["sql"])).lower()

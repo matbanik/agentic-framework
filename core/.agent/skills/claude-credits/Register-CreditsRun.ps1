@@ -78,9 +78,11 @@ function Write-Result([hashtable]$Payload, [int]$Code) {
 }
 
 # A refusal carries its reason in Exception.Data, so the outer catch can tell it from an error.
-function Stop-Refused([string]$Reason, [string]$Message) {
+# $Limit is the record of a crossed limit: limit_name, configured_value, observed_value, window.
+function Stop-Refused([string]$Reason, [string]$Message, [System.Collections.IDictionary]$Limit = $null) {
     $refusal = [System.InvalidOperationException]::new($Message)
     $refusal.Data['credits_refusal'] = $Reason
+    if ($null -ne $Limit) { $refusal.Data['credits_limit'] = ConvertTo-Json -InputObject $Limit -Compress }
     throw $refusal
 }
 
@@ -103,14 +105,15 @@ function Test-JsonType($Value, [string]$Type) {
 function Test-SchemaNode($Value, [System.Collections.IDictionary]$Node, [string]$Path) {
     $known = @('$schema', '$id', 'title', 'description', 'type', 'const', 'enum', 'pattern', 'minLength',
         'minimum', 'exclusiveMinimum', 'required', 'additionalProperties', 'properties', 'patternProperties',
-        'items', 'minItems')
+        'items', 'minItems', 'maxItems', 'uniqueItems', 'if', 'then', 'else', 'not')
     foreach ($k in $Node.Keys) { if ($k -notin $known) { throw "the schema uses an unsupported keyword at ${Path}: $k" } }
     if ($Node.Contains('const') -and -not ($Value -is [string] -and $Value -ceq $Node['const'])) { Stop-Refused 'manifest_invalid' "$Path must be '$($Node['const'])'" }
     if ($Node.Contains('enum') -and -not ($Value -is [string] -and @($Node['enum']) -ccontains $Value)) { Stop-Refused 'manifest_invalid' "$Path must be one of: $(@($Node['enum']) -join ', ')" }
     if ($Node.Contains('type') -and -not (Test-JsonType $Value $Node['type'])) { Stop-Refused 'manifest_invalid' "$Path must be of type $($Node['type'])" }
     if ($Value -is [string]) {
         if ($Node.Contains('minLength') -and $Value.Length -lt [int]$Node['minLength']) { Stop-Refused 'manifest_invalid' "$Path is too short" }
-        if ($Node.Contains('pattern') -and $Value -cnotmatch $Node['pattern']) { Stop-Refused 'manifest_invalid' "$Path does not match $($Node['pattern'])" }
+        # A closing '$' of a .NET pattern also matches before a last line feed; '\z' does not.
+        if ($Node.Contains('pattern') -and $Value -cnotmatch ($Node['pattern'] -creplace '(?<!\\)\$\z', '\z')) { Stop-Refused 'manifest_invalid' "$Path does not match $($Node['pattern'])" }
     }
     if ((Test-JsonType $Value 'number') -and -not ($Value -is [bool])) {
         $number = [double]$Value
@@ -136,11 +139,47 @@ function Test-SchemaNode($Value, [System.Collections.IDictionary]$Node, [string]
         }
     }
     if ((Test-JsonType $Value 'array') -and $Node.Contains('type') -and $Node['type'] -eq 'array') {
+        if ($Node.Contains('maxItems') -and @($Value).Count -gt [int]$Node['maxItems']) {
+            $limit = [ordered]@{ limit_name = ($Path -split '\.')[-1]; configured_value = [int]$Node['maxItems']; observed_value = @($Value).Count; window = 'one manifest' }
+            Stop-Refused 'manifest_invalid' "$Path has $(@($Value).Count) items; at most $($Node['maxItems']) are allowed" $limit
+        }
         if ($Node.Contains('minItems') -and @($Value).Count -lt [int]$Node['minItems']) { Stop-Refused 'manifest_invalid' "$Path needs at least $($Node['minItems']) items" }
+        if ($Node.Contains('uniqueItems') -and $Node['uniqueItems'] -eq $true) {
+            # Two items are the same when their compact JSON text is the same (ordinal, so case counts).
+            $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            foreach ($item in $Value) {
+                if (-not $seen.Add((ConvertTo-Json -InputObject $item -Compress -Depth 16))) { Stop-Refused 'manifest_invalid' "$Path must not repeat an item" }
+            }
+        }
         if ($Node.Contains('items')) {
             $i = 0
             foreach ($item in $Value) { Test-SchemaNode $item $Node['items'] "$Path[$i]"; $i++ }
         }
+    }
+    if ($Node.Contains('not') -and (Test-SchemaMatch $Value $Node['not'] $Path)) {
+        Stop-Refused 'manifest_invalid' "$Path must not match $(ConvertTo-Json -InputObject $Node['not'] -Compress -Depth 16)"
+    }
+    if ($Node.Contains('if')) {
+        $branch = if (Test-SchemaMatch $Value $Node['if'] $Path) { 'then' } else { 'else' }
+        if ($Node.Contains($branch)) { Test-SchemaNode $Value $Node[$branch] $Path }
+    }
+}
+
+# True when the value satisfies the node; only a schema refusal means false.
+function Test-SchemaMatch($Value, [System.Collections.IDictionary]$Node, [string]$Path) {
+    try { Test-SchemaNode $Value $Node $Path; return $true }
+    catch {
+        if ($_.Exception.Data.Contains('credits_refusal')) { return $false }
+        throw
+    }
+}
+
+# Each tool that the CLI loads must be in the allowed list, by its name without the rule text.
+function Assert-Tools([System.Collections.IDictionary]$Launch) {
+    if (-not $Launch.Contains('tools')) { return }
+    $names = @($Launch['allowed_tools'] | Where-Object { $_ } | ForEach-Object { ([string]$_ -split '\(')[0] })
+    foreach ($tool in $Launch['tools']) {
+        if ($names -cnotcontains [string]$tool) { Stop-Refused "tools_not_allowed $tool" "launch.tools names $tool, which launch.allowed_tools does not allow" }
     }
 }
 
@@ -178,6 +217,7 @@ function Read-Manifest([string]$Path) {
     $schemaPath = Join-Path $PSScriptRoot 'schemas/credits-run.v1.json'
     $schema = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($schemaPath)) -AsHashtable -Depth 32 -ErrorAction Stop
     Test-SchemaNode $doc $schema '$'
+    Assert-Tools $doc['launch']
     if ($hasChain) { Assert-ChainSource $chain }
     $sha = [System.Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
     return [pscustomobject]@{ Doc = $doc; Sha256 = $sha }
@@ -446,7 +486,9 @@ try {
 } catch {
     $ex = $_.Exception
     if ($ex.Data.Contains('credits_refusal')) {
-        Write-Result @{ result = 'refused'; run_id = $script:RunId; reason = [string]$ex.Data['credits_refusal']; message = $ex.Message } 3
+        $payload = @{ result = 'refused'; run_id = $script:RunId; reason = [string]$ex.Data['credits_refusal']; message = $ex.Message }
+        if ($ex.Data.Contains('credits_limit')) { $payload += ConvertFrom-Json -InputObject ([string]$ex.Data['credits_limit']) -AsHashtable }
+        Write-Result $payload 3
         exit 3
     }
     Write-Result @{ result = 'error'; run_id = $script:RunId; message = $ex.Message } 9

@@ -242,12 +242,83 @@ The monitor gives each stop one class and sends one notice:
 | `background_wait_exit` | The session ended a turn to wait for a background task. The run stopped; it is not done. |
 | `reboot`, `sleep_death`, `death_unknown` | The process died. |
 | `transient_api`, `billing`, `auth_config`, `budget_cap`, `timeout` | The API or a limit of the run stopped it. |
+| `usage_limit` | The run stopped at a subscription usage limit. The governor holds new starts and lists the resume. |
 | `launch_failed`, `cancelled`, `unknown` | The launch failed, you cancelled the run, or no signal fits. |
 
 To remove the monitor:
 
 ```powershell
 Unregister-ScheduledTask -TaskPath '\{{PROJECT_NAME_TITLE}}\Credits\' -TaskName 'Monitor' -Confirm:$false
+```
+
+## Subscription preflight, stream and quota
+
+This section is for a run with `launch.auth` `subscription`. The section "Fleet member route" tells
+how such a run starts and where its token is.
+
+Two optional manifest fields make the run stricter:
+
+| Field | Meaning |
+|---|---|
+| `launch.claude_version` | The exact CLI version, for example `2.1.0`. The launcher then checks the login before each start. A key run refuses the field (`manifest_invalid`). |
+| `launch.tools` | The closed list of built-in tools that the CLI loads. Each name must be in `allowed_tools`, or the registration stops with `tools_not_allowed <name>`. The CLI also gets `--strict-mcp-config`, so it loads no MCP server. |
+
+With `launch.claude_version`, the launcher asks the CLI for its version and its login. A refusal
+ends the segment as `launch_failed`, before any model call:
+
+- `cli_version_mismatch`: the CLI is not `launch.claude_version`.
+- `auth_preflight_failed <what>`: the CLI did not answer in 60 seconds (`timeout`), it failed
+  (`exit_code`), its answer is not JSON (`json`), or the login is not a first-party subscription
+  login (`loggedIn`, `authMethod`, `apiProvider`).
+
+The store keeps the login method and the CLI version of each segment.
+
+Each launch, on either route, keeps the whole CLI stream. The CLI prints `stream-json` into
+`stream.jsonl` in the dispatch folder. Then `tools/credits_stream.py` writes `output.json` there.
+When the command line does not have the known form, the launch stops with
+`stream_inject_failed`.
+
+### Quota
+
+The store counts the subscription quota: `tools/credits_state.py` keeps the events, and
+`tools/orch_quota.py` reads them. The launcher admits a start or a resume of a subscription run
+only when the store permits it. A key run has no subscription quota.
+
+| Verdict | Meaning | Next step |
+|---|---|---|
+| `allow` | A segment can start. | None. |
+| `at_capacity` | The open subscription segments fill the window. | Start the run again when a segment ends. |
+| `parked_quota` | A usage limit holds the login. | Wait. `tick` lists the parked start. |
+| `breaker_open` | Three resumes in one hour. | Find the cause, then reset the breaker. |
+
+The window starts at 3. Ten clean ends add 1, up to 4. A usage limit halves it, and never below 1.
+Limits with the same reset time, or in 300 seconds, count as one.
+
+```bash
+python tools/orch_quota.py state
+python tools/orch_quota.py admit --kind claude --run-id <id>
+python tools/orch_quota.py admit --kind codex --running <n>
+python tools/orch_quota.py record --event codex_limit --detail "<one line>"
+python tools/orch_quota.py tick
+```
+
+`admit` is a preview; it admits nothing. A Codex review waits 300 seconds after a limit reply, and
+the wait doubles with each reply, up to 3600 seconds. `codex_ok` starts the count again.
+
+The monitor runs `tick` in each pass. Five minutes after the reset time it files the notice
+`quota_resume_due`. The notice holds the resume command. Type it in your own console:
+
+```powershell
+pwsh -NoProfile -File .agent/skills/claude-credits/Start-CreditsRunTask.ps1 -RunId <id> -StartedBy human-command -Resume -ResumeMode session
+```
+
+When a limit has no reset time, the monitor asks the CLI for one word each 1800 seconds. A good
+answer ends the limit. The probe uses a small part of the quota.
+
+The breaker stops each start, resume, Codex review and probe. Only a human closes it:
+
+```bash
+python tools/orch_quota.py breaker-reset --by "<your name and the reason>"
 ```
 
 ## Messages

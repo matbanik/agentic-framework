@@ -99,6 +99,8 @@ $script:TaskStarter = Join-Path $PSScriptRoot 'Start-CreditsRunTask.ps1'
 # Start-CreditsRunTask.ps1 waits up to REQUEST_ACCEPT_TIMEOUT_S (120 s) for accepted; the default
 # chain starter gives it that wait and a margin.
 $script:ChainChildTimeoutMs = 150000
+# SIGNALS_TIMEOUT_S: the limit of one credits_stream.py signals call.
+$script:SignalsTimeoutMs = 60000
 # The segments that the current pass recorded a sleep for (the slept fact of scan_monitor).
 $script:SleptSegments = [System.Collections.Generic.HashSet[string]]::new()
 $script:RpTool = if ($RunParametersTool) { $RunParametersTool } else { Join-Path $script:RepoRoot 'tools/run_parameters.py' }
@@ -118,6 +120,8 @@ $script:StoppedGates = @{
     ambiguous            = 'released:human-gate'
 }
 $script:BillingPattern = '(?i)credit balance is too low|billing_error'
+# The usage limit texts of the CLI (issue #35744); no API error text matches.
+$script:UsagePattern = '(?i)usage limit reached|\b(5-hour|five[- ]hour|weekly|session|opus|sonnet) limit (reached|hit)\b|you(''ve| have) (hit|reached) your (usage )?limit|limit reached[^\r\n]{0,40}\bresets\b|out of extra usage' # <!-- model-slug-ok: CLI limit text words that the classifier matches, not a routing pin -->
 $script:TransientPattern = '(?i)rate_limit_error|overloaded_error|\bapi_error\b|server_error|API Error: (429|5\d\d)\b|stream (error|ended|closed)|ECONNRESET|ETIMEDOUT|socket hang up'
 $script:AuthPattern = '(?i)authentication_error|permission_error|invalid_request_error|not_found_error|model_not_found|invalid (x-)?api[ -]key'
 $script:WaitPattern = '(?i)run_in_background|background (task|job|agent|process|shell)|waiting (for|on)\b|wait for\b'
@@ -588,6 +592,75 @@ function Get-ClassPhaseEvent([string]$Class, $Seal, $Output) {
     return $null
 }
 
+# The facts of a dispatch stream from `credits_stream.py signals`. Returns Value ($null
+# when the tool gave no facts) and TimedOut; after a timeout the process tree of the call is ended.
+function Read-StreamSignals($Run, [string]$StreamFile) {
+    $answer = [pscustomobject]@{ Value = $null; TimedOut = $false }
+    $manifest = Get-Prop $Run 'manifest'
+    $python = [string](Get-Prop $Run 'python_exe')
+    if (-not $python) { $python = [string](Get-Prop (Get-Prop $manifest 'launch') 'python_exe') }
+    if (-not $python) { $python = Get-CreditsPython }
+    $timeoutMs = $script:SignalsTimeoutMs
+    if ($env:CREDITS_TEST_SIGNALS_TIMEOUT_MS -match '^[1-9][0-9]{0,5}\z') { $timeoutMs = [int]$env:CREDITS_TEST_SIGNALS_TIMEOUT_MS }
+    $fields = @{ run_id = [string](Get-Prop $Run 'run_id') }
+    $proc = $null
+    try {
+        $psi = [System.Diagnostics.ProcessStartInfo]::new($python)
+        $tool = Join-Path ([string](Get-Prop $manifest 'project_root')) 'tools/credits_stream.py'
+        foreach ($a in @('-I', $tool, 'signals', '--stream', $StreamFile)) { $psi.ArgumentList.Add([string]$a) }
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        $ended = $proc.WaitForExit($timeoutMs)
+        # A grandchild can hold the pipes open after the tool ends; the same limit covers the read.
+        if ($ended) { $ended = [System.Threading.Tasks.Task]::WaitAll(@($outTask, $errTask), [math]::Max(1, $timeoutMs - [int]$clock.ElapsedMilliseconds)) }
+        if (-not $ended) {
+            $answer.TimedOut = $true
+            $fields.limit_name = 'signals_timeout_s'
+            $fields.configured_value = $timeoutMs / 1000
+            $fields.observed_value = [math]::Round($clock.Elapsed.TotalSeconds, 3)
+            $fields.window = 'one call'
+            $proc.Kill($true)
+        } elseif ($proc.ExitCode -eq 0) {
+            $answer.Value = $outTask.Result | ConvertFrom-Json -ErrorAction Stop
+            return $answer
+        } else {
+            $fields.exit_code = $proc.ExitCode
+            $fields.error = ([string]$errTask.Result).Trim()
+        }
+    } catch {
+        $fields.error = $_.Exception.Message
+    } finally {
+        if ($proc) { $proc.Dispose() }
+    }
+    Write-MonitorLog 'WARN' 'stream_signals_failed' $fields
+    return $answer
+}
+
+# The permission denials of the result object: an array by its length, no value as 0, any other
+# value as 1.
+function Get-DenialCount($Output) {
+    if ($null -eq $Output) { return 0 }
+    $property = $Output.PSObject.Properties['permission_denials']
+    if (-not $property -or $null -eq $property.Value) { return 0 }
+    if ($property.Value -is [System.Array]) { return $property.Value.Count }
+    return 1
+}
+
+# The reset time of a usage limit in epoch seconds: the stream's, else the number after a `|` in
+# the result text (issue #35744), else $null.
+function Get-ResetTime($Stream, $Output) {
+    $reset = Get-Prop $Stream 'resets_at'
+    if ($null -ne $reset) { return $reset }
+    if ([string](Get-Prop $Output 'result') -match '\|\s*([0-9]{10})(?![0-9])') { return [long]$Matches[1] }
+    return $null
+}
+
 # The R§5.2 class of one finalizing run. Returns Class, Missing (done evidence) and Signals.
 function Get-RunClass($Run) {
     $segment = Get-Prop $Run 'segment'
@@ -599,10 +672,12 @@ function Get-RunClass($Run) {
     $phased = @(Get-Prop $Run 'phases' | Where-Object { $_ }).Count -gt 0
     $seal = $null
     $output = $null
+    $stream = $null
     $verdict = {
         param([string]$Class)
         $phaseEvent = if ($phased) { Get-ClassPhaseEvent $Class $seal $output } else { $null }
-        [pscustomobject]@{ Class = $Class; Missing = @($missing); Signals = $signals; Phase = $phaseEvent }
+        $resetsAt = if ($Class -eq 'usage_limit') { Get-ResetTime $stream $output } else { $null }
+        [pscustomobject]@{ Class = $Class; Missing = @($missing); Signals = $signals; Phase = $phaseEvent; ResetsAt = $resetsAt }
     }
     if ($phased) { $signals.phase_state = Get-Prop $Run 'phase_state' }
 
@@ -630,12 +705,33 @@ function Get-RunClass($Run) {
     $signals.subtype = $subtype
     $signals.result_files = @(@('status.json', 'output.json') | Where-Object { ($_ -eq 'status.json' -and $statusFile.Present) -or ($_ -eq 'output.json' -and $outputFile.Present) })
 
+    # The stream of the dispatch, and the result fields that set the class.
+    $streamFile = if ($folder) { Join-Path $folder 'stream.jsonl' } else { $null }
+    if ($streamFile -and (Test-Path -LiteralPath $streamFile -PathType Leaf)) {
+        $read = Read-StreamSignals $Run $streamFile
+        $stream = $read.Value
+        if ($read.TimedOut) { $missing.Add('stream_signals') }
+    }
+    $streamResult = Get-Prop $stream 'result'
+    $signals.stream = $stream
+    $signals.is_error = Get-Prop $output 'is_error'
+    $signals.stop_reason = Get-Prop $output 'stop_reason'
+    $signals.permission_denials = Get-DenialCount $output
+    $signals.rejected = (Get-Prop $stream 'rejected') -eq $true
+
     if ((Get-Prop $status 'timed_out') -eq $true) { return & $verdict 'timeout' }
     if ($subtype -eq 'error_max_budget_usd') { return & $verdict 'budget_cap' }
+    # A rejected rate limit event with no clean result is a usage limit.
+    $streamSubtype = [string](Get-Prop $streamResult 'subtype')
+    $resultFailed = if ($null -ne $output) { $isError -or $subtype -like 'error*' }
+                    elseif ($null -ne $streamResult) { (Get-Prop $streamResult 'is_error') -eq $true -or $streamSubtype -like 'error*' }
+                    else { $true }
+    if ($signals.rejected -and $resultFailed) { return & $verdict 'usage_limit' }
     $failed = ($null -ne $exitCode -and [int]$exitCode -ne 0) -or $isError -or $subtype -like 'error*'
     if ($failed) {
         $errorText = [string]$stderr
         if ($isError) { $errorText += "`n" + [string](Get-Prop $output 'result') }
+        if ($errorText -match $script:UsagePattern) { return & $verdict 'usage_limit' }
         if ($errorText -match $script:BillingPattern) { return & $verdict 'billing' }
         if ($errorText -match $script:TransientPattern) { return & $verdict 'transient_api' }
         if ($errorText -match $script:AuthPattern) { return & $verdict 'auth_config' }
@@ -672,6 +768,8 @@ function Get-RunClass($Run) {
             if (-not @($landings | Where-Object { [string](Get-Prop $_ 'part') -eq 'product' }).Count) { $missing.Add('capture') }
             if (-not @($landings | Where-Object { [string](Get-Prop $_ 'part') -eq 'closeout' -and (Get-Prop $_ 'sealed_utc') }).Count) { $missing.Add('seal') }
         }
+        # Denials can end in `success` (issue #90578), so they leave the run unverified.
+        if ($signals.permission_denials -gt 0) { $missing.Add('permission_denials') }
         # A phased run's exec phase is sealed only on the verified evidence (V6-050, D-17).
         if ($missing.Count -eq 0 -and $phased) {
             $seal = Invoke-FinalSeal $Run
@@ -739,8 +837,22 @@ function Set-RunClass($Run) {
         signals  = $verdict.Signals
         cost_usd = Get-Prop $segment 'session_total_usd'
     }
-    $null = Invoke-Store 'classify' @('--run-id', $runId, '--to', $target, '--class', $verdict.Class,
+    $arguments = @('--run-id', $runId, '--to', $target, '--class', $verdict.Class,
         '--notice-ref', $ref, '--notice-json', ($body | ConvertTo-Json -Compress -Depth 6))
+    if ($null -eq $verdict.ResetsAt) {
+        $null = Invoke-Store 'classify' $arguments
+    } else {
+        # A reset time that the store refuses must not keep the run open: the class lands without it.
+        $answer = Invoke-CreditsState -StateDb $script:Db -Verb 'classify' -Arguments ($arguments + @('--resets-at', [string]$verdict.ResetsAt)) -NowUtc $script:Clock
+        if ([string](Get-Prop $answer.Payload 'error') -ceq 'resets_at_out_of_range') {
+            $fields = @{ run_id = $runId }
+            foreach ($name in @('limit_name', 'configured_value', 'observed_value', 'window')) { $fields[$name] = Get-Prop $answer.Payload $name }
+            Write-MonitorLog 'WARN' 'resets_at_refused' $fields
+            $null = Invoke-Store 'classify' $arguments
+        } elseif ($answer.Code -ne 0 -or $null -eq $answer.Payload) {
+            throw "store classify failed: $(Format-CreditsStateError $answer)"
+        }
+    }
     Write-MonitorLog 'INFO' 'run_classified' @{ run_id = $runId; state = $target; class = $verdict.Class; missing = @($verdict.Missing) }
     # EA-21, EA-23: the phase event of the class, after the class is stored; a failed call leaves it.
     $phaseEvent = $verdict.Phase
@@ -932,6 +1044,65 @@ function Get-MonitorFacts {
 
 # --- one pass ---------------------------------------------------------------------------------
 
+# A time of a tool answer as store text, or $null.
+function Format-QuotaTime($Value) {
+    if ($null -eq $Value) { return $null }
+    return (Format-CreditsUtc (ConvertTo-UtcTime $Value))
+}
+
+# The governor tick and its notices. A notice key is filed once, so each
+# pass can file what is due. Returns the tick, or $null when the governor did not answer; the pass
+# then goes on.
+function Invoke-QuotaTick {
+    try {
+        $answer = Invoke-CreditsQuota -StateDb $script:Db -Arguments @('tick') -NowUtc $script:Clock
+        if ($answer.Code -ne 0 -or $null -eq $answer.Payload) { throw "orch_quota.py tick failed: $(Format-CreditsStateError $answer)" }
+        $tick = $answer.Payload
+        foreach ($due in @(Get-Prop $tick 'resumes_due')) {
+            if ($null -eq $due) { continue }
+            $runId = [string](Get-Prop $due 'run_id')
+            $segmentId = [string](Get-Prop $due 'segment_id')
+            $body = [ordered]@{
+                command       = [string](Get-Prop $due 'command')
+                segment_id    = $segmentId
+                resets_at_utc = (Format-QuotaTime (Get-Prop $due 'resets_at_utc'))
+                due_utc       = (Format-QuotaTime (Get-Prop $due 'due_utc'))
+            }
+            $null = Invoke-Store 'notice' @('--kind', 'quota_resume_due', '--ref', "${runId}:$segmentId", '--run-id', $runId, '--body-json', ($body | ConvertTo-Json -Compress))
+        }
+        $breaker = Get-Prop $tick 'breaker'
+        if (Get-Prop $breaker 'open') {
+            $body = [ordered]@{
+                cause     = @(Get-Prop $breaker 'cause')
+                since_utc = (Format-QuotaTime (Get-Prop $breaker 'since_utc'))
+            }
+            $null = Invoke-Store 'notice' @('--kind', 'quota_breaker_open', '--ref', "breaker-$(Get-Prop $breaker 'seq')", '--body-json', ($body | ConvertTo-Json -Compress))
+        }
+        return $tick
+    } catch {
+        Write-MonitorLog 'WARN' 'quota_tick_failed' @{ error = $_.Exception.Message }
+        return $null
+    }
+}
+
+# The probe of an unknown reset time. It is the last step of a pass: it can wait for the CLI.
+function Invoke-DueProbe($Tick) {
+    if ($null -eq $Tick -or -not (Get-Prop $Tick 'probe_due')) { return }
+    try {
+        $probe = Invoke-CreditsQuotaProbe -StateDb $script:Db -NowUtc $script:Clock
+        $fields = @{ outcome = $probe.Outcome; reason = $probe.Reason }
+        if ($probe.Reason -eq 'timeout') {
+            $fields.limit_name = 'probe_timeout_s'
+            $fields.configured_value = $probe.LimitS
+            $fields.observed_value = $probe.WaitedS
+            $fields.window = 'one call'
+        }
+        Write-MonitorLog $(if ($probe.Outcome -eq 'probe_fail') { 'WARN' } else { 'INFO' }) 'quota_probe' $fields
+    } catch {
+        Write-MonitorLog 'ERROR' 'quota_probe_failed' @{ error = $_.Exception.Message }
+    }
+}
+
 function Invoke-MonitorPass {
     $script:SleptSegments = [System.Collections.Generic.HashSet[string]]::new()
     $limit = (Get-CreditsConstants).ORPHAN_REQUEST_S
@@ -991,9 +1162,12 @@ function Invoke-MonitorPass {
         Write-MonitorLog $level 'scan_monitor_refused' @{ segments = $facts.Count; error = (Format-CreditsStateError $scan) }
     }
 
+    $tick = Invoke-QuotaTick
+
     $null = Invoke-Store 'outbox_scan'
     $sent = Send-DueNotices
     $null = Invoke-Store 'scan_effects'
+    Invoke-DueProbe $tick
     return [pscustomobject]@{ Attempts = $attemptProofs.Count; Segments = $segmentProofs.Count; Classified = $classified; Chains = $chains; Transcripts = $transcripts; Sent = $sent }
 }
 

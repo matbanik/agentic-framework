@@ -65,7 +65,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, NoReturn, Protocol, cast
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 11
 
 EXIT_OK = 0
 EXIT_CHECK_FAILED = 1
@@ -141,6 +141,8 @@ STOP_CLASSES = (
     "transient_api",
     "billing",
     "auth_config",
+    # A subscription usage limit of the CLI.
+    "usage_limit",
     "budget_cap",
     "timeout",
     "launch_failed",
@@ -153,6 +155,10 @@ STOP_CLASSES = (
     "no_record",
     "ambiguous",
 )
+# The CLI reports a reset time in epoch seconds. The bounds are 2020-01-01 and the longest limit
+# window (one week) plus a day, so a time in milliseconds is refused.
+RESETS_AT_MIN = 1577836800
+RESETS_AT_AHEAD_S = 8 * 86400
 # The notices that the monitor files with the notice verb (R§7.2 manual proof) and the duty
 # notices that scan_monitor files (PE21-D13).
 MONITOR_NOTICE_KINDS = (
@@ -163,6 +169,9 @@ MONITOR_NOTICE_KINDS = (
     "no_ack",
     "not_applied",
     "transcript_discontinuity",
+    # The monitor files these from the governor tick.
+    "quota_resume_due",
+    "quota_breaker_open",
 )
 # PE21-D13 monitor duty limits on the store clock. Each notice is filed once per key kind:ref.
 # report.md:799-801: a running segment with an alive child and no transcript write for 60
@@ -299,6 +308,38 @@ EOL_PIN = ("-c", "core.autocrlf=true", "-c", "core.safecrlf=false")
 GIT_ENV_DROPPED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 GIT_TIMEOUT_S = 300
 
+# The subscription quota governor.
+START_WINDOW = 3
+# The cap of the window; tools/orch_quota.py and the admit use the same value.
+DEFAULT_MAX_CLAUDE_WORKERS = 4
+CLEAN_ENDS_PER_STEP = 10
+RESUME_DELAY_S = 300
+PROBE_EVERY_S = 1800
+PROBE_TIMEOUT_S = 120
+BURST_S = 300
+BREAKER_RESTARTS = 3
+BREAKER_WINDOW_S = 3600
+CODEX_BACKOFF_BASE_S = 300
+CODEX_BACKOFF_MAX_S = 3600
+# ``quota_event`` writes the kinds that the governor owns. The verb that makes a run's own move
+# writes the other kinds, in the transaction of that move.
+QUOTA_GOVERNOR_KINDS = (
+    "codex_limit",
+    "codex_ok",
+    "probe_ok",
+    "probe_fail",
+    "breaker_reset",
+)
+QUOTA_OWNED_KINDS = (
+    "usage_limit",
+    "clean_end",
+    "start_parked",
+    "resume_started",
+    "breaker_open",
+)
+QUOTA_EVENT_KINDS = (*QUOTA_GOVERNOR_KINDS, *QUOTA_OWNED_KINDS)
+QUOTA_DETAIL_MAX = 500
+
 BASE_POINTS = ("before_begin", "before_commit", "after_commit")
 EFFECT_POINTS = (*BASE_POINTS, "after_effect")
 # Every point a test may name. A verb listed with EFFECT_POINTS can insert
@@ -350,6 +391,8 @@ CRASH_POINTS: dict[str, tuple[str, ...]] = {
     "scan_transcript": EFFECT_POINTS,
     "attach": BASE_POINTS,
     "orchestrator_sessions": (),
+    "quota_event": BASE_POINTS,
+    "quota_view": (),
 }
 # The verbs that R§4.7 and its transition table name, the S2a scan verbs, the S3
 # monitor verbs and the S4 check view (read only, outside ``run_verb``).
@@ -708,6 +751,21 @@ SCHEMA_V8: tuple[str, ...] = (
     "ALTER TABLE notices ADD COLUMN closed_utc TEXT",
 )
 
+# The auth preflight of a subscription segment: what the CLI reported at its start.
+SCHEMA_V9: tuple[str, ...] = (
+    "ALTER TABLE segments ADD COLUMN auth_method TEXT",
+    "ALTER TABLE segments ADD COLUMN cli_version TEXT",
+)
+
+# The reset time of a segment that a subscription usage limit stopped.
+SCHEMA_V10: tuple[str, ...] = ("ALTER TABLE segments ADD COLUMN resets_at_utc TEXT",)
+
+# The subscription quota log, append only.
+SCHEMA_V11: tuple[str, ...] = (
+    "CREATE TABLE quota_events (seq INTEGER PRIMARY KEY, at_utc TEXT NOT NULL,"
+    " kind TEXT NOT NULL, run_id TEXT, segment_id TEXT, resets_at_utc TEXT, detail TEXT)",
+)
+
 # The statements that bring a store from version n - 1 to version n.
 SCHEMA_STEPS: dict[int, tuple[str, ...]] = {
     1: SCHEMA_V1,
@@ -718,6 +776,9 @@ SCHEMA_STEPS: dict[int, tuple[str, ...]] = {
     6: SCHEMA_V6,
     7: SCHEMA_V7,
     8: SCHEMA_V8,
+    9: SCHEMA_V9,
+    10: SCHEMA_V10,
+    11: SCHEMA_V11,
 }
 
 
@@ -797,6 +858,16 @@ def _arg_key(text: str) -> str:
         raise argparse.ArgumentTypeError(
             f"not a key ([A-Za-z0-9][A-Za-z0-9._-]{{0,127}}, no '..'): {text!r}"
         )
+    return text
+
+
+def _arg_ref(text: str) -> str:
+    """A key, or ``<run>:<segment>``, the ref of a quota notice."""
+    parts = text.split(":")
+    if len(parts) > 2:
+        raise argparse.ArgumentTypeError(f"more than one ':' in a ref: {text!r}")
+    for part in parts:
+        _arg_key(part)
     return text
 
 
@@ -1012,6 +1083,9 @@ def build_parser() -> _Parser:
     p.add_argument("--created", required=True, type=_arg_utc)
     p.add_argument("--boot-id", required=True, type=_arg_boot_id)
     p.add_argument("--policy-sha256", type=_arg_sha256)
+    # Checked in the verb, so a wrong value is a refusal (launched_field_refused).
+    p.add_argument("--auth-method")
+    p.add_argument("--cli-version")
     p = verb("complete_segment")
     p.add_argument("--segment-id", required=True, type=_arg_key)
     p.add_argument("--finalized-by", required=True, choices=FINALIZERS)
@@ -1023,6 +1097,7 @@ def build_parser() -> _Parser:
     p.add_argument("--run-id", required=True, type=_arg_key)
     p.add_argument("--to", required=True, choices=CLASSIFY_TARGETS)
     p.add_argument("--class", dest="stop_class", required=True, type=_arg_class)
+    p.add_argument("--resets-at", type=_arg_int)
     p.add_argument("--notice-ref", type=_arg_key)
     p.add_argument("--notice-json", type=_arg_json_object)
     p = verb("cancel")
@@ -1104,9 +1179,17 @@ def build_parser() -> _Parser:
     p.add_argument("--registry", required=True, type=_arg_text)
     p = verb("notice")
     p.add_argument("--kind", required=True, choices=MONITOR_NOTICE_KINDS)
-    p.add_argument("--ref", required=True, type=_arg_key)
+    p.add_argument("--ref", required=True, type=_arg_ref)
     p.add_argument("--run-id", type=_arg_key)
     p.add_argument("--body-json", type=_arg_json_object)
+    # The verb checks the kind and the fields: a wrong event is a refusal with a reason.
+    p = verb("quota_event")
+    p.add_argument("--kind", required=True)
+    p.add_argument("--run-id", type=_arg_key)
+    p.add_argument("--segment-id", type=_arg_key)
+    p.add_argument("--resets-at", type=_arg_int)
+    p.add_argument("--detail")
+    verb("quota_view")
     verb("notices_due")
     verb("monitor_view")
     p = verb("notice_sent")
@@ -2417,6 +2500,354 @@ def caps_reason(doc: dict[str, Any]) -> str | None:
     return None if switch == "off" else "caps_required"
 
 
+# --- the subscription quota ------------------------------------------------------------------
+
+
+@dataclass
+class QuotaLimit:
+    """One usage limit of the log and the time that it ends (None: unknown)."""
+
+    run_id: str | None
+    segment_id: str | None
+    at: datetime
+    resets_at: datetime | None
+    ends_at: datetime | None
+
+    def active(self, now: datetime) -> bool:
+        """True while no end time has come."""
+        return self.ends_at is None or now < self.ends_at
+
+    def view(self, now: datetime) -> dict[str, Any]:
+        """The limit for ``quota_view``; ``ended_utc`` is None while it is active."""
+        ended = None if self.ends_at is None or self.active(now) else self.ends_at
+        return {
+            "run_id": self.run_id,
+            "segment_id": self.segment_id,
+            "at_utc": format_utc(self.at),
+            "resets_at_utc": None
+            if self.resets_at is None
+            else format_utc(self.resets_at),
+            "ended_utc": None if ended is None else format_utc(ended),
+        }
+
+
+@dataclass
+class QuotaReplay:
+    """The running values of one replay of the quota log."""
+
+    cap: int
+    window: int
+    clean: int = 0
+    decrease: tuple[datetime, datetime | None] | None = None
+    limits: list[QuotaLimit] = field(default_factory=list[QuotaLimit])
+    restarts: list[tuple[datetime, str | None]] = field(
+        default_factory=list[tuple[datetime, str | None]]
+    )
+    breaker: dict[str, Any] | None = None
+
+    def clean_end(self) -> None:
+        """Count one clean end; each ``CLEAN_ENDS_PER_STEP`` of them add one, up to the cap."""
+        self.clean += 1
+        if self.clean >= CLEAN_ENDS_PER_STEP and self.window < self.cap:
+            self.window += 1
+            self.clean = 0
+
+    def usage_limit(
+        self, event: dict[str, Any], moment: datetime, resets: datetime | None
+    ) -> None:
+        """Halve the window once for each burst, and open a limit."""
+        burst = self.decrease is not None and (
+            (resets is not None and resets == self.decrease[1])
+            or moment - self.decrease[0] <= timedelta(seconds=BURST_S)
+        )
+        if not burst:
+            self.window = max(1, self.window // 2)
+            self.clean = 0
+            self.decrease = (moment, resets)
+        ends = None if resets is None else resets + timedelta(seconds=RESUME_DELAY_S)
+        self.limits.append(
+            QuotaLimit(event["run_id"], event["segment_id"], moment, resets, ends)
+        )
+
+    def probe_ok(self, moment: datetime) -> None:
+        """End each limit that is active at the time of a good probe."""
+        for limit in self.limits:
+            if limit.active(moment):
+                limit.ends_at = moment
+
+    def resume_started(self, event: dict[str, Any], moment: datetime) -> None:
+        """Count one restart; the third one in the window opens the breaker."""
+        self.restarts.append((moment, event["run_id"]))
+        last = self.restarts[-BREAKER_RESTARTS:]
+        if (
+            self.breaker is None
+            and len(last) == BREAKER_RESTARTS
+            and moment - last[0][0] <= timedelta(seconds=BREAKER_WINDOW_S)
+        ):
+            self.breaker = {
+                "since_utc": format_utc(moment),
+                "seq": event["seq"],
+                "cause": [run for _, run in last],
+            }
+
+    def breaker_reset(self) -> None:
+        """Close the breaker and forget the earlier restarts."""
+        self.breaker = None
+        self.restarts = []
+
+
+def quota_state(
+    events: Sequence[dict[str, Any]], now: datetime, cap: int
+) -> dict[str, Any]:
+    """Compute the quota state from the event log: the window, the limit and the breaker.
+
+    The same log gives the same state, so a restart loses nothing. ``limited`` ends at the reset
+    time plus ``RESUME_DELAY_S``, or at a good probe after the limit. The breaker opens at the
+    third restart in ``BREAKER_WINDOW_S`` and closes at a ``breaker_reset``.
+    """
+    replay = QuotaReplay(cap=cap, window=min(START_WINDOW, cap))
+    for event in events:
+        kind = event["kind"]
+        moment = parse_utc(str(event["at_utc"]))
+        text = event["resets_at_utc"]
+        if kind == "clean_end":
+            replay.clean_end()
+        elif kind == "usage_limit":
+            replay.usage_limit(
+                event, moment, None if text is None else parse_utc(str(text))
+            )
+        elif kind == "probe_ok":
+            replay.probe_ok(moment)
+        elif kind == "resume_started":
+            replay.resume_started(event, moment)
+        elif kind == "breaker_reset":
+            replay.breaker_reset()
+    active = [limit for limit in replay.limits if limit.active(now)]
+    known = [limit.resets_at for limit in active if limit.resets_at is not None]
+    ends = [limit.ends_at for limit in active]
+    last_end = max((end for end in ends if end is not None), default=None)
+    return {
+        "window": replay.window,
+        "cap": cap,
+        "limited": bool(active),
+        "resets_at_utc": format_utc(max(known)) if known else None,
+        # No time is known while one active limit has no reset time.
+        "limit_ends_utc": None
+        if last_end is None or None in ends
+        else format_utc(last_end),
+        "limits": [limit.view(now) for limit in replay.limits],
+        "breaker": {"open": True, **replay.breaker}
+        if replay.breaker is not None
+        else {"open": False, "since_utc": None, "seq": None, "cause": []},
+    }
+
+
+def quota_events(tx: Tx) -> list[dict[str, Any]]:
+    """Each quota event, oldest first."""
+    return [dict(row) for row in tx.rows("SELECT * FROM quota_events ORDER BY seq")]
+
+
+def add_quota_event(
+    tx: Tx,
+    kind: str,
+    run_id: str | None = None,
+    segment_id: str | None = None,
+    resets_at_utc: str | None = None,
+    detail: str | None = None,
+) -> int:
+    """Append one quota event and return its ``seq``."""
+    cursor = tx.con.execute(
+        "INSERT INTO quota_events (at_utc, kind, run_id, segment_id, resets_at_utc, detail)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (tx.ctx.now_utc, kind, run_id, segment_id, resets_at_utc, detail),
+    )
+    return int(cursor.lastrowid or 0)
+
+
+def current_quota(tx: Tx) -> dict[str, Any]:
+    """The quota state at the time of this transaction."""
+    return quota_state(quota_events(tx), tx.ctx.now, DEFAULT_MAX_CLAUDE_WORKERS)
+
+
+def launch_auth(doc: dict[str, Any]) -> str:
+    """The route of a manifest: ``subscription``, else ``key``."""
+    launch = doc.get("launch")
+    auth = (
+        cast("dict[str, Any]", launch).get("auth") if isinstance(launch, dict) else None
+    )
+    return "subscription" if auth == "subscription" else "key"
+
+
+def run_route(run: sqlite3.Row) -> str:
+    """The route of a stored run. An unreadable manifest counts as a subscription run."""
+    try:
+        return launch_auth(manifest_doc(run))
+    except Refusal as exc:
+        log("quota_route_unreadable", run_id=run["run_id"], error=str(exc))
+        return "subscription"
+
+
+def open_subscription_segments(tx: Tx) -> int:
+    """The number of open segments of subscription runs; a ``launching`` segment counts."""
+    rows = tx.rows(
+        "SELECT r.run_id, r.manifest_json FROM segments s JOIN runs r ON r.run_id = s.run_id"
+        " WHERE s.finalized_utc IS NULL"
+    )
+    return sum(run_route(row) == "subscription" for row in rows)
+
+
+def quota_refusal(tx: Tx) -> tuple[str, dict[str, Any]] | None:
+    """The reason that the quota refuses a subscription segment now, and its limit facts."""
+    state = current_quota(tx)
+    if state["breaker"]["open"]:
+        facts = {
+            "limit_name": "restarts_per_hour",
+            "configured_value": BREAKER_RESTARTS,
+            "observed_value": len(state["breaker"]["cause"]),
+            "window": f"{BREAKER_WINDOW_S} s",
+        }
+        return "breaker_open", facts
+    if state["limited"]:
+        resets = state["resets_at_utc"]
+        waited = (
+            None
+            if resets is None
+            else int((tx.ctx.now - parse_utc(resets)).total_seconds())
+        )
+        facts = {
+            "limit_name": "resume_delay_s",
+            "configured_value": RESUME_DELAY_S,
+            "observed_value": waited,
+            "window": "until a good probe" if resets is None else f"since {resets}",
+        }
+        return "parked_quota", facts
+    held = open_subscription_segments(tx)
+    if held >= state["window"]:
+        facts = {
+            "limit_name": "max_claude_workers",
+            "configured_value": state["window"],
+            "observed_value": held,
+            "window": "now",
+        }
+        return "at_capacity", facts
+    return None
+
+
+def record_restart(tx: Tx, run_id: str, segment_id: str) -> None:
+    """Record an admitted resume; the third one in the window also records the open breaker."""
+    add_quota_event(tx, "resume_started", run_id, segment_id)
+    breaker = current_quota(tx)["breaker"]
+    if breaker["open"]:
+        detail = json.dumps(
+            {"cause": breaker["cause"], "window_s": BREAKER_WINDOW_S}, sort_keys=True
+        )
+        add_quota_event(tx, "breaker_open", run_id, segment_id, detail=detail)
+
+
+def verb_quota_event(tx: Tx, args: argparse.Namespace) -> Outcome:
+    """Append one event of a kind that the governor owns."""
+    kind = str(args.kind)
+    if kind in QUOTA_OWNED_KINDS:
+        raise Refusal(
+            "event_owned_by_store", f"{kind} is written by the verb that makes the move"
+        )
+    if kind not in QUOTA_GOVERNOR_KINDS:
+        raise Refusal("quota_kind_unknown", f"no quota event kind {kind!r}")
+    if args.resets_at is not None:
+        raise Refusal(
+            "resets_at_class_mismatch",
+            f"a reset time needs the kind usage_limit, not {kind}",
+        )
+    detail: str | None = args.detail
+    if detail is not None and (
+        not detail.strip()
+        or len(detail) > QUOTA_DETAIL_MAX
+        or len(detail.splitlines()) != 1
+    ):
+        raise Refusal(
+            "detail_invalid",
+            f"the detail must be one line of 1 to {QUOTA_DETAIL_MAX} characters",
+            limit_name="quota_detail",
+            configured_value=QUOTA_DETAIL_MAX,
+            observed_value=len(detail),
+            window="one event",
+        )
+    if kind == "breaker_reset" and detail is None:
+        raise Refusal("by_missing", "a breaker reset names the human who decided")
+    if args.run_id is not None:
+        get_run(tx, args.run_id)
+    if args.segment_id is not None:
+        get_segment(tx, args.segment_id)
+    seq = add_quota_event(tx, kind, args.run_id, args.segment_id, detail=detail)
+    return Outcome("changed", {"seq": seq, "kind": kind})
+
+
+def verb_quota_view(tx: Tx) -> Outcome:
+    """Read only: the quota log, its state, and the runs that wait for the quota."""
+    state = current_quota(tx)
+    limit_segments = [
+        dict(row)
+        for row in tx.rows(
+            "SELECT DISTINCT e.run_id, e.segment_id, e.resets_at_utc, r.state AS run_state"
+            " FROM quota_events e JOIN segments s ON s.segment_id = e.segment_id"
+            " JOIN runs r ON r.run_id = e.run_id WHERE e.kind = 'usage_limit'"
+            " AND NOT EXISTS (SELECT 1 FROM segments n WHERE n.run_id = s.run_id"
+            " AND n.rowid > s.rowid) ORDER BY e.seq"
+        )
+    ]
+    parked = [
+        dict(row)
+        for row in tx.rows(
+            "SELECT e.run_id, MAX(e.at_utc) AS parked_utc FROM quota_events e"
+            " JOIN runs r ON r.run_id = e.run_id WHERE e.kind = 'start_parked'"
+            " AND r.state = 'waiting' GROUP BY e.run_id ORDER BY e.run_id"
+        )
+    ]
+    runs = {
+        str(row["run_id"]): row
+        for row in tx.rows("SELECT run_id, manifest_json FROM runs")
+    }
+    probe_run, probe_exe = quota_probe_cli(runs, state["limits"])
+    return Outcome(
+        "no_change",
+        {
+            "now_utc": tx.ctx.now_utc,
+            "events": quota_events(tx),
+            "state": state,
+            "open_segments": open_subscription_segments(tx),
+            "limit_segments": limit_segments,
+            "parked_starts": parked,
+            "routes": {run_id: run_route(row) for run_id, row in runs.items()},
+            "probe_run_id": probe_run,
+            "probe_claude_exe": probe_exe,
+            "probe_timeout_s": PROBE_TIMEOUT_S,
+        },
+    )
+
+
+def quota_probe_cli(
+    runs: dict[str, sqlite3.Row], limits: Sequence[dict[str, Any]]
+) -> tuple[str | None, str | None]:
+    """The run and the CLI of the latest active limit with no reset time."""
+    for limit in reversed(limits):
+        run = runs.get(str(limit["run_id"]))
+        if limit["ended_utc"] or limit["resets_at_utc"] or run is None:
+            continue
+        try:
+            launch = manifest_doc(run).get("launch")
+        except Refusal as exc:
+            log("quota_probe_cli_unreadable", run_id=run["run_id"], error=str(exc))
+            continue
+        exe = (
+            cast("dict[str, Any]", launch).get("claude_exe")
+            if isinstance(launch, dict)
+            else None
+        )
+        if isinstance(exe, str) and exe:
+            return str(run["run_id"]), exe
+    return None, None
+
+
 def verb_admit(
     tx: Tx, attempt_id: str, segment_id: str | None, base: str | None = None
 ) -> Outcome:
@@ -2514,6 +2945,15 @@ def verb_admit(
             if not uncapped and reservation < FLOOR_USD:
                 reason = "budget_floor"
 
+    # The quota check is in this transaction, so two launchers cannot both take the last slot.
+    # A key run has no subscription quota.
+    subscription = launch_auth(doc) == "subscription"
+    quota_facts: dict[str, Any] | None = None
+    if reason is None and subscription:
+        refused = quota_refusal(tx)
+        if refused is not None:
+            reason, quota_facts = refused
+
     request_id = str(request["request_id"])
     if reason is not None:
         tx.move("request", request_id, "accepted", "rejected", {"reason": reason})
@@ -2531,10 +2971,16 @@ def verb_admit(
             tx.notice("start_refused", attempt_id, run_id, {"reason": reason})
         else:
             tx.move("run", run_id, "launching", "waiting")
-        return Outcome(
-            "changed",
-            {"outcome": "rejected", "reason": reason, "attempt_id": attempt_id},
-        )
+            if reason == "parked_quota":
+                add_quota_event(tx, "start_parked", run_id)
+        rejected: dict[str, Any] = {
+            "outcome": "rejected",
+            "reason": reason,
+            "attempt_id": attempt_id,
+        }
+        if quota_facts is not None:
+            rejected["quota"] = quota_facts
+        return Outcome("changed", rejected)
 
     segment_id = segment_id or str(uuid.uuid4())
     session = str(attempt["expected_session_id"])
@@ -2589,6 +3035,8 @@ def verb_admit(
                 "conflict", f"lane {lane} was claimed first", result="conflict"
             )
     superseded = supersede_stop_after_row(tx, run_id) if resume else []
+    if resume and subscription:
+        record_restart(tx, run_id, segment_id)
     tx.move("request", request_id, "accepted", "admitted")
     tx.move("attempt", attempt_id, "accepted", "admitted")
     return Outcome(
@@ -2608,8 +3056,22 @@ def verb_admit(
     )
 
 
+_LAUNCHED_FIELD = re.compile(r"[A-Za-z0-9._ -]{1,64}")
+
+
+def check_launched_field(name: str, value: str | None) -> None:
+    """Refuse an auth fact that is not a short plain word."""
+    if value is not None and not _LAUNCHED_FIELD.fullmatch(value):
+        raise Refusal(
+            "launched_field_refused",
+            f"{name} must match [A-Za-z0-9._ -]{{1,64}}",
+        )
+
+
 def verb_launched(tx: Tx, args: argparse.Namespace) -> Outcome:
     """``launching`` → ``running``: pid, creation time and boot id recorded."""
+    check_launched_field("--auth-method", args.auth_method)
+    check_launched_field("--cli-version", args.cli_version)
     segment = get_segment(tx, args.segment_id)
     if (
         segment["state"] == "running"
@@ -2635,6 +3097,8 @@ def verb_launched(tx: Tx, args: argparse.Namespace) -> Outcome:
             "created": args.created,
             "last_alive_utc": tx.ctx.now_utc,
             "policy_sha256": args.policy_sha256,
+            "auth_method": args.auth_method,
+            "cli_version": args.cli_version,
         },
     )
     for entity, key in (
@@ -2872,6 +3336,51 @@ def verb_complete_segment(tx: Tx, args: argparse.Namespace) -> Outcome:
     return Outcome("changed", payload)
 
 
+def reset_time(tx: Tx, stop_class: str, resets_at: int) -> str:
+    """Return the UTC text of a reset time in epoch seconds; refuse a wrong class or range."""
+    if stop_class != "usage_limit":
+        raise Refusal(
+            "resets_at_class_mismatch",
+            f"a reset time needs the class usage_limit, not {stop_class}",
+        )
+    bounds = [
+        RESETS_AT_MIN,
+        int(parse_utc(tx.ctx.now_utc).timestamp()) + RESETS_AT_AHEAD_S,
+    ]
+    if not bounds[0] <= resets_at <= bounds[1]:
+        raise Refusal(
+            "resets_at_out_of_range",
+            f"the reset time {resets_at} is not in {bounds}",
+            limit_name="resets_at",
+            configured_value=bounds,
+            observed_value=resets_at,
+            window="one classify",
+        )
+    return format_utc(datetime.fromtimestamp(resets_at, UTC))
+
+
+def record_class_event(
+    tx: Tx, run: sqlite3.Row, target: str, stop_class: str, resets_utc: str | None
+) -> None:
+    """Add the quota event of a subscription run's class, in the class transaction."""
+    if stop_class == "usage_limit":
+        kind = "usage_limit"
+    elif target == "done":
+        kind = "clean_end"
+    else:
+        return
+    if launch_auth(manifest_doc(run)) != "subscription":
+        return
+    run_id = str(run["run_id"])
+    last = tx.row(
+        "SELECT segment_id FROM segments WHERE run_id = ?"
+        " ORDER BY created_utc DESC, rowid DESC LIMIT 1",
+        (run_id,),
+    )
+    segment_id = None if last is None else str(last["segment_id"])
+    add_quota_event(tx, kind, run_id, segment_id, resets_utc)
+
+
 def verb_classify(
     tx: Tx,
     run_id: str,
@@ -2879,12 +3388,16 @@ def verb_classify(
     stop_class: str,
     notice_ref: str | None = None,
     notice_body: dict[str, Any] | None = None,
+    resets_at: int | None = None,
 ) -> Outcome:
     """``finalizing`` → ``stopped``, ``parked``, ``done`` or ``done_unverified``.
 
     With ``notice_body``, the same transaction files the stop notice ``stop:<ref>`` (the ref
     defaults to the run id), so a class never lands without its notice (R§4.4, AC-E.4).
+    ``resets_at`` (epoch seconds, class ``usage_limit`` only) goes to the latest segment of the
+    run, in the same transaction.
     """
+    resets_utc = None if resets_at is None else reset_time(tx, stop_class, resets_at)
     run = get_run(tx, run_id)
     state = str(run["state"])
     if state == target:
@@ -2892,6 +3405,14 @@ def verb_classify(
     if state != "finalizing":
         raise Refusal("invalid_transition", f"run {run_id} is {state}, not finalizing")
     tx.move("run", run_id, "finalizing", target, {"stop_class": stop_class})
+    record_class_event(tx, run, target, stop_class, resets_utc)
+    if resets_utc is not None:
+        tx.con.execute(
+            "UPDATE segments SET resets_at_utc = ?, updated_utc = ? WHERE segment_id = ("
+            "SELECT segment_id FROM segments WHERE run_id = ?"
+            " ORDER BY created_utc DESC, rowid DESC LIMIT 1)",
+            (resets_utc, tx.ctx.now_utc, run_id),
+        )
     if notice_body is not None:
         body = {**notice_body, "run_id": run_id, "state": target, "class": stop_class}
         tx.notice("stop", notice_ref or run_id, run_id, body)
@@ -6491,7 +7012,13 @@ def run_verb(ctx: Context, args: argparse.Namespace) -> Outcome:
         "launched": lambda tx: verb_launched(tx, args),
         "complete_segment": lambda tx: verb_complete_segment(tx, args),
         "classify": lambda tx: verb_classify(
-            tx, args.run_id, args.to, args.stop_class, args.notice_ref, args.notice_json
+            tx,
+            args.run_id,
+            args.to,
+            args.stop_class,
+            args.notice_ref,
+            args.notice_json,
+            args.resets_at,
         ),
         "cancel": lambda tx: verb_cancel(tx, args.run_id, args.reason),
         "register_minimal": lambda tx: verb_register_minimal(tx, args),
@@ -6527,6 +7054,8 @@ def run_verb(ctx: Context, args: argparse.Namespace) -> Outcome:
         ),
         "attach": lambda tx: verb_attach(tx, args.run_id, args.session, args.uuid),
         "orchestrator_sessions": lambda tx: verb_orchestrator_sessions(tx, args.run_id),
+        "quota_event": lambda tx: verb_quota_event(tx, args),
+        "quota_view": verb_quota_view,
         "phase_sync": lambda tx: verb_phase_sync(tx, args.run_id, args.state, args.seq),
         "phase_status": lambda tx: verb_phase_status(
             tx, args.run_id, args.expect_state, args.expect_seq

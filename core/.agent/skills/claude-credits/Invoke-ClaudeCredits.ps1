@@ -38,6 +38,9 @@
     with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 and no ANTHROPIC_API_KEY or
     ANTHROPIC_AUTH_TOKEN. The token is never printed and goes to no other process.
 
+    Each launch keeps the whole CLI stream: the CLI prints stream-json into stream.jsonl of the
+    dispatch folder, and tools/credits_stream.py then writes output.json.
+
     Exit codes: 0 ok, 2 bad arguments, brief, key file or token file, 3 launched inside
     a Claude Code session, otherwise the dispatch wrapper's exit code.
 
@@ -85,6 +88,10 @@ param(
     # Tools allowed without a prompt (a headless run denies prompts), e.g.
     # WebSearch,WebFetch. Passed to the wrapper's -AllowedTools.
     [string[]]$AllowedTools,
+
+    # The only built-in tools the CLI loads (--tools), as one comma list; the CLI also gets
+    # --strict-mcp-config, so no MCP server of the project loads.
+    [string]$Tools,
 
     # Where a fresh session runs. Default: the current directory. A resumed or
     # forked session runs where its source ran.
@@ -187,6 +194,7 @@ if (-not $ValidateOnly -and ($env:CLAUDECODE -eq '1' -or $env:CLAUDE_CODE_ENTRYP
     if ($Scheduled) { $hint += ' -Scheduled' }
     if ($WorkingDirectory) { $hint += " -WorkingDirectory `"$WorkingDirectory`"" }
     if ($AllowedTools) { $hint += " -AllowedTools $($AllowedTools -join ',')" }
+    if ($Tools) { $hint += " -Tools $Tools" }
     Fail 3 ("launched inside a Claude Code session (entrypoint '$($env:CLAUDE_CODE_ENTRYPOINT)'). " +
         "Anthropic bills that as Claude Code, which the API credits do not cover. " +
         "Run it from your own terminal instead:`n  $hint")
@@ -329,6 +337,8 @@ if ($ValidateOnly) {
     exit $LASTEXITCODE
 }
 
+Import-Module -Name (Join-Path $PSScriptRoot 'CreditsRun.psm1') -Force -DisableNameChecking -ErrorAction Stop
+
 # --- Messaging for a manual run (report section 7.2 steps 1 to 5)
 $credits = $null
 if ($RunId) {
@@ -437,6 +447,24 @@ if ($null -ne $scheduledEnv) {
     }.GetNewClosure()
     [Console]::Error.WriteLine("claude-credits: scheduled segment $($scheduledEnv['CREDITS_SEGMENT']) of run $($scheduledEnv['CREDITS_RUN_ID'])")
 }
+
+# --- The stream route of each launch. The hook changes the command line first, then runs the hook
+# of the run kind (the manual child or the scheduled segment), else it starts the process itself.
+# The closure keeps the commands, so it works from the dispatch script's scope.
+$innerHook = if ($dispatchArgs.ContainsKey('LaunchHook')) { $dispatchArgs.LaunchHook } else { $null }
+$routeStream = Get-Command -Name Set-CreditsStreamRoute -CommandType Function
+$routeArgs = @{
+    StreamFile        = Join-Path (Join-Path $OutputDir $DispatchId) 'stream.jsonl'
+    StreamTool        = Join-Path $repoRoot 'tools/credits_stream.py'
+    Python            = Get-CreditsPython
+    Tools             = $Tools
+    StdinCheckedLater = [bool]$SystemPromptFile
+}
+$dispatchArgs.LaunchHook = {
+    param($StartInfo)
+    & $routeStream -StartInfo $StartInfo @routeArgs
+    if ($null -ne $innerHook) { & $innerHook $StartInfo } else { [System.Diagnostics.Process]::Start($StartInfo) }
+}.GetNewClosure()
 
 [Console]::Error.WriteLine("claude-credits: dispatch $DispatchId started; check on it from another terminal with")
 [Console]::Error.WriteLine("  pwsh -File tools/Get-ClaudeDispatch.ps1 $DispatchId -Peek")

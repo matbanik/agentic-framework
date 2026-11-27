@@ -128,6 +128,8 @@ $script:WrapperProcess = $null
 $script:OperatorPolicySha256 = 'dec292f98dfe1a2c36cf9a1c5a980275e3c5bf3db04616cd16eb67ba479a0716'
 # POLICY_MAX_CHARS (PE21-D2; R1-F7): the policy text is at most 4000 characters.
 $script:PolicyMaxChars = 4000
+# AUTH_PREFLIGHT_TIMEOUT_S: the limit of one CLI call of the auth preflight.
+$script:AuthPreflightTimeoutS = 60
 
 function New-Result([string]$Outcome, [int]$Code, [hashtable]$Fields = @{}) {
     $payload = [ordered]@{ outcome = $Outcome; run_id = $RunId }
@@ -476,6 +478,72 @@ function New-ChildEnvironment($Launch, [string]$SegmentId, [string]$BaseCommit) 
     return $environment
 }
 
+# One CLI call of the auth preflight. Returns Code, Stdout and WaitedS; Code is $null after a
+# timeout, when the whole process tree of the call is ended.
+function Invoke-AuthCall([string]$Program, [string[]]$Arguments, [string]$Folder, [System.Collections.Generic.IDictionary[string, string]]$Environment, [int]$TimeoutMs) {
+    $info = [System.Diagnostics.ProcessStartInfo]::new($Program)
+    foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
+    $info.WorkingDirectory = $Folder
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = $script:Utf8
+    $info.Environment.Clear()
+    foreach ($name in $Environment.Keys) { $info.Environment[$name] = $Environment[$name] }
+    Set-CreditsSubscriptionEnvFromFile -Environment $info.Environment -Path $script:TokenFile
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $ended = $process.WaitForExit($TimeoutMs)
+        # A grandchild can hold the pipes open after the CLI ends; the same limit covers the read.
+        if ($ended) { $ended = [System.Threading.Tasks.Task]::WaitAll(@($stdout, $stderr), [math]::Max(1, $TimeoutMs - [int]$clock.ElapsedMilliseconds)) }
+        if (-not $ended) {
+            $waited = [math]::Round($clock.Elapsed.TotalSeconds, 3)
+            try { $process.Kill($true); $null = $process.WaitForExit(10000) }
+            catch { Write-LauncherLog 'WARN' 'credits_preflight_kill_failed' @{ message = $_.Exception.Message } }
+            return [pscustomobject]@{ Code = $null; Stdout = ''; WaitedS = $waited }
+        }
+        return [pscustomobject]@{ Code = $process.ExitCode; Stdout = $stdout.Result; WaitedS = [math]::Round($clock.Elapsed.TotalSeconds, 3) }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+# The auth preflight of a subscription segment. Returns Reason ($null when the login is good),
+# AuthMethod, CliVersion and WaitedS. It keeps three fields of the login facts and drops the rest,
+# which names the account.
+function Test-CreditsAuth {
+    param(
+        $Launch,
+        [System.Collections.Generic.IDictionary[string, string]]$Environment,
+        [int]$TimeoutMs
+    )
+    $refused = { param($Reason, $WaitedS) [pscustomobject]@{ Reason = $Reason; AuthMethod = $null; CliVersion = $null; WaitedS = $WaitedS } }
+    $program = Resolve-CreditsClaudeProgram ([string](Get-Field $Launch 'claude_exe')) $Environment
+    $folder = [string](Get-Field $Launch 'working_directory')
+    $call = Invoke-AuthCall $program @('--version') $folder $Environment $TimeoutMs
+    if ($null -eq $call.Code) { return & $refused 'auth_preflight_failed timeout' $call.WaitedS }
+    if ($call.Code -ne 0) { return & $refused 'auth_preflight_failed exit_code' $null }
+    $version = @($call.Stdout.Trim() -split '\s+')[0]
+    if ($version -cne [string](Get-Field $Launch 'claude_version')) { return & $refused 'cli_version_mismatch' $null }
+    $call = Invoke-AuthCall $program @('auth', 'status', '--json') $folder $Environment $TimeoutMs
+    if ($null -eq $call.Code) { return & $refused 'auth_preflight_failed timeout' $call.WaitedS }
+    if ($call.Code -ne 0) { return & $refused 'auth_preflight_failed exit_code' $null }
+    $facts = $null
+    try { $facts = ConvertFrom-Json -InputObject $call.Stdout -AsHashtable -NoEnumerate -ErrorAction Stop } catch { $facts = $null }
+    if ($facts -isnot [System.Collections.IDictionary]) { return & $refused 'auth_preflight_failed json' $null }
+    $method = $facts['authMethod']
+    if ($facts['loggedIn'] -isnot [bool] -or -not $facts['loggedIn']) { return & $refused 'auth_preflight_failed loggedIn' $null }
+    if ($method -isnot [string] -or $method -eq '' -or $method -match '(?i)api') { return & $refused 'auth_preflight_failed authMethod' $null }
+    if ($facts['apiProvider'] -isnot [string] -or $facts['apiProvider'] -cne 'firstParty') { return & $refused 'auth_preflight_failed apiProvider' $null }
+    return [pscustomobject]@{ Reason = $null; AuthMethod = $method; CliVersion = $version; WaitedS = $null }
+}
+
 # The dispatch that a resume continues: the newest earlier attempt with a status.json.
 function Find-ResumeSource($Status, [string]$CurrentDispatchId) {
     $earlier = @(Get-Field $Status 'attempts') | Where-Object {
@@ -493,11 +561,13 @@ function Find-ResumeSource($Status, [string]$CurrentDispatchId) {
 # it can start the CLI: a segment whose CLI ran is never left in launching, so a launcher that
 # dies after the resume cannot cause a launch_failed class. The wrapper is the root member of the
 # job and lives as long as the CLI. Throws when the store refuses.
-function Register-Launched([string]$SegmentId, [string]$BootId, $Wrapper) {
+function Register-Launched([string]$SegmentId, [string]$BootId, $Wrapper, $Auth) {
     $created = ConvertFrom-UtcText $Wrapper.CreationUtc
     if ($null -eq $created) { throw "the wrapper creation time is not a UTC time: $($Wrapper.CreationUtc)" }
-    $res = Invoke-CreditsState -StateDb $StateDb -Verb launched -Arguments @(
+    $arguments = @(
         '--segment-id', $SegmentId, '--pid', [string][int]$Wrapper.ProcessId, '--created', (Format-CreditsUtc $created), '--boot-id', $BootId, '--policy-sha256', $script:OperatorPolicySha256)
+    if ($null -ne $Auth) { $arguments += @('--auth-method', $Auth.AuthMethod, '--cli-version', $Auth.CliVersion) }
+    $res = Invoke-CreditsState -StateDb $StateDb -Verb launched -Arguments $arguments
     if ($res.Code -ne 0) { throw "credits_state.py launched failed: $(Format-CreditsStateError $res)" }
     Write-LauncherLog 'INFO' 'credits_segment_launched' @{ segment_id = $SegmentId; pid = [int]$Wrapper.ProcessId }
 }
@@ -687,6 +757,15 @@ function Invoke-Launcher {
     $admitted = $res.Payload
     if ([string](Get-Field $admitted 'outcome') -eq 'rejected') {
         $reason = [string](Get-Field $admitted 'reason')
+        $quota = Get-Field $admitted 'quota'
+        if ($null -ne $quota) {
+            Write-LauncherLog 'WARN' 'credits_quota_refused' @{
+                limit_name = (Get-Field $quota 'limit_name'); configured_value = (Get-Field $quota 'configured_value')
+                observed_value = (Get-Field $quota 'observed_value'); window = (Get-Field $quota 'window')
+                attempt_id = $attemptId; reason = $reason; resume = $isResume
+            }
+            return New-Result 'admission_refused' 0 @{ reason = $reason; step = 'quota'; attempt_id = $attemptId }
+        }
         Write-LauncherLog 'INFO' 'credits_admit_rejected' @{ attempt_id = $attemptId; reason = $reason; resume = $isResume }
         return New-Result 'rejected' 0 @{ reason = $reason; attempt_id = $attemptId }
     }
@@ -768,6 +847,33 @@ function Invoke-Launcher {
         return New-Result 'launch_failed' 1 @{ segment_id = $segmentId; reason = $authorityReason }
     }
 
+    # The login of a subscription run that names its CLI version, before any CLI print call.
+    $auth = $null
+    if ($subscription -and (Get-Field $launch 'claude_version')) {
+        $timeoutMs = $script:AuthPreflightTimeoutS * 1000
+        if ($env:CREDITS_TEST_AUTH_TIMEOUT_MS -match '^[1-9][0-9]{0,5}$') { $timeoutMs = [int]$env:CREDITS_TEST_AUTH_TIMEOUT_MS }
+        try {
+            $auth = Test-CreditsAuth -Launch $launch -Environment (New-ChildEnvironment $launch $segmentId $baseCommit) -TimeoutMs $timeoutMs
+        } catch {
+            # The CLI did not start, or launch.env failed its second check.
+            $auth = [pscustomobject]@{ Reason = 'auth_preflight_failed exit_code'; WaitedS = $null; Message = $_.Exception.Message }
+        }
+        if ($null -ne $auth.Reason) {
+            $fields = @{ segment_id = $segmentId; reason = $auth.Reason }
+            $authMessage = Get-Field $auth 'Message'
+            if ($null -ne $authMessage) { $fields['message'] = $authMessage }
+            if ($null -ne $auth.WaitedS) {
+                $fields['limit_name'] = 'auth_preflight_timeout_s'
+                $fields['configured_value'] = $script:AuthPreflightTimeoutS
+                $fields['observed_value'] = $auth.WaitedS
+                $fields['window'] = 'one call'
+            }
+            Write-LauncherLog 'WARN' 'credits_preflight_refused' $fields
+            $null = Complete-CreditsSegment -StateDb $StateDb -SegmentId $segmentId -FinalizedBy launcher -Class launch_failed -CliStart absent
+            return New-Result 'launch_failed' 1 @{ segment_id = $segmentId; reason = $auth.Reason }
+        }
+    }
+
     # PE21-D3 (AC-895.4): a session resume keeps the prompt that the CLI recorded when the session
     # opened. A policy of another hash, or none (a run from before the policy), is a WARN only.
     if ($isResume -and -not $isFresh) {
@@ -844,6 +950,9 @@ function Invoke-Launcher {
     # splits on commas.
     $allowedTools = @(Get-Field $launch 'allowed_tools' | Where-Object { $_ })
     if ($allowedTools.Count -gt 0) { $wrapperArgs += @('-AllowedTools', ($allowedTools -join ',')) }
+    # The closed set of tools that the CLI loads.
+    $tools = @(Get-Field $launch 'tools' | Where-Object { $_ })
+    if ($tools.Count -gt 0) { $wrapperArgs += @('-Tools', ($tools -join ',')) }
     $wrapperArgs += $continuation
     $commandLine = ($wrapperArgs | ForEach-Object { ConvertTo-WindowsArgument ([string]$_) }) -join ' '
     try {
@@ -864,7 +973,7 @@ function Invoke-Launcher {
         # Open the Process while the child is suspended, so its exit code stays readable.
         $script:WrapperProcess = [System.Diagnostics.Process]::GetProcessById($child.ProcessId)
         $null = $script:WrapperProcess.Handle
-        Register-Launched $segmentId $bootId $child
+        Register-Launched $segmentId $bootId $child $auth
         Resume-CreditsJobProcess -Child $child
     } catch {
         $message = "the wrapper did not start: $($_.Exception.Message)"

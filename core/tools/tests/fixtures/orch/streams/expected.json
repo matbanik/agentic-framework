@@ -1,0 +1,25 @@
+{
+  "fixtures": [
+    {
+      "file": "allowed-success.jsonl",
+      "source": "m6-c47a9e-stream.jsonl",
+      "class": "not_usage_limit",
+      "resets_at": null,
+      "derived": false
+    },
+    {
+      "file": "harness-allowed.jsonl",
+      "source": "harness-allowed-source.jsonl",
+      "class": "not_usage_limit",
+      "resets_at": null,
+      "derived": false
+    },
+    {
+      "file": "rejected-derived.jsonl",
+      "source": "harness-allowed-source.jsonl",
+      "class": "usage_limit",
+      "resets_at": 1792579800,
+      "derived": true
+    }
+  ]
+}

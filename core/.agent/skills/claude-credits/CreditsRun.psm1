@@ -33,6 +33,8 @@ Set-StrictMode -Version Latest
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $script:StateTool = Join-Path $script:RepoRoot 'tools/credits_state.py'
 $script:MsgTool = Join-Path $script:RepoRoot 'tools/credits_msg.py'
+$script:QuotaTool = Join-Path $script:RepoRoot 'tools/orch_quota.py'
+$script:StreamSignalsTool = Join-Path $script:RepoRoot 'tools/credits_stream.py'
 $script:JobNamePrefix = 'Local\{{PROJECT_NAME_UPPER}}Credits-'
 # Store times have second precision; a recorded creation time matches a process whose real
 # creation time is less than this many seconds away.
@@ -1334,6 +1336,252 @@ function Update-CreditsCostEstimate {
     return $res.Payload
 }
 
+# --- the subscription login of a preflight or probe call
+
+# The token file is read into memory only: no function here writes, prints or logs the value. The
+# launch hook of Invoke-ClaudeCredits.ps1 reads the token of a segment with the same rule.
+function Get-CreditsTokenFile {
+    <# .SYNOPSIS The subscription token file: CLAUDE_CREDITS_TOKEN_FILE, else the launcher's default. #>
+    if ($env:CLAUDE_CREDITS_TOKEN_FILE) { return $env:CLAUDE_CREDITS_TOKEN_FILE }
+    return '{{PROJECT_ROOT}}/credentials/claude-oauth-token'
+}
+
+function Set-CreditsSubscriptionEnvFromFile {
+    <#
+    .SYNOPSIS
+        Put one child environment on the subscription: the OAuth token, no API name, and no
+        Anthropic name in the subprocesses of the CLI. Throws token_missing when the file holds no token.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.Generic.IDictionary[string, string]]$Environment,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    try {
+        $token = [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($Path)).Trim()
+    } catch {
+        throw "token_missing: the token file '$Path' is not readable ($($_.Exception.GetBaseException().GetType().Name))"
+    }
+    if (-not $token) { throw "token_missing: the token file is blank: $Path" }
+    $Environment['CLAUDE_CODE_OAUTH_TOKEN'] = $token
+    $Environment['CLAUDE_CODE_SUBPROCESS_ENV_SCRUB'] = '1'
+    foreach ($name in @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')) { $null = $Environment.Remove($name) }
+}
+
+function Resolve-CreditsClaudeProgram([string]$ClaudeExe, [System.Collections.IDictionary]$Environment) {
+    <# .SYNOPSIS The program that starts $ClaudeExe: the .cmd next to a .ps1, and the PATH entry of a bare name. #>
+    $program = $ClaudeExe
+    if ([System.IO.Path]::GetExtension($program) -eq '.ps1') { $program = [System.IO.Path]::ChangeExtension($program, '.cmd') }
+    if ([System.IO.Path]::IsPathRooted($program)) { return $program }
+    $folders = @(([string]$Environment['PATH']).Split(';') | Where-Object { $_ })
+    foreach ($folder in $folders) {
+        foreach ($extension in @('', '.exe', '.cmd')) {
+            $candidate = Join-Path $folder "$program$extension"
+            if ([System.IO.Path]::GetExtension($candidate) -in @('.exe', '.cmd') -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $candidate }
+        }
+    }
+    return $program
+}
+
+# --- the subscription quota
+
+function Invoke-CreditsQuota {
+    <#
+    .SYNOPSIS
+        Run one orch_quota.py command. Returns Code, Payload, Out and Err, like Invoke-CreditsState.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$StateDb,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [ValidateRange(1, 3600)][int]$TimeoutSec = 180,
+        # The store clock of a test store; the tool refuses it for the production store.
+        [Nullable[datetime]]$NowUtc
+    )
+    $clock = if ($null -ne $NowUtc) { @('--now-utc', (Format-CreditsUtc ([datetime]$NowUtc))) } else { @() }
+    $toolArguments = @($script:QuotaTool, '--db', $StateDb) + $clock + @($Arguments)
+    return Invoke-CreditsPythonTool $toolArguments "orch_quota.py $($Arguments[0])" $TimeoutSec $false
+}
+
+# One CLI call of the probe, with its standard output in $StreamFile. Returns Reason ($null when the
+# CLI ended) and WaitedS.
+function Invoke-CreditsProbeCall([string]$Program, [string]$Folder, [string]$StreamFile, [int]$TimeoutMs) {
+    $info = [System.Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = $Program
+    foreach ($word in @('-p', 'Reply with the word OK.', '--output-format', 'stream-json', '--verbose', '--max-turns', '1', '--permission-mode', 'dontAsk')) {
+        $info.ArgumentList.Add($word)
+    }
+    $info.WorkingDirectory = $Folder
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    foreach ($name in @($info.Environment.Keys)) {
+        if ($name -in @('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT') -or $name -like 'CREDITS_*' -or $name -like 'CLAUDE_CREDITS_*') { $null = $info.Environment.Remove($name) }
+    }
+    try {
+        Set-CreditsSubscriptionEnvFromFile -Environment $info.Environment -Path (Get-CreditsTokenFile)
+    } catch {
+        return [pscustomobject]@{ Reason = [string]$_.Exception.Message; WaitedS = $null }
+    }
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $file = [System.IO.File]::Open($StreamFile, 'CreateNew', 'Write', 'Read')
+    try {
+        try { $process = [System.Diagnostics.Process]::Start($info) }
+        catch { return [pscustomobject]@{ Reason = "start_failed $($_.Exception.GetBaseException().GetType().Name)"; WaitedS = $null } }
+        try {
+            $process.StandardInput.Close()
+            $copy = $process.StandardOutput.BaseStream.CopyToAsync($file)
+            $errors = $process.StandardError.ReadToEndAsync()
+            $ended = $process.WaitForExit($TimeoutMs)
+            # A grandchild can hold the pipes open after the CLI ends; the same limit covers the read.
+            if ($ended) { $ended = [System.Threading.Tasks.Task]::WaitAll(@($copy, $errors), [math]::Max(1, $TimeoutMs - [int]$clock.ElapsedMilliseconds)) }
+            $waited = [math]::Round($clock.Elapsed.TotalSeconds, 3)
+            if (-not $ended) {
+                try { $process.Kill($true); $null = $process.WaitForExit(10000) }
+                catch { [Console]::Error.WriteLine("quota probe kill failed: $($_.Exception.Message)") }
+                # The copy must end before the file closes.
+                try { $null = $copy.Wait(10000) } catch { [Console]::Error.WriteLine("quota probe read failed: $($_.Exception.Message)") }
+                return [pscustomobject]@{ Reason = 'timeout'; WaitedS = $waited }
+            }
+            return [pscustomobject]@{ Reason = $null; WaitedS = $waited }
+        } finally {
+            $process.Dispose()
+        }
+    } finally {
+        $file.Dispose()
+    }
+}
+
+# The reason that a probe stream is not good, or $null.
+function Get-CreditsProbeRefusal([string]$StreamFile) {
+    $read = Invoke-CreditsPythonTool @($script:StreamSignalsTool, 'signals', '--stream', $StreamFile) 'credits_stream.py signals' 60 $false
+    if ($read.Code -ne 0 -or $null -eq $read.Payload) { return 'stream_unreadable' }
+    if ($read.Payload.rejected) { return 'rejected' }
+    if ($null -eq $read.Payload.result) { return 'no_result' }
+    if ($read.Payload.result.is_error -isnot [bool] -or $read.Payload.result.is_error) { return 'is_error' }
+    return $null
+}
+
+function Invoke-CreditsQuotaProbe {
+    <#
+    .SYNOPSIS
+        Ask the subscription for one word and record probe_ok or probe_fail. Returns Outcome
+        (probe_ok, probe_fail or probe_refused), Reason, WaitedS, LimitS and StreamFile.
+
+    .DESCRIPTION
+        It reads the quota again first: an open breaker, or a limit that has ended or has a reset
+        time, refuses the probe without a start. The CLI runs in a new empty folder below the store
+        folder, so it loads no project. It never throws for a CLI, token or stream failure; that is
+        a probe_fail, and the limit stays. It throws when the store does not answer.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$StateDb,
+        # 0: CREDITS_TEST_PROBE_TIMEOUT_MS, else the limit of the store.
+        [ValidateRange(0, 3600000)][int]$TimeoutMs = 0,
+        [Nullable[datetime]]$NowUtc
+    )
+    $view = Invoke-CreditsState -StateDb $StateDb -Verb quota_view -NowUtc $NowUtc
+    if ($view.Code -ne 0 -or $null -eq $view.Payload) { throw "credits_state.py quota_view failed: $(Format-CreditsStateError $view)" }
+    $state = $view.Payload.state
+    $refusal = if ($state.breaker.open) { 'breaker_open' }
+    elseif (-not $state.limited) { 'not_limited' }
+    elseif ($null -ne $state.resets_at_utc) { 'reset_known' }
+    else { $null }
+    if ($null -ne $refusal) {
+        return [pscustomobject]@{ Outcome = 'probe_refused'; Reason = "probe_refused $refusal"; WaitedS = $null; LimitS = $null; StreamFile = $null }
+    }
+    if ($TimeoutMs -eq 0) {
+        $TimeoutMs = 1000 * [int]$view.Payload.probe_timeout_s
+        if ($env:CREDITS_TEST_PROBE_TIMEOUT_MS -match '^[1-9][0-9]{0,5}\z') { $TimeoutMs = [int]$env:CREDITS_TEST_PROBE_TIMEOUT_MS }
+    }
+    $call = [pscustomobject]@{ Reason = $null; WaitedS = $null }
+    $streamFile = $null
+    $claudeExe = [string]$view.Payload.probe_claude_exe
+    if (-not $claudeExe) {
+        $call.Reason = 'cli_unknown'
+    } else {
+        $name = [guid]::NewGuid().ToString('n')
+        $parent = Join-Path (Split-Path -Parent ([System.IO.Path]::GetFullPath($StateDb))) 'quota-probe'
+        $folder = Join-Path $parent $name
+        $null = [System.IO.Directory]::CreateDirectory($folder)
+        $streamFile = Join-Path $parent "$name.jsonl"
+        $program = Resolve-CreditsClaudeProgram $claudeExe @{ PATH = $env:PATH }
+        try {
+            $call = Invoke-CreditsProbeCall $program $folder $streamFile $TimeoutMs
+            if ($null -eq $call.Reason) { $call.Reason = Get-CreditsProbeRefusal $streamFile }
+        } catch {
+            $call = [pscustomobject]@{ Reason = "probe_error $($_.Exception.GetBaseException().GetType().Name)"; WaitedS = $null }
+        }
+    }
+    $outcome = if ($null -eq $call.Reason) { 'probe_ok' } else { 'probe_fail' }
+    $words = @('--kind', $outcome)
+    if ($view.Payload.probe_run_id) { $words += @('--run-id', [string]$view.Payload.probe_run_id) }
+    if ($null -ne $call.Reason) { $words += "--detail=$($call.Reason)" }
+    $added = Invoke-CreditsState -StateDb $StateDb -Verb quota_event -Arguments $words -NowUtc $NowUtc
+    if ($added.Code -ne 0) { throw "credits_state.py quota_event failed: $(Format-CreditsStateError $added)" }
+    return [pscustomobject]@{ Outcome = $outcome; Reason = $call.Reason; WaitedS = $call.WaitedS; LimitS = $TimeoutMs / 1000; StreamFile = $streamFile }
+}
+
+# --- the stream route of each launch
+
+function Set-CreditsStreamRoute {
+    <#
+    .SYNOPSIS
+        Change the dispatcher's command line so that the CLI prints stream-json into the stream
+        file; then the splitter (tools/credits_stream.py) writes the dispatcher's output file.
+
+    .DESCRIPTION
+        The command line must have the dispatcher's form: one `--output-format` `json` pair, one
+        standard input, one standard output and one standard error redirect. Any other form
+        throws stream_inject_failed and changes nothing. With -StdinCheckedLater (the operator
+        policy hook checks the standard input marker itself) a wrong marker count is left to it.
+        There is no pipe: cmd.exe would run a .cmd CLI in a second cmd.exe, and the dispatcher
+        would then record that shell as the CLI process.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.ProcessStartInfo]$StartInfo,
+        [Parameter(Mandatory = $true)][string]$StreamFile,
+        [Parameter(Mandatory = $true)][string]$StreamTool,
+        [Parameter(Mandatory = $true)][string]$Python,
+        [string]$Tools,
+        [switch]$StdinCheckedLater
+    )
+    $words = ' --verbose'
+    if ($Tools) {
+        foreach ($name in $Tools.Split(',')) {
+            if ($name -cnotmatch '^[A-Za-z][A-Za-z0-9_]*\z') { throw "tools_inject_failed: '$name' is not a tool name" }
+        }
+        $words += " --tools $Tools --strict-mcp-config"
+    }
+    if (-not (Test-Path -LiteralPath $StreamTool -PathType Leaf)) { throw "stream_inject_failed: no stream tool at '$StreamTool'" }
+    $line = $StartInfo.Arguments
+    $inMark = ' < "%{{PROJECT_NAME_UPPER}}_DISPATCH_STDIN%"'
+    $outMark = ' > "%{{PROJECT_NAME_UPPER}}_DISPATCH_STDOUT%"'
+    $errMark = ' 2> "%{{PROJECT_NAME_UPPER}}_DISPATCH_STDERR%"'
+    $counts = [ordered]@{ stdin = $inMark; stdout = $outMark; stderr = $errMark }
+    foreach ($name in $counts.Keys) {
+        $count = [regex]::Matches($line, [regex]::Escape($counts[$name])).Count
+        if ($count -ne 1 -and -not ($name -eq 'stdin' -and $StdinCheckedLater)) { throw "stream_inject_failed: $count $name redirects" }
+    }
+    $formats = [System.Collections.Generic.List[int]]::new()
+    $numbers = @([regex]::Matches($line, '%{{PROJECT_NAME_UPPER}}_DISPATCH_ARG([0-9]+)%') | ForEach-Object { [int]$_.Groups[1].Value } | Select-Object -Unique)
+    foreach ($number in $numbers) {
+        if ($StartInfo.Environment["{{PROJECT_NAME_UPPER}}_DISPATCH_ARG$number"] -ceq '--output-format') { $formats.Add($number) }
+    }
+    if ($formats.Count -ne 1) { throw "stream_inject_failed: $($formats.Count) --output-format words" }
+    $valueName = "{{PROJECT_NAME_UPPER}}_DISPATCH_ARG$($formats[0] + 1)"
+    if ($line -notmatch "%$valueName%" -or $StartInfo.Environment[$valueName] -cne 'json') { throw 'stream_inject_failed: --output-format is not json' }
+    $StartInfo.Environment[$valueName] = 'stream-json'
+    $null = $StartInfo.Environment.Remove('{{PROJECT_NAME_UPPER}}_CREDITS_CLI_EXIT')
+    $StartInfo.Environment['{{PROJECT_NAME_UPPER}}_CREDITS_PY'] = $Python
+    $StartInfo.Environment['{{PROJECT_NAME_UPPER}}_CREDITS_STREAM_TOOL'] = $StreamTool
+    $StartInfo.Environment['{{PROJECT_NAME_UPPER}}_CREDITS_STREAM_FILE'] = $StreamFile
+    # A failed CLI stays a failed dispatch: `call` expands %ERRORLEVEL% after the CLI ended, and the
+    # splitter returns that code. The split runs in both cases, so a failed run keeps its result.
+    $split = ' || call set {{PROJECT_NAME_UPPER}}_CREDITS_CLI_EXIT=%^ERRORLEVEL%& "%{{PROJECT_NAME_UPPER}}_CREDITS_PY%" -I "%{{PROJECT_NAME_UPPER}}_CREDITS_STREAM_TOOL%" split --from-stream --out "%{{PROJECT_NAME_UPPER}}_DISPATCH_STDOUT%" --stream "%{{PROJECT_NAME_UPPER}}_CREDITS_STREAM_FILE%"'
+    $StartInfo.Arguments = $line.Replace($outMark, ' > "%{{PROJECT_NAME_UPPER}}_CREDITS_STREAM_FILE%"').Replace($errMark, $errMark + $split).Replace($inMark, $words + $inMark)
+}
+
 Export-ModuleMember -Function @(
     'Get-CreditsLaunchEnvRefusal', 'Get-CreditsTranscriptPath', 'Get-CreditsModelRegistryPath', 'Update-CreditsCostEstimate',
     'Get-CreditsJobName', 'New-CreditsJob', 'Get-CreditsJobActiveCount', 'Start-CreditsJobProcess', 'Resume-CreditsJobProcess',
@@ -1342,5 +1590,7 @@ Export-ModuleMember -Function @(
     'Get-CreditsPython', 'Invoke-CreditsState', 'Test-CreditsChainSource', 'Invoke-CreditsAuthority', 'Format-CreditsStateError', 'Complete-CreditsSegment', 'Start-CreditsManualChild',
     'Get-CreditsConstants', 'New-CreditsTaskDefinition', 'New-CreditsMonitorTaskDefinition', 'Get-CreditsTaskDefinitionHash',
     'New-CreditsSchedulerAdapter', 'Enter-CreditsKeepAwake', 'Exit-CreditsKeepAwake', 'Read-CreditsLauncherEnv',
-    'Resolve-CreditsPhysicalPath', 'Test-CreditsSameDirectory'
+    'Resolve-CreditsPhysicalPath', 'Test-CreditsSameDirectory',
+    'Get-CreditsTokenFile', 'Set-CreditsSubscriptionEnvFromFile', 'Set-CreditsStreamRoute', 'Resolve-CreditsClaudeProgram',
+    'Invoke-CreditsQuota', 'Invoke-CreditsQuotaProbe'
 )

@@ -17,6 +17,8 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["working_directory", "claude_exe", "python_exe", "permission_mode", "effort", "timeout_sec"],
+      "if": { "required": ["claude_version"] },
+      "then": { "patternProperties": { "^auth$": { "const": "subscription" } }, "required": ["auth"] },
       "properties": {
         "working_directory": { "type": "string", "minLength": 1, "description": "Always the main tree." },
         "claude_exe": { "type": "string", "minLength": 1 },
@@ -28,6 +30,15 @@
         "timeout_sec": { "type": "integer", "minimum": 1 },
         "auth": { "enum": ["key", "subscription"], "description": "How the CLI signs in. Absent means key. subscription is the fleet member route: an S4U task, no key file, and the subscription token in the CLI's environment only." },
         "allowed_tools": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\([^()\\r\\n]*\\))?$" }, "description": "Tools allowed without a prompt, in the dispatch wrapper's -AllowedTools form." },
+        "claude_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$", "description": "The CLI version that the auth preflight requires. Only with auth subscription; absent means no preflight." },
+        "tools": {
+          "type": "array",
+          "description": "The only built-in tools that the CLI loads (--tools, with --strict-mcp-config). Each name must be in allowed_tools.",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" }
+        },
         "gate_project": { "type": "string", "minLength": 1, "description": "The project of the M-1 receipt when it is not the project_root. Only with auth subscription: a member gates once in a fixed empty folder." },
         "max_budget_usd": { "type": "number", "exclusiveMinimum": 0, "description": "The CLI's own budget stop of each segment, when it is below the reservation. The reservation and the cap rules stay. Register-CreditsRun.ps1 refuses a value above a given segment_cap_usd (max_budget_above_cap)." },
         "env": {
