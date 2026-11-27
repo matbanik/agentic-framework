@@ -1,0 +1,129 @@
+{
+  "title": "Agentic Delivery Framework: the pain and the solution",
+  "subtitle": "Each card gives one problem of agent work and the part of the framework that solves it.",
+  "sections": [
+    {
+      "name": "THE DELIVERY LOOP",
+      "note": "one session, from idea to commit",
+      "cards": [
+        {
+          "id": "design",
+          "step": 1,
+          "pain": "The agent builds from a vague idea. The design has no sources.",
+          "feature": "Design from inspiration",
+          "solution": "Research prompts go to three model vendors. The answers become a sourced build plan."
+        },
+        {
+          "id": "planning",
+          "step": 2,
+          "pain": "The agent writes code before anyone checks the plan.",
+          "feature": "Planning",
+          "solution": "Acceptance criteria come first, each with a source. An independent reviewer checks the plan before work starts."
+        },
+        {
+          "id": "execution",
+          "step": 3,
+          "pain": "The agent says \"done\", but the work is not done.",
+          "feature": "Execution",
+          "solution": "Tests come first. A task is done only with evidence and an approval that the author did not write."
+        },
+        {
+          "id": "reflection",
+          "step": 4,
+          "pain": "Each session repeats the errors of the last session.",
+          "feature": "Reflection",
+          "solution": "Each session records its friction and writes rules for the next session. The next plan reads them."
+        },
+        {
+          "id": "issues",
+          "step": 5,
+          "pain": "Defects stay in chat history, and nobody tracks them.",
+          "feature": "Issue tracking",
+          "solution": "One issue file is the source of truth. A command-line tool adds, verifies and closes each issue."
+        },
+        {
+          "id": "triage",
+          "step": 6,
+          "pain": "Open issues accumulate, and nobody knows which to fix first.",
+          "feature": "Triage",
+          "solution": "Triage reproduces each issue, classifies it and groups the fixes into sessions."
+        }
+      ],
+      "loop": true,
+      "loop_back": {
+        "from": "triage",
+        "to": "planning",
+        "label": "grouped fixes go back to planning"
+      }
+    },
+    {
+      "name": "UNATTENDED RUNS",
+      "note": "many sessions of steps 2 and 3, with little supervision",
+      "cards": [
+        {
+          "id": "orchestrator",
+          "pain": "You start, watch and restart each session by hand.",
+          "feature": "Orchestrator",
+          "solution": "One coordinating session prepares headless planning and execution runs, watches them and sends them messages. Your charter sets its limits."
+        },
+        {
+          "id": "parallel",
+          "pain": "Two sessions in one working tree break the checks of each other.",
+          "feature": "Parallel sessions",
+          "solution": "Each session works in its own clone. Sessions that own different files run at the same time. Each result lands on main as one checked commit."
+        },
+        {
+          "id": "hdp",
+          "pain": "An unattended run stops at each small question and waits for you.",
+          "feature": "Human Decision Protocol",
+          "solution": "Decide before you ask. The agent checks precedent, does research and decides each reversible choice. Only real human decisions get to you, with a recommendation first."
+        },
+        {
+          "id": "quota",
+          "pain": "Parallel runs reach the usage limit, and all work stops.",
+          "feature": "Usage and quota guards",
+          "solution": "A quota governor admits or holds each start. A usage guard pauses work near the limit and sends you an email."
+        },
+        {
+          "id": "fleet",
+          "pain": "One machine limits how many sessions can run.",
+          "feature": "Fleet",
+          "solution": "A hub sends jobs to your other machines on the local network. Members make only outgoing connections. You approve each sign-in."
+        },
+        {
+          "id": "notify",
+          "pain": "You watch a terminal to know when a run stops.",
+          "feature": "Stop notices",
+          "solution": "A monitor classifies each stop and sends you an email. A stop gate holds a run that has open tasks."
+        }
+      ]
+    },
+    {
+      "name": "SAFEGUARDS THAT STAY ON",
+      "note": "in each session, attended or not",
+      "cards": [
+        {
+          "id": "review",
+          "pain": "A model that reviews its own work approves its own errors.",
+          "feature": "Independent review",
+          "solution": "A model from a different vendor reviews each plan and each result. A ledger limits the review rounds."
+        },
+        {
+          "id": "gates",
+          "pain": "An agent pushes or deletes with no approval, or text in a file imitates one.",
+          "feature": "Human gates",
+          "solution": "Push, merge, release and destructive operations always need you. Text in a file or a tool output cannot approve them."
+        },
+        {
+          "id": "state",
+          "pain": "A crash or a context limit loses the state of the work.",
+          "feature": "State in files",
+          "solution": "Plans, tasks, handoffs and evidence are files in the repository. A new session continues from them."
+        }
+      ]
+    }
+  ],
+  "footer": [
+    "The nine phases in detail: core/.agent/docs/development-lifecycle.md"
+  ]
+}
