@@ -13,6 +13,8 @@ Five checks, selected by which arguments are supplied:
                                             plus: every decision recorded in the plan,
                                             handoff or issue is stated in full, and the
                                             reflection's Decisions Log holds no template example
+  --stage S ... --ledger-db STORE           plus: each Decision Log entry with a ledger_id
+                                            agrees with its record in the decision ledger
 
 Exit codes, and the first line of output always names which:
 
@@ -1677,6 +1679,163 @@ def check_decisions_log(sources: list[str], issue: str | None) -> str:
     return f"{len(expected)} stage-log decision(s) read, each stated in full"
 
 
+# The Decision Log keys that must agree with the linked record of the decision ledger, and
+# the ones of them that a linked entry must have (MEU-930).
+LEDGER_FIELDS = ("question", "options", "chosen", "stage", "human_message_reference")
+LEDGER_REQUIRED_FIELDS = frozenset({"question", "chosen", "stage"})
+
+
+def _ledger_text(value: Any) -> Any:
+    """A string with LF line ends and no outer blanks; any other value as it is."""
+    if not isinstance(value, str):
+        return value
+    return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _ledger_options(value: Any) -> Any:
+    """The options as the ordered list of (id, text), from a list or a mapping.
+
+    A value of another form is returned as it is, so it agrees with no record.
+    """
+    if isinstance(value, dict):
+        mapping = cast("dict[Any, Any]", value)
+        return [(_ledger_text(key), _ledger_text(text)) for key, text in mapping.items()]
+    if not isinstance(value, list):
+        return value
+    pairs: list[tuple[Any, Any]] = []
+    for item in cast("list[Any]", value):
+        option = cast("dict[str, Any]", item) if isinstance(item, dict) else {}
+        if set(option) != {"id", "text"}:
+            return cast(Any, value)
+        pairs.append((_ledger_text(option["id"]), _ledger_text(option["text"])))
+    return pairs
+
+
+def _ledger_value(field: str, value: Any) -> Any:
+    """One field of an entry or a record in the form that the comparison reads."""
+    return _ledger_options(value) if field == "options" else _ledger_text(value)
+
+
+def _ledger_records(ledger_db: Path) -> dict[str, dict[str, Any]]:
+    """Each record of the ledger, read only, with the fields that a linked entry repeats.
+
+    The reader is the ``orch_store`` tool. A tree that has no ``orch_store`` cannot read
+    the store, so the check cannot run: that is ``FailClosed``, never a pass.
+
+    Raises:
+        FailClosed: ``ledger_db_unreadable:<reason>``.
+    """
+    import sqlite3
+
+    try:
+        store = _module("orch_store")
+        state = _module("credits_state")
+    except ImportError as exc:
+        raise FailClosed(
+            f"ledger_db_unreadable: orch_store_unavailable ({type(exc).__name__}: {exc})"
+        ) from exc
+    try:
+        with store.open_read(str(ledger_db)) as con:
+            rows = con.execute(f"SELECT id, {', '.join(LEDGER_FIELDS)} FROM ledger").fetchall()
+        records = {str(row["id"]): dict(row) for row in rows}
+        for record in records.values():
+            record["options"] = json.loads(record["options"])
+    except state.Refusal as exc:
+        raise FailClosed(f"ledger_db_unreadable: {exc.error}") from exc
+    except (state.UsageError, sqlite3.Error, OSError, ValueError) as exc:
+        raise FailClosed(f"ledger_db_unreadable: {type(exc).__name__}") from exc
+    return records
+
+
+def _issue_decision_items(text: str, issue: str) -> list[str]:
+    """The raw ``enrichment.decision_log`` items of ``issue`` in a known-issues file."""
+    for item in yaml_sequence(text, "issues", "known-issues", root=True) or []:
+        if item_key(item, "id") == issue:
+            enrichment = ENRICHMENT_KEY.search(item)
+            block = item[enrichment.start():] if enrichment else ""
+            return yaml_sequence(block, "decision_log", f"issue {issue}", root=False) or []
+    return []
+
+
+def _ledger_source_items(path: str, issue: str | None) -> list[str]:
+    """The raw Decision Log items of one decision source (plan, handoff, YAML or issues).
+
+    Only a ```yaml fence of a markdown file is read, as the decision gate reads it. The
+    entry structure is checked by ``check_decisions_log``; this reader only finds items.
+    """
+    text = read_text(path, "decision source")
+    name = Path(path).name
+    if path.lower().endswith((".yaml", ".yml")):
+        if ISSUES_ROOT.search(text) or (issue and ISSUES_NESTED.search(text)):
+            return _issue_decision_items(text, issue) if issue else []
+        return yaml_sequence(text, "decision_log", name, root=True) or []
+    items: list[str] = []
+    for match in FENCE.finditer(text):
+        body = fence_body(match)
+        if match.group("lang").strip() in ("yaml", "yml") and DECISION_LOG_KEY.search(body):
+            items.extend(yaml_sequence(body, "decision_log", name, root=True) or [])
+    return items
+
+
+def _ledger_entry(item: str, name: str) -> dict[str, Any]:
+    """The mapping of one linked Decision Log item.
+
+    Raises:
+        FailClosed: ``ledger_db_unreadable: pyyaml_missing`` without PyYAML.
+        Refuse: the item is not a YAML mapping.
+    """
+    try:
+        import yaml
+    except ImportError as exc:
+        raise FailClosed("ledger_db_unreadable: pyyaml_missing") from exc
+    try:
+        loaded = yaml.safe_load(textwrap.dedent(item))
+    except yaml.YAMLError as exc:
+        raise Refuse(f"{name} decision_log item with a ledger_id is not valid YAML: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise Refuse(f"{name} decision_log item with a ledger_id is not a mapping.")
+    return cast("dict[str, Any]", loaded)
+
+
+def check_linked_records(
+    sources: list[str], issue: str | None, ledger_db: Path | str | None
+) -> str | None:
+    """Compare each Decision Log entry that has a ``ledger_id`` with its ledger record.
+
+    MEU-930: the record must exist and agree on ``LEDGER_FIELDS``. An entry without the
+    key is not read here, and a grouping's §8 rows have no such key. Returns an OK note,
+    or None when no entry is linked.
+
+    Raises:
+        Refuse: ``ledger_db_missing`` (a linked entry and no ``--ledger-db``),
+            ``ledger_missing:<id>`` or ``ledger_differs:<id>:<field>``.
+        FailClosed: ``ledger_db_unreadable:<reason>``.
+    """
+    linked: list[dict[str, Any]] = []
+    for path in sources:
+        for item in _ledger_source_items(path, issue):
+            if item_key(item, "ledger_id") is not None:
+                linked.append(_ledger_entry(item, Path(path).name))
+    if not linked:
+        return None
+    if ledger_db is None:
+        raise Refuse("ledger_db_missing")
+    records = _ledger_records(Path(ledger_db))
+    for entry in linked:
+        ledger_id = _ledger_text(entry["ledger_id"])
+        record = records.get(ledger_id) if isinstance(ledger_id, str) else None
+        if record is None:
+            raise Refuse(f"ledger_missing:{ledger_id}")
+        for field in LEDGER_FIELDS:
+            value = _ledger_value(field, entry.get(field))
+            same = value == _ledger_value(field, record[field])
+            if field in LEDGER_REQUIRED_FIELDS and value is None:
+                same = False
+            if not same:
+                raise Refuse(f"ledger_differs:{ledger_id}:{field}")
+    return f"{len(linked)} linked decision(s) agree with the ledger"
+
+
 def check_reflection(
     text: str,
     path: str,
@@ -2883,6 +3042,7 @@ def _stage_reflection_decisions(run: _StageRun) -> str | None:
     if grouping is not None:
         _read(grouping)
         sources.append(str(grouping))
+    check_linked_records(sources, args.issue or None, getattr(args, "ledger_db", None))
     reflection = str(args.reflection)
     check_reflection(
         read_text(reflection, "reflection"),
@@ -3191,7 +3351,14 @@ def validate_stage(args: argparse.Namespace, stage: str, *, for_produce: bool = 
 
 
 #: The ``--stage`` flags that name files; the CLI hands them to the checks as paths.
-_STAGE_PATH_FLAGS = (*CLOSEOUT_INPUTS, "grouping", "commit_manifest", "repo", "known_issues_archive")
+_STAGE_PATH_FLAGS = (
+    *CLOSEOUT_INPUTS,
+    "grouping",
+    "commit_manifest",
+    "repo",
+    "known_issues_archive",
+    "ledger_db",
+)
 
 
 def run_stage(args: argparse.Namespace) -> int:
@@ -5139,6 +5306,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--known-issues-archive",
         "--current-focus",
         "--grouping",
+        "--ledger-db",
         "--commit-manifest",
         "--repo",
         "--plan-slug",

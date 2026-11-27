@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "campaign-charter/1",
+  "title": "Campaign charter",
+  "description": "The limits of one orchestrated campaign (MEU-929). The charter only tightens; no key names a push, merge, tag, release, deploy, data loss, permission change or test-assertion change. Quote each string that YAML reads as a boolean or a time. In a pattern, (?!\\n) after $ refuses a last newline, which $ of Python lets through.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "charter",
+    "id",
+    "sessions",
+    "order_rule",
+    "expires",
+    "groupings",
+    "backends",
+    "concurrency",
+    "decisions",
+    "quota",
+    "routing_policy",
+    "commits",
+    "push"
+  ],
+  "properties": {
+    "charter": { "const": "campaign-charter/1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$(?!\\n)" },
+    "sessions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^\\S+$(?!\\n)" }
+    },
+    "order_rule": { "type": "string", "description": "Advice only (AG-D1)." },
+    "expires": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$(?!\\n)"
+    },
+    "groupings": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+    "backends": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default", "allowed"],
+      "properties": {
+        "default": { "$ref": "#/$defs/backend" },
+        "allowed": { "type": "array", "items": { "$ref": "#/$defs/backend" } }
+      }
+    },
+    "concurrency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_claude_workers", "max_codex_reviews"],
+      "properties": {
+        "max_claude_workers": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "max_codex_reviews": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "decisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "tier_b",
+        "max_tier_b_rulings_per_day",
+        "pause_tier_b_on_any_overturn"
+      ],
+      "properties": {
+        "mode": { "const": "hdp" },
+        "tier_b": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["M-5", "M-6", "M-8"],
+          "properties": {
+            "M-5": { "$ref": "#/$defs/switch" },
+            "M-6": { "$ref": "#/$defs/switch" },
+            "M-8": { "$ref": "#/$defs/switch" }
+          }
+        },
+        "max_tier_b_rulings_per_day": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "pause_tier_b_on_any_overturn": { "const": true }
+      }
+    },
+    "quota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resume_after_usage_limit", "restarts_per_hour"],
+      "properties": {
+        "resume_after_usage_limit": { "type": "boolean" },
+        "restarts_per_hour": { "type": "integer", "minimum": 0, "maximum": 3 }
+      }
+    },
+    "routing_policy": {
+      "description": "Null until MEU-934 writes the policy.",
+      "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/file" }]
+    },
+    "commits": { "enum": ["standing-grant", "none"] },
+    "push": { "const": "never" }
+  },
+  "$defs": {
+    "backend": { "enum": ["subscription-p", "vscode-attended"] },
+    "switch": { "enum": ["off", "shadow", "on"] },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "description": "A repository-relative path with forward slashes.",
+          "type": "string",
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+$(?!\\n)"
+        },
+        "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$(?!\\n)" }
+      }
+    }
+  }
+}

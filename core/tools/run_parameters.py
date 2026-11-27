@@ -357,6 +357,12 @@ OFFER_LINE_RE = re.compile(r"  ([a-z_][a-z0-9_-]*): (.*)")
 FLOW_KEY_RE = re.compile(r"[a-z_][a-z0-9_-]*")
 TRAILING_COMMENT_RE = re.compile(r" +#.*")
 REVOKE_RE = re.compile(r"revoke run_parameters ([0-9a-f-]{36})")
+#: MEU-929 — the typed line that names a campaign charter and its sha256, the whole message.
+CHARTER_LINE_RE = re.compile(r"^orchestrate start (\S+) sha256:([0-9a-f]{64})$")
+#: MEU-929 — the same line with any sha words, so a short sha is a sha mismatch.
+CHARTER_WORDS_RE = re.compile(r"orchestrate start (\S+) sha256:\S+")
+#: MEU-929 — the session heading of a grouping, as ``grouping_line_sigma`` reads it.
+CHARTER_SECTION_RE = re.compile(r"### Session (\S+) — (.+)")
 #: MEU-939 D-1 A — a prose line of a typed record that records the standing commit grant:
 #: the workflow token or the workflow mention, from the line's first non-blank character.
 STANDING_RE = re.compile(
@@ -2097,9 +2103,13 @@ def _grouping_sigma(
 
 
 def grouping_line_sigma(
-    text: str, plan: str, auth: Mapping[str, Any]
+    text: str, plan: str, auth: Mapping[str, Any] | None
 ) -> dict[str, Any] | None:
-    """The run parameters of ``plan``'s ``Run parameters:`` line in a grouping file's text, or None."""
+    """The run parameters of ``plan``'s ``Run parameters:`` line in a grouping file's text, or None.
+
+    A caller with no carrier to compare gives ``None``: the line is read and its
+    ``authorization`` reference is not compared (the charter ceiling, MEU-929).
+    """
     heading = re.compile(rf"### Session \S+ — {re.escape(plan)}")
     inside = False
     found: str | None = None
@@ -2123,7 +2133,10 @@ def grouping_line_sigma(
         pairs[key] = value
     if set(pairs) != {*SIGMA_KEYS, "authorization"}:
         raise Refusal("binding", "grouping_line_keys")
-    if pairs["authorization"] != f"{str(auth['session'])[:8]}/{auth['message_uuid']}":
+    if (
+        auth is not None
+        and pairs["authorization"] != f"{str(auth['session'])[:8]}/{auth['message_uuid']}"
+    ):
         raise Refusal("binding", "grouping_line_reference")
     if pairs["decisions"] not in DECISION_RANK or pairs["push"] != "never":
         raise Refusal("binding", "grouping_line_values")
@@ -3775,6 +3788,196 @@ def standing_authority(repo: Repo, plan: str, act: str) -> dict[str, Any] | None
         return None
     _check_scope(repo, offer, plan)
     return cast(dict[str, Any], json.loads(json.dumps(live)))
+
+
+# -- the campaign charter (MEU-929) -----------------------------------------------------------
+
+
+def charter_authority(
+    repo: Path | Repo,
+    session: str,
+    message: str,
+    path: Path,
+    *,
+    data: bytes | None = None,
+) -> str:
+    """The uuid of the typed line that names the charter ``path`` and its sha256 (AC-929.1).
+
+    The line is the whole stripped message (``CHARTER_LINE_RE``) of a typed human record of
+    ``session`` (V-1, V-2), so a ``-p`` transcript gives none. It names the
+    repository-relative path of the charter and the sha256 of the charter bytes now. A
+    caller that parsed the charter gives those bytes in ``data``, so the sha256 is the
+    digest of what it parsed. The function reserves and writes nothing.
+
+    Raises:
+        Refusal: ``charter_bad:not_typed``, ``charter_bad:not_a_charter_line``,
+            ``charter_bad:charter_path_mismatch``, ``charter_bad:charter_sha_mismatch`` or
+            ``charter_bad:unreadable``.
+    """
+    handle = _as_repo(repo)
+    try:
+        _raw, text = _human_record(handle, session, message)
+    except Refusal as exc:
+        raise Refusal("charter_bad:not_typed", str(exc)) from exc
+    line = text.strip()
+    words = CHARTER_WORDS_RE.fullmatch(line)
+    if words is None:
+        raise Refusal("charter_bad:not_a_charter_line")
+    charter = handle.top / path
+    try:
+        rel = charter.resolve().relative_to(handle.top.resolve()).as_posix()
+    except (OSError, ValueError) as exc:
+        raise Refusal("charter_bad:charter_path_mismatch", str(exc)) from exc
+    if words.group(1) != rel:
+        raise Refusal("charter_bad:charter_path_mismatch", rel)
+    if data is None:
+        try:
+            data = _read_bytes(charter)
+        except OSError as exc:
+            raise Refusal("charter_bad:unreadable", str(exc)) from exc
+        if data is None:
+            raise Refusal("charter_bad:unreadable", rel)
+    match = CHARTER_LINE_RE.fullmatch(line)
+    if match is None or match.group(2) != _sha256(data):
+        raise Refusal("charter_bad:charter_sha_mismatch", rel)
+    return message
+
+
+# -- the typed answer to the decision ledger (MEU-930) ----------------------------------------
+
+
+def typed_answer(repo: Path | Repo, session: str, message: str) -> str:
+    """The text of the typed human record ``message`` of ``session`` (930-g).
+
+    Only a record that the human typed counts (V-1, V-2), so a ``-p`` transcript, a tool
+    result and an injected message give none. The function reserves and writes nothing.
+
+    Raises:
+        Refusal: ``charter_bad:not_typed`` for a message that is not such a record, or the
+            refusal of a path that is not in a repository.
+    """
+    handle = _as_repo(repo)
+    try:
+        _raw, text = _human_record(handle, session, message)
+    except Refusal as exc:
+        raise Refusal("charter_bad:not_typed", str(exc)) from exc
+    return text
+
+
+def _charter_section(session: str, groupings: Mapping[str, str]) -> tuple[str, str]:
+    """The grouping text and the plan of the one section of ``session``.
+
+    Raises:
+        Refusal: ``charter_bad:session_not_in_grouping:<session>`` for no section or two.
+    """
+    found: list[tuple[str, str]] = []
+    for text in groupings.values():
+        for line in text.replace("\r\n", "\n").split("\n"):
+            match = CHARTER_SECTION_RE.fullmatch(line)
+            if match is not None and match.group(1) == session:
+                found.append((text, match.group(2)))
+    if len(found) != 1:
+        raise Refusal(
+            f"charter_bad:session_not_in_grouping:{session}", f"sections: {len(found)}"
+        )
+    return found[0]
+
+
+def _charter_plan_blocks(repo: Repo, plan: str) -> list[dict[str, Any]]:
+    """The run-parameters blocks of the plan's carriers, ``task.md`` first.
+
+    A missing carrier, or one with no block, gives none and never hides the other one.
+
+    Raises:
+        Refusal: ``charter_bad:plan_block:<plan>`` for a malformed block (V-0).
+    """
+    if SLUG_RE.fullmatch(plan) is None:
+        return []
+    blocks: list[dict[str, Any]] = []
+    try:
+        for name in ("task.md", "implementation-plan.md"):
+            text = _carrier_text(repo, _plan_dir(repo, plan) / name)
+            meta = _frontmatter(text) if text is not None else None
+            if meta is not None and "run_parameters" in meta:
+                block = cast(dict[str, Any], meta["run_parameters"])
+                _check_block(block)
+                blocks.append(block)
+    except Refusal as exc:
+        raise Refusal(f"charter_bad:plan_block:{plan}", str(exc)) from exc
+    return blocks
+
+
+def _charter_commits(repo: Repo, plan: str) -> None:
+    """Refuse unless a live standing commit grant covers ``exec_commit`` of ``plan``.
+
+    Raises:
+        Refusal: ``charter_widens:commits`` for no live grant or a plan that opts out;
+            ``charter_bad:standing_authority:<reason>`` when the grant cannot be read.
+    """
+    try:
+        live = standing_authority(repo, plan, "exec_commit")
+    except Refusal as exc:
+        if exc.reason == STANDING_OPT_OUT:
+            raise Refusal("charter_widens:commits", f"{plan}: {exc.detail}") from exc
+        raise Refusal(
+            f"charter_bad:standing_authority:{exc.reason}", exc.detail
+        ) from exc
+    if live is None:
+        raise Refusal("charter_widens:commits", f"{plan}: no live standing grant")
+
+
+def charter_allowance(
+    repo: Path | Repo, charter: Mapping[str, Any], groupings: Mapping[str, str]
+) -> None:
+    """Refuse a charter that is wider than the ceiling of one of its sessions (AC-929.3).
+
+    ``charter`` is a charter that passed the schema check. ``groupings`` maps each charter
+    grouping path to its text. A session is the ``### Session <id> — <plan>`` section of
+    exactly one text. The ceilings (AO3-D13):
+
+    - ``decisions`` and ``commits``: each carrier of the plan, that is the block of
+      ``task.md``, the block of ``implementation-plan.md`` and the ``Run parameters:`` line
+      of the section (``grouping_line_sigma``). The tightest one binds. A plan with no block
+      and no line sets no ceiling here; a line binds also before the plan has a block.
+    - a plan with a ``manual`` block gives ``charter_widens:decisions``.
+    - ``commits: standing-grant``: a live standing commit grant that covers the plan.
+    - ``expires``: the last second of the day of a grouping-scoped standing grant.
+
+    The schema bounds ``backends`` and ``push``. The function reserves and writes nothing.
+
+    Raises:
+        Refusal: ``charter_widens:<key>`` or ``charter_bad:<reason>``.
+    """
+    handle = _as_repo(repo)
+    for session in cast(list[str], charter["sessions"]):
+        text, plan = _charter_section(session, groupings)
+        blocks = _charter_plan_blocks(handle, plan)
+        auth = cast(dict[str, Any], blocks[0]["authorization"]) if blocks else None
+        if any(block["authorization"].get("schema") == "manual" for block in blocks):
+            # This file's grouping line reads only a grant reference; a manual plan has
+            # no ceiling above ``human-all``, and the charter mode is always ``hdp``.
+            raise Refusal("charter_widens:decisions", f"{session}: {plan}: manual")
+        ceilings = [_sigma(block) for block in blocks]
+        try:
+            line = grouping_line_sigma(text, plan, auth)
+        except Refusal as exc:
+            raise Refusal(
+                f"charter_bad:grouping_line:{exc.detail}", f"{session}: {plan}"
+            ) from exc
+        if line is not None:
+            ceilings.append(line)
+        rank = DECISION_RANK[cast(str, charter["decisions"]["mode"])]
+        if any(rank > DECISION_RANK[sigma["decisions"]] for sigma in ceilings):
+            raise Refusal("charter_widens:decisions", f"{session}: {plan}")
+        if charter["commits"] == "standing-grant":
+            if any(sigma["commit_exec"] is False for sigma in ceilings):
+                raise Refusal("charter_widens:commits", f"{session}: {plan}")
+            _charter_commits(handle, plan)
+        if auth is not None and auth.get("standing") is True:
+            # Both are zero-padded UTC texts of one form, so the text order is the time order.
+            day = auth["expires"]
+            if day != "none" and charter["expires"] > f"{day}T23:59:59Z":
+                raise Refusal("charter_widens:expires", f"{session}: {day}")
 
 
 def _unlock(
