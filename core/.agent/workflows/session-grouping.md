@@ -83,7 +83,7 @@ Confirm the drift check passes.
 
 **B2. Bundle into sessions.** Apply the Design Principles above. Group MEUs into sequential sessions: foundational/shared-file MEUs together, dependents downstream, GUI/docs after the engine they consume. Size each session against named past sessions (B-prereq read #5). Flag any session likely to exceed ~50% context as a split candidate.
 
-**B2a. Session Ownership.** Give each proposed session a parallel tier from B1. Tier 1 runs first, and the sessions of one tier may run at the same time. Write a `## Session Ownership` section in the grouping file. Its one `yaml` block names the tier and the `owns` set of each session, with the path rules of the `## Lane Ownership` section in `TASK-TEMPLATE.md`:
+**B2a. Session Ownership.** Give each proposed session a parallel tier from B1. Tier 1 runs first, and the sessions of one tier may run at the same time. Write a `## Session Ownership` section in the grouping file. Its one `yaml` block names the tier and the `owns` set of each session, with the path rules of the `## Lane Ownership` section in `TASK-TEMPLATE.md`. The block also carries the seven spec keys of the table below, which the scheduler `tools/orch.py` reads (MEU-924):
 
 ```yaml
 sessions:
@@ -91,15 +91,51 @@ sessions:
     tier: 1
     owns:
       - src/services/example/
+    after: []
+    size: medium
+    review_effort: class-default
+    vm: false
+    e2e: false
+    hold: null
+    planning: any-time
   CS2:
     tier: 1
     owns:
       - ui/src/renderer/src/features/example/
+    after: []
+    size: small-to-medium
+    review_effort: class-default
+    vm: false
+    e2e: true
+    hold:
+      kind: human
+      reason: "The user rules D-3 before CS2 starts."
+    planning: early-refresh
   CS3:
     tier: 2
     owns:
       - src/services/example/
+    after:
+      - CS1
+    size: medium-to-large
+    review_effort: one-tier-up
+    vm: false
+    e2e: false
+    hold: null
+    planning: wait-at-r0
 ```
+
+| Key | Values | Default | Meaning |
+|---|---|---|---|
+| `after` | A block list of session ids at indent 6, or `[]` | `[]` | The sessions that must be `done` or `skipped` before this session starts. An id can name a session of another grouping. A session does not name itself, and it names each id one time. |
+| `size` | `small`, `small-to-medium`, `medium`, `medium-to-large`, `large` | not stated | The B2 size of the session. `simulate` weights the schedule with it. |
+| `review_effort` | `class-default`, `one-tier-up` | not stated | The reviewer effort: the class default, or one tier up for a security-sensitive session. |
+| `vm` | `true`, `false` | `false` | The session needs the test VM. One `vm` session runs at a time. |
+| `e2e` | `true`, `false` | `false` | The session runs a real-binary E2E harness. One `e2e` session runs at a time. |
+| `hold` | `null`, or a map at indent 6 of `kind` (`external` or `human`) and `reason` (a double-quoted text that is not empty) | `null` | A wait that no session clears: an event outside the repository (`external`) or a ruling of the user (`human`). The scheduler does not start a held session or the sessions after it. |
+| `planning` | `any-time`, `early-refresh`, `wait-at-r0` | not stated | When to write the plan. `any-time`: no earlier session changes its files. `early-refresh`: write the plan early, then read the source again and fix the file:line references before the first Red row. `wait-at-r0`: write the plan after the session that it needs has an approved plan; execution waits at row R0. |
+
+None of the seven keys is required: a session that does not write a key gets its default. Write each key that you know, because the scheduler reads only this block. `tools/orch.py simulate` needs `size` on each session: a session with no `size` gives `simulate_bad:size:<session>`. A key of the wrong type, a value outside its set, or a key that a session writes two times gives `ownership_bad:<key>:<session>` from the check below.
 
 Before you write the proposal (B4), run `rtk proxy uv run python tools/lanes.py ownership-check --grouping <grouping file> *> {{RECEIPTS_DIR}}/grouping-ownership.txt; $code=$LASTEXITCODE; Get-Content {{RECEIPTS_DIR}}/grouping-ownership.txt; exit $code`. It prints `ownership_ok`, or one `overlap:<tier>:<a>:<b>:<entry>` line for each pair of sessions in one tier whose `owns` sets overlap. Fix each overlap: move one session to a later tier, or split the `owns` entries, then run the check again. Sessions in different tiers run in series, so they may own the same path. Each session's plan copies its `owns` set into its `## Lane Ownership` section (`create-plan.md` Step 4).
 

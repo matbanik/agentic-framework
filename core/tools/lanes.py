@@ -222,7 +222,29 @@ RESERVING_STATES = ("active", "landing")
 OWNERSHIP_KEYS = ("owns", "must_not_touch")
 # The grouping file's per-session ownership block (session-grouping STAGE B).
 SESSION_OWNERSHIP_HEADING = "## Session Ownership"
-SESSION_OWNERSHIP_KEYS = ("tier", "owns")
+# AC-924.1 (OD-9 A): the seven optional spec keys follow ``tier`` and ``owns``.
+SESSION_OWNERSHIP_KEYS = (
+    "tier",
+    "owns",
+    "after",
+    "size",
+    "review_effort",
+    "vm",
+    "e2e",
+    "hold",
+    "planning",
+)
+SIZE_VALUES = ("small", "small-to-medium", "medium", "medium-to-large", "large")
+REVIEW_EFFORT_VALUES = ("class-default", "one-tier-up")
+HOLD_KINDS = ("external", "human")
+PLANNING_VALUES = ("any-time", "early-refresh", "wait-at-r0")
+_HOLD_FIELDS = ("kind", "reason")
+_SPEC_CHOICES: dict[str, tuple[str, ...]] = {
+    "size": SIZE_VALUES,
+    "review_effort": REVIEW_EFFORT_VALUES,
+    "planning": PLANNING_VALUES,
+}
+_SPEC_BOOLS = {"true": True, "false": False}
 EXIT_REFUSED = 1
 EXIT_HALT = 3
 # AC-785.12: a second recovery of one op is an ordering wait, not a refusal.
@@ -1229,16 +1251,70 @@ def _session_block_lines(block: Sequence[str]) -> list[tuple[int, int, str]]:
     return out
 
 
-def _parse_session_ownership(block: Sequence[str]) -> list[tuple[str, int, list[str]]]:
-    """``(session, tier, owns)`` of each session of a ``## Session Ownership`` block.
+@dataclass(frozen=True)
+class Hold:
+    """The ``hold`` of a session: a wait that no session of a grouping clears (AC-924.1).
 
-    The block is the block-style mapping ``sessions:`` → ``<id>:`` → ``tier: <int>``
-    and ``owns:`` (a block list of entries, or ``[]``), in file order.
+    ``kind`` is ``external`` (an event outside the repository) or ``human`` (a ruling
+    of the user). ``reason`` is the text of the double-quoted ``reason`` value.
+    """
+
+    kind: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SessionSpec:
+    """One session of a ``## Session Ownership`` block with every key parsed (AC-924.1).
+
+    An absent spec key takes its default: ``after`` ``()``, ``vm`` and ``e2e``
+    ``False``, and ``None`` ("not stated") for ``size``, ``review_effort``, ``hold``
+    and ``planning``.
+    """
+
+    session: str
+    tier: int
+    owns: tuple[str, ...]
+    after: tuple[str, ...] = ()
+    size: str | None = None
+    review_effort: str | None = None
+    vm: bool = False
+    e2e: bool = False
+    hold: Hold | None = None
+    planning: str | None = None
+
+
+def _hold_reason(rest: str) -> str | None:
+    """The text of a non-empty double-quoted ``reason`` value; ``None`` for another form."""
+    if len(rest) < 2 or rest[0] != '"' or rest[-1] != '"':
+        return None
+    inner = rest[1:-1]
+    if '"' in inner or "\\" in inner or not inner.strip():
+        return None
+    return inner
+
+
+def parse_session_spec(block: Sequence[str]) -> list[SessionSpec]:
+    """The ``SessionSpec`` of each session of a ``## Session Ownership`` block.
+
+    The block is the block-style mapping ``sessions:`` → ``<id>:`` → the keys of
+    ``SESSION_OWNERSHIP_KEYS``, in file order. ``tier`` (a whole number of 1 or more)
+    and ``owns`` (a block list of entries, or ``[]``) are required. The seven spec keys
+    are optional, with the line forms of AO1-D15:
+
+    * ``after``: a block list of session ids at indent 6, or ``[]``. An id can name a
+      session of another grouping, but not the session itself, and each id once.
+    * ``size``, ``review_effort`` and ``planning``: one value of ``SIZE_VALUES``,
+      ``REVIEW_EFFORT_VALUES`` or ``PLANNING_VALUES``.
+    * ``vm`` and ``e2e``: ``true`` or ``false``.
+    * ``hold``: ``null``, or a block map at indent 6 with exactly ``kind`` (one of
+      ``HOLD_KINDS``) and ``reason`` (a non-empty double-quoted text).
 
     Raises:
         Refusal: ``ownership_bad:extra_key:<key>``, ``ownership_bad:sessions``,
             ``ownership_bad:session_id:<id>``, ``ownership_bad:duplicate:<id>``,
-            ``ownership_bad:tier:<session>``, ``ownership_bad:owns:<session>``,
+            ``ownership_bad:<key>:<session>`` (a missing ``tier`` or ``owns``, a
+            repeated key, or a value of the wrong type or outside its set),
             ``ownership_bad:syntax`` or ``entry_bad:<entry>``.
     """
     lines = _session_block_lines(block)
@@ -1257,22 +1333,61 @@ def _parse_session_ownership(block: Sequence[str]) -> list[tuple[str, int, list[
         raise Refusal(
             "ownership_bad:sessions", f"line {number}: 'sessions' must be a mapping"
         )
-    sessions: list[tuple[str, int, list[str]]] = []
+    specs: list[SessionSpec] = []
     seen: set[str] = set()
     session: str | None = None
     tier: int | None = None
     owns: list[str] | None = None
-    in_owns = False
+    after: list[str] = []
+    choices: dict[str, str] = {}
+    flags: dict[str, bool] = {}
+    hold: Hold | None = None
+    # The open ``hold:`` block map, and the open block list ("owns" or "after").
+    hold_map: dict[str, str] | None = None
+    list_key: str | None = None
     keys: set[str] = set()
 
-    def close() -> None:
+    def end_open(number: int) -> None:
+        """Close the open ``hold`` map or block list before the next key or session."""
+        nonlocal hold, hold_map, list_key
+        if hold_map is not None:
+            missing = [field for field in _HOLD_FIELDS if field not in hold_map]
+            if missing:
+                raise Refusal(
+                    f"ownership_bad:hold:{session}",
+                    f"line {number}: hold has no {' or '.join(missing)}",
+                )
+            hold = Hold(kind=hold_map["kind"], reason=hold_map["reason"])
+            hold_map = None
+        if list_key == "after" and not after:
+            raise Refusal(
+                f"ownership_bad:after:{session}",
+                f"line {number}: write an empty after list as 'after: []'",
+            )
+        list_key = None
+
+    def close(number: int) -> None:
         if session is None:
             return
+        end_open(number)
         if tier is None:
             raise Refusal(f"ownership_bad:tier:{session}", f"{session} has no tier")
         if owns is None:
             raise Refusal(f"ownership_bad:owns:{session}", f"{session} has no owns")
-        sessions.append((session, tier, owns))
+        specs.append(
+            SessionSpec(
+                session=session,
+                tier=tier,
+                owns=tuple(owns),
+                after=tuple(after),
+                size=choices.get("size"),
+                review_effort=choices.get("review_effort"),
+                vm=flags.get("vm", False),
+                e2e=flags.get("e2e", False),
+                hold=hold,
+                planning=choices.get("planning"),
+            )
+        )
 
     for number, indent, text in lines[1:]:
         if indent == 0:
@@ -1283,7 +1398,7 @@ def _parse_session_ownership(block: Sequence[str]) -> list[tuple[str, int, list[
                 f"line {number}: the only top-level key is 'sessions'",
             )
         if indent == 2:
-            close()
+            close(number)
             if not text.endswith(":") or not _SESSION_ID_RE.fullmatch(text[:-1]):
                 raise Refusal(
                     f"ownership_bad:session_id:{text.rstrip(':')}",
@@ -1297,20 +1412,71 @@ def _parse_session_ownership(block: Sequence[str]) -> list[tuple[str, int, list[
                     f"line {number}: {session} is named twice",
                 )
             seen.add(session)
-            tier, owns, in_owns, keys = None, None, False, set()
+            tier, owns, after, keys = None, None, [], set()
+            choices, flags, hold, hold_map, list_key = {}, {}, None, None, None
             continue
         if session is None:
             raise Refusal("ownership_bad:syntax", f"line {number}: want '  <id>:'")
+        if hold_map is not None and indent > 4:
+            # A line of the open hold map: exactly kind and reason, at indent 6.
+            key = _KEY_LINE_RE.fullmatch(text) if indent == 6 else None
+            field = key.group(1) if key is not None else ""
+            if key is None or field not in _HOLD_FIELDS or field in hold_map:
+                raise Refusal(
+                    f"ownership_bad:hold:{session}",
+                    f"line {number}: hold is a map of kind and reason, each once",
+                )
+            rest = key.group(2).strip()
+            if field == "kind":
+                if rest not in HOLD_KINDS:
+                    raise Refusal(
+                        f"ownership_bad:hold:{session}",
+                        f"line {number}: hold kind is one of "
+                        f"{', '.join(HOLD_KINDS)}, got {rest!r}",
+                    )
+                hold_map["kind"] = rest
+            else:
+                reason = _hold_reason(rest)
+                if reason is None:
+                    raise Refusal(
+                        f"ownership_bad:hold:{session}",
+                        f"line {number}: hold reason is a non-empty double-quoted "
+                        f"text with no '\"' or '\\' inside, got {rest!r}",
+                    )
+                hold_map["reason"] = reason
+            continue
         item = _ITEM_LINE_RE.fullmatch(" " * indent + text)
         if item is not None:
-            # A block list item of owns, indented under the key or level with it.
-            if not in_owns or owns is None:
+            value = (item.group(1) or "").strip()
+            if hold_map is not None:
                 raise Refusal(
-                    "ownership_bad:syntax", f"line {number}: a list item outside owns"
+                    f"ownership_bad:hold:{session}",
+                    f"line {number}: hold is a map of kind and reason, not a list",
                 )
-            owns.append(_unquote((item.group(1) or "").strip(), "owns"))
-            continue
+            if list_key == "owns" and owns is not None:
+                # A block list item of owns, indented under the key or level with it.
+                owns.append(_unquote(value, "owns"))
+                continue
+            if list_key == "after":
+                if (
+                    indent != 6
+                    or not _SESSION_ID_RE.fullmatch(value)
+                    or value == session
+                    or value in after
+                ):
+                    raise Refusal(
+                        f"ownership_bad:after:{session}",
+                        f"line {number}: after lists other session ids at indent 6, "
+                        f"each once, got {value!r}",
+                    )
+                after.append(value)
+                continue
+            raise Refusal(
+                "ownership_bad:syntax",
+                f"line {number}: a list item outside owns or after",
+            )
         if indent == 4:
+            end_open(number)
             key = _KEY_LINE_RE.fullmatch(text)
             if key is None:
                 raise Refusal("ownership_bad:syntax", f"line {number}: want 'key:'")
@@ -1327,7 +1493,6 @@ def _parse_session_ownership(block: Sequence[str]) -> list[tuple[str, int, list[
                     f"line {number}: {session} names {name} twice",
                 )
             keys.add(name)
-            in_owns = False
             if name == "tier":
                 if not _TIER_RE.fullmatch(rest) or int(rest) < 1:
                     raise Refusal(
@@ -1336,22 +1501,46 @@ def _parse_session_ownership(block: Sequence[str]) -> list[tuple[str, int, list[
                         f"got {rest!r}",
                     )
                 tier = int(rest)
+            elif name in ("owns", "after"):
+                if rest not in ("", "[]"):
+                    raise Refusal(
+                        f"ownership_bad:{name}:{session}",
+                        f"line {number}: {name} must be a list, got {rest!r}",
+                    )
+                if name == "owns":
+                    owns = []
+                if rest == "":
+                    list_key = name
+            elif name in _SPEC_CHOICES:
+                if rest not in _SPEC_CHOICES[name]:
+                    raise Refusal(
+                        f"ownership_bad:{name}:{session}",
+                        f"line {number}: {name} is one of "
+                        f"{', '.join(_SPEC_CHOICES[name])}, got {rest!r}",
+                    )
+                choices[name] = rest
+            elif name in ("vm", "e2e"):
+                if rest not in _SPEC_BOOLS:
+                    raise Refusal(
+                        f"ownership_bad:{name}:{session}",
+                        f"line {number}: {name} is true or false, got {rest!r}",
+                    )
+                flags[name] = _SPEC_BOOLS[rest]
             elif rest == "":
-                owns, in_owns = [], True
-            elif rest == "[]":
-                owns = []
-            else:
+                hold_map = {}
+            elif rest != "null":
                 raise Refusal(
-                    f"ownership_bad:owns:{session}",
-                    f"line {number}: owns must be a list, got {rest!r}",
+                    f"ownership_bad:hold:{session}",
+                    f"line {number}: hold is null or a map of kind and reason, "
+                    f"got {rest!r}",
                 )
             continue
         raise Refusal("ownership_bad:syntax", f"line {number}: unexpected {text!r}")
-    close()
-    if not sessions:
+    close(lines[-1][0])
+    if not specs:
         raise Refusal("ownership_bad:sessions", "the block names no sessions")
-    for _, _, entries in sessions:
-        for entry in entries:
+    for spec in specs:
+        for entry in spec.owns:
             if not _entry_ok(entry):
                 raise Refusal(
                     f"entry_bad:{entry}",
@@ -1359,7 +1548,21 @@ def _parse_session_ownership(block: Sequence[str]) -> list[tuple[str, int, list[
                     "'/': no globs, absolute paths, drive letters, backslashes, '.' "
                     "or '..'",
                 )
-    return sessions
+    return specs
+
+
+def _parse_session_ownership(block: Sequence[str]) -> list[tuple[str, int, list[str]]]:
+    """``(session, tier, owns)`` of each session of a ``## Session Ownership`` block.
+
+    The projection of ``parse_session_spec`` (AC-924.2): a block with only ``tier``
+    and ``owns`` parses as before, and the spec keys do not change the tuples.
+
+    Raises:
+        Refusal: each refusal of ``parse_session_spec``.
+    """
+    return [
+        (spec.session, spec.tier, list(spec.owns)) for spec in parse_session_spec(block)
+    ]
 
 
 def _session_overlaps(

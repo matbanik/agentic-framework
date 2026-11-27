@@ -1,0 +1,986 @@
+{
+ "schema": "orch-spec/1",
+ "lanes": [
+  "UF",
+  "PE",
+  "RX"
+ ],
+ "sessions": {
+  "UF1": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "packages/api/src/{{PROJECT_NAME}}_api/auth/auth_service.py",
+    "mcp-server/src/utils/token-refresh-manager.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF2": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/services/tax_service.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/domain/tax/wash_sale_chain_manager.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF3": {
+   "lane": "UF",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/market_data_adapter.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/pipeline_steps/fetch_step.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF4": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "ui/package.json",
+    "ui/package-lock.json",
+    "mcp-server/package.json",
+    "mcp-server/package-lock.json"
+   ],
+   "after": [
+    "PE11"
+   ],
+   "vm": false
+  },
+  "UF4a": {
+   "lane": "UF",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "uv.lock"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF4b": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 2,
+   "owns": [
+    "uv.lock",
+    "packages/infrastructure/pyproject.toml",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/image_processing.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF4c": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 2,
+   "owns": [
+    "ui/package.json",
+    "ui/package-lock.json",
+    "ui/src/main/mcp-process-ipc.ts",
+    "ui/src/main/connect/",
+    "ui/src/main/journey-milestones.ts",
+    "ui/src/main/diagnostics-export.ts",
+    "ui/src/main/database-bootstrap-worker.ts",
+    "ui/src/main/database-bootstrap-ipc.ts",
+    "ui/src/main/portable-install/promotion-record.ts",
+    "ui/src/renderer/src/features/accounts/AccountDetailPanel.tsx",
+    "ui/src/renderer/src/features/accounts/import-json-schema.ts",
+    "ui/src/renderer/src/features/trades/TradeDetailPanel.tsx",
+    "ui/src/renderer/src/features/letter/letter-card-state.ts",
+    "ui/src/renderer/src/features/onboarding/quick-add-schema.ts",
+    "ui/src/renderer/src/features/settings/rename-database-schema.ts",
+    "ui/src/renderer/src/features/settings/create-new-database-schema.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF5": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/broker_adapters/alpaca_adapter.py",
+    "packages/api/src/{{PROJECT_NAME}}_api/routes/analytics.py",
+    "packages/api/src/{{PROJECT_NAME}}_api/dependencies.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF6": {
+   "lane": "UF",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "ui/src/renderer/src/features/planning/applyMerge.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF7": {
+   "lane": "UF",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/email/email_sender.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF8": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 2,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/services/tax_service.py",
+    "packages/api/src/{{PROJECT_NAME}}_api/routes/tax.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF9": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 3,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/services/tax_service.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/domain/tax/wash_sale_detector.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/domain/tax/holding_period.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/domain/entities.py"
+   ],
+   "after": [
+    "UF2"
+   ],
+   "vm": false
+  },
+  "UF10": {
+   "lane": "UF",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "packages/api/src/{{PROJECT_NAME}}_api/routes/tax.py",
+    "packages/api/src/{{PROJECT_NAME}}_api/auth/destructive_actions.py",
+    "mcp-server/src/compound/tax-tool.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF11": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "tools/vm-harness/vm.ps1",
+    "tools/vm-harness/scenario-common.ps1",
+    "tools/vm-harness/db-digest.ps1"
+   ],
+   "after": [],
+   "vm": true
+  },
+  "UF12": {
+   "lane": "UF",
+   "size": "medium-to-large",
+   "tier": 1,
+   "owns": [
+    "ui/electron-builder.yml",
+    "ui/tests/e2e/service-install.spec.ts",
+    "THIRD_PARTY_NOTICES.md",
+    ".github/workflows/deps-frozen-gate.yml"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF13": {
+   "lane": "UF",
+   "size": "small",
+   "tier": 2,
+   "owns": [
+    "packages/api/src/{{PROJECT_NAME}}_api/routes/ai_actions.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/market_data_adapter.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF14": {
+   "lane": "UF",
+   "size": "large",
+   "tier": 2,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/services/market_data_service.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/provider_registry.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/url_builders.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/provider_capabilities.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/normalizers.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/pipeline_steps/fetch_step.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/services/analytics_service.py",
+    "packages/api/src/{{PROJECT_NAME}}_api/routes/market_data.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF15": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 2,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/services/scheduling_service.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/domain/pipeline.py",
+    "packages/api/src/{{PROJECT_NAME}}_api/routes/import_json.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/domain/import_json.py",
+    "mcp-server/src/compound/tax-tool.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF16": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/services/report_service.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/services/fill_check_service.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/domain/entities.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF17": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/services/provider_connection_service.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/pipeline_rate_limiter.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/http_cache.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/options_providers.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/market_data/rate_limiter.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF18": {
+   "lane": "UF",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "ui/src/renderer/src/features/accounts/AccountDetailPanel.tsx"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF19": {
+   "lane": "UF",
+   "size": "large",
+   "tier": 3,
+   "owns": [
+    "ui/src/renderer/src/"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF20": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "ui/src/main/backend-activation.ts",
+    "ui/src/main/python-manager.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF21": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "ui/src/renderer/src/styles/import-center.css",
+    "ui/src/renderer/src/features/trades/PFOFCostPanel.tsx",
+    "ui/src/renderer/src/features/trades/ExcursionPanel.tsx",
+    "ui/src/renderer/src/globals.css"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF22": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "mcp-server/src/compound/system-tool.ts",
+    "mcp-server/src/http/server.ts"
+   ],
+   "after": [],
+   "vm": true
+  },
+  "UF23": {
+   "lane": "UF",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "tools/run_audit_policy_set.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF24": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "ui/src/renderer/src/features/planning/PositionCalculatorModal.tsx",
+    "ui/src/renderer/src/features/planning/calculatorModes.ts",
+    "ui/src/renderer/src/features/planning/TradePlanPage.tsx"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF25": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 4,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/domain/tax/wash_sale_warnings.py",
+    "packages/infrastructure/src/{{PROJECT_NAME}}_infra/database/seed_adhoc_policy.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/services/tax_service.py",
+    "ui/src/renderer/src/features/tax/"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF26": {
+   "lane": "UF",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/services/ai_review_client.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/services/ai_provider_service.py",
+    "packages/api/src/{{PROJECT_NAME}}_api/routes/ai_actions.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF27": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "packages/api/src/{{PROJECT_NAME}}_api/schemas/analytics.py",
+    "ui/src/renderer/src/features/trades/TradeDetailPanel.tsx",
+    "packages/api/src/{{PROJECT_NAME}}_api/routes/mistakes.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/services/review_service.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/application/ports.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/pipeline_steps/send_step.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/services/policy_emulator.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/services/tws_decode_guard.py",
+    "packages/core/src/{{PROJECT_NAME}}_core/services/tws_connection_service.py",
+    "ui/src/main/ws/WebSocketBridge.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF28": {
+   "lane": "UF",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "mcp-server/src/compound/account-tool.ts",
+    "mcp-server/src/compound/import-tool.ts",
+    "mcp-server/src/resources/guide-resources.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "UF29": {
+   "lane": "UF",
+   "size": "medium",
+   "tier": 2,
+   "owns": [
+    "ui/src/renderer/src/features/planning/TradePlanPage.tsx",
+    "ui/src/renderer/src/features/planning/PositionCalculatorModal.tsx",
+    "ui/src/renderer/src/features/analytics/MonteCarloRiskCard.tsx",
+    "ui/src/renderer/src/features/tax/TaxProfileManager.tsx",
+    "ui/src/renderer/src/features/tax/TaxScheduleEditor.tsx",
+    "ui/src/renderer/src/features/onboarding/DatabaseChooser.tsx",
+    "ui/src/renderer/src/features/settings/SettingsLayout.tsx",
+    "ui/src/renderer/src/features/settings/settingsSections.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE1": {
+   "lane": "PE",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "tools/stop_gate.py",
+    "tools/validate_closeout_artifacts.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE2": {
+   "lane": "PE",
+   "size": "small-to-medium",
+   "tier": 2,
+   "owns": [
+    "tools/run_parameters.py",
+    "docs/execution/plans/TASK-TEMPLATE.md",
+    "tools/validate_closeout_artifacts.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE3": {
+   "lane": "PE",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "tools/commit_batch.py",
+    "tools/agent_config_integrity.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE4": {
+   "lane": "PE",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "ui/src/main/port-owner.ts",
+    "ui/scripts/check-port.mjs"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE5": {
+   "lane": "PE",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "ui/vitest.config.ts",
+    "tools/executor_worktree.py",
+    "mcp-server/scripts/build-mcpb.mjs"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE6": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "tools/meu_status/migrate.py",
+    "tools/deps/verify.py",
+    "docs/guides/policy-authoring-guide.md",
+    ".agent/workflows/delegated-plan-creation.md",
+    "tests/tooling/test_user_guide_chapters.py",
+    "tests/unit/test_p23_s7_agent_config.py",
+    "tests/tooling/test_retired_surfaces_absent.py",
+    "tests/tooling/test_install_scope_path_sweep.py",
+    "tests/tools/test_meu_status_render.py",
+    "tests/skill_optimize/test_gate.py",
+    "tests/tooling/test_framework_core_classes.py",
+    "tests/tooling/test_invoke_codex_dispatch.py",
+    "tests/tooling/test_workflow_dispatch_examples.py",
+    "tests/tooling/test_qf_1_hygiene.py",
+    "tests/unit/test_p23_s5_deps_actions.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE7": {
+   "lane": "PE",
+   "size": "large",
+   "tier": 2,
+   "owns": [
+    "tests/"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE8": {
+   "lane": "PE",
+   "size": "medium-to-large",
+   "tier": 2,
+   "owns": [
+    "ui/src/main/",
+    "mcp-server/tests/"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE9": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "tools/validate_codebase.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE10": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "ui/playwright.config.ts",
+    "ui/tests/e2e/"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE10a": {
+   "lane": "PE",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    ".agent/workflows/dep-status.md",
+    "tools/deps/status.py",
+    ".agent/workflows/README.md"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE11": {
+   "lane": "PE",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "tools/deps/apply.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE12": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 2,
+   "owns": [
+    "tools/deps/adapters/",
+    "tools/deps/apply.py",
+    "tools/deps/verify.py",
+    "tools/deps/_runner.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE13": {
+   "lane": "PE",
+   "size": "medium-to-large",
+   "tier": 3,
+   "owns": [
+    "tools/deps/verify.py",
+    "tools/deps/test_map.py",
+    "tools/deps/batch.py",
+    "tools/deps/evidence.py",
+    ".agent/docs/commands.md",
+    ".agent/skills/dep-batch/SKILL.md",
+    ".agent/workflows/dependency-batch.md"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE14": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    ".github/dependabot.yml",
+    "tools/workflow_pins.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE15": {
+   "lane": "PE",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "tools/deps/report_issue.py",
+    ".github/workflows/deps-detect.yml"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE16": {
+   "lane": "PE",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "tests/conftest.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE17": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "mcp-server/tests/integration/helpers/sample-entry-replay.ts",
+    "packages/api/src/{{PROJECT_NAME}}_api/routes/accounts.py",
+    "tools/npm_cooldown_fixture.py",
+    ".github/workflows/ci.yml"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE18": {
+   "lane": "PE",
+   "size": "small",
+   "tier": 3,
+   "owns": [
+    "tools/lanes.py",
+    "tests/tooling/test_lanes_gates.py",
+    "tools/agent_config_integrity.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE19": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 3,
+   "owns": [
+    "ui/vitest.artifacts.config.ts",
+    ".github/workflows/ci.yml",
+    "tools/deps/frozen_capture.py",
+    "tools/deps/_runner.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE20": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 2,
+   "owns": [
+    ".github/workflows/ci.yml",
+    "ui/playwright.config.ts",
+    "tools/validate_codebase.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE21": {
+   "lane": "PE",
+   "size": "medium-to-large",
+   "tier": 1,
+   "owns": [
+    "tools/credits_msg.py",
+    "tools/credits_state.py",
+    ".agent/skills/claude-credits/"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE22": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "tools/vm-harness/"
+   ],
+   "after": [],
+   "vm": true
+  },
+  "PE23": {
+   "lane": "PE",
+   "size": "medium",
+   "tier": 3,
+   "owns": [
+    "tests/tooling/test_pins_marker_census.py",
+    "tools/validate_codebase.py",
+    "tools/export_openapi.py",
+    ".agent/workflows/execution-session.md"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE24": {
+   "lane": "PE",
+   "size": "small",
+   "tier": 4,
+   "owns": [
+    "tools/unit_red_check.py",
+    "tools/Invoke-ClaudeDispatch.ps1",
+    "tests/tooling/test_p23_s7_dispatch_refusal.py",
+    "tools/agent_config_integrity.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "PE25": {
+   "lane": "PE",
+   "size": "small-to-medium",
+   "tier": 4,
+   "owns": [
+    ".github/workflows/",
+    "tools/workflow_pins.py"
+   ],
+   "after": [
+    "PE14"
+   ],
+   "vm": false
+  },
+  "RX1": {
+   "lane": "RX",
+   "size": "medium",
+   "tier": 1,
+   "owns": [
+    "tools/deps/policy.py",
+    "deps-policy.toml",
+    "tools/deps/inventory.py",
+    "uv.lock",
+    "ui/package.json",
+    "ui/package-lock.json",
+    "mcp-server/package.json",
+    "mcp-server/package-lock.json"
+   ],
+   "after": [
+    "UF4",
+    "PE11"
+   ],
+   "vm": false
+  },
+  "RX2": {
+   "lane": "RX",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "packages/api/src/{{PROJECT_NAME}}_api/main.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX3": {
+   "lane": "RX",
+   "size": "medium",
+   "tier": 2,
+   "owns": [
+    "tools/deps/classify.py",
+    "tools/deps/detect.py",
+    "tools/deps/sbom_build.py",
+    "tools/deps/sbom_reconcile.py",
+    "tools/deps/batch.py",
+    "ui/package-lock.json"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX4": {
+   "lane": "RX",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/services/tax_service.py"
+   ],
+   "after": [
+    "UF2",
+    "UF8",
+    "UF9",
+    "UF25"
+   ],
+   "vm": false
+  },
+  "RX5": {
+   "lane": "RX",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "docs/gui-element-reference.md",
+    ".agent/docs/gui-standards-enforcement.md",
+    "docs/gui-input-field-index.md",
+    "docs/build-plan/25-position-sizer-pro-flow.md"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX6": {
+   "lane": "RX",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "tools/issue_triage/discover.py",
+    "tools/issue_triage/verify.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX7": {
+   "lane": "RX",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "tools/_fw_sync.py",
+    "tools/_fw_hashdiff.py",
+    "tools/_fw_refcheck.py",
+    "tools/_fw_treecheck.py",
+    "tests/tooling/test_framework_registry_template.py",
+    "tests/tooling/test_framework_sanitize.py",
+    "tests/tooling/test_cs15_crossrepo.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX8": {
+   "lane": "RX",
+   "size": "small-to-medium",
+   "tier": 1,
+   "owns": [
+    "tools/credits_msg.py",
+    "tools/credits_state.py",
+    ".agent/skills/claude-credits/",
+    ".agent/credits/config.json",
+    "tools/validate_codebase.py"
+   ],
+   "after": [
+    "PE21"
+   ],
+   "vm": false
+  },
+  "RX9": {
+   "lane": "RX",
+   "size": "small",
+   "tier": 1,
+   "owns": [
+    "packages/core/src/{{PROJECT_NAME}}_core/domain/analytics/portfolio.py"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX10": {
+   "lane": "RX",
+   "size": "medium",
+   "tier": 2,
+   "owns": [
+    "uv.lock",
+    "packages/api/pyproject.toml"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX11": {
+   "lane": "RX",
+   "size": "medium",
+   "tier": 3,
+   "owns": [
+    "uv.lock",
+    "pyproject.toml",
+    "packages/core/pyproject.toml"
+   ],
+   "after": [
+    "PE19"
+   ],
+   "vm": false
+  },
+  "RX12": {
+   "lane": "RX",
+   "size": "medium",
+   "tier": 3,
+   "owns": [
+    "ui/package.json",
+    "ui/package-lock.json",
+    "ui/src/renderer/src/features/analytics/DrawdownChart.tsx",
+    "ui/src/renderer/src/features/planning/IVSkewChart.tsx",
+    "ui/src/renderer/src/features/planning/VolumeOIChart.tsx",
+    "ui/src/renderer/src/features/trades/TradesTable.tsx",
+    "ui/src/renderer/src/hooks/useTableSelection.ts",
+    "ui/src/renderer/src/components/SortableColumnHeader.tsx"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX13": {
+   "lane": "RX",
+   "size": "medium",
+   "tier": 4,
+   "owns": [
+    "ui/package.json",
+    "ui/package-lock.json",
+    "ui/src/main/index.ts",
+    "ui/src/main/pnl-widget/PnlWidgetManager.ts",
+    "ui/src/main/mcp-preferences.ts",
+    "ui/src/main/self-install.ts",
+    "ui/src/main/close-behavior.ts",
+    "ui/src/main/portable-install/promotion-attestation.ts",
+    "ui/src/main/window-state.ts",
+    "ui/electron.vite.config.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX14": {
+   "lane": "RX",
+   "size": "small-to-medium",
+   "tier": 5,
+   "owns": [
+    "ui/package.json",
+    "ui/package-lock.json",
+    "ui/src/renderer/src/registry/types.ts",
+    "ui/src/renderer/src/registry/settingsSectionEntries.ts",
+    "ui/src/renderer/src/registry/commandRegistry.ts",
+    "ui/src/renderer/src/components/layout/NavRail.tsx",
+    "ui/src/renderer/src/features/accounts/CashActivitySection.tsx",
+    "ui/src/renderer/src/features/accounts/ImportDialog.tsx",
+    "ui/src/renderer/src/features/planning/OptionsChartPanel.tsx",
+    "ui/src/renderer/src/features/trades/MistakeForm.tsx",
+    "ui/src/renderer/src/features/trades/TradeDetailPanel.tsx",
+    "ui/src/renderer/src/features/scheduling/EmailTemplateDetail.tsx",
+    "ui/src/renderer/src/features/scheduling/EmailTemplatePreview.tsx",
+    "ui/src/renderer/src/features/scheduling/PolicyDetail.tsx",
+    "ui/src/renderer/src/features/scheduling/SchedulingLayout.tsx",
+    "ui/src/renderer/src/features/settings/connect/ConnectCard.tsx",
+    "ui/src/renderer/src/hooks/useNotifications.tsx",
+    "ui/src/renderer/src/lib/utils.ts"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX15": {
+   "lane": "RX",
+   "size": "medium-to-large",
+   "tier": 6,
+   "owns": [
+    "ui/package.json",
+    "ui/package-lock.json",
+    "mcp-server/package.json",
+    "mcp-server/package-lock.json",
+    "ui/eslint.config.js",
+    "mcp-server/eslint.config.mjs",
+    "ui/tsconfig.json",
+    "ui/tsconfig.node.json",
+    "ui/tsconfig.web.json",
+    "mcp-server/tsconfig.json"
+   ],
+   "after": [],
+   "vm": false
+  },
+  "RX16": {
+   "lane": "RX",
+   "size": "medium-to-large",
+   "tier": 7,
+   "owns": [
+    "ui/package.json",
+    "ui/package-lock.json",
+    "mcp-server/package.json",
+    "mcp-server/package-lock.json",
+    "ui/vitest.config.ts",
+    "mcp-server/vitest.config.ts",
+    "ui/electron.vite.config.ts"
+   ],
+   "after": [
+    "PE5"
+   ],
+   "vm": false
+  }
+ }
+}
