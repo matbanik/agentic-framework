@@ -1869,7 +1869,8 @@ def test_ac_925_8_only_eligible_and_simulate(
 ) -> None:
     code, out, _err = _run(capsys, "--help")
     assert code == 0
-    assert "{eligible,simulate}" in out
+    # AC-951.4 (AG3 EA-7) replaces the two-verb parser of AC-925.8.
+    assert "{eligible,simulate,facts,start,land,report}" in out
     code, _out, _err = _run(capsys)
     assert code == 2
     for verb in ("eligible", "simulate"):
