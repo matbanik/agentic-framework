@@ -181,7 +181,11 @@ capability; otherwise change it to `compact_continue` before execution.
 `tools/run_parameters.py final --produce --plan {YYYY-MM-DD}-{project-slug}`, in the main tree;
 in a scheduled credits run, then run `credits_msg.py landing --part closeout`, and the monitor
 seals the run (`final --seal`). Both steps write to the authority store and never to this file;
-DONE is the audit's predicate, not the status string.
+DONE is the audit's predicate, not the status string. A plan with
+`authorization: {schema: manual}`, or with no `run_parameters` block, has no final audit,
+because `final --produce` refuses it as `legacy`. Its completion predicate is
+`tools/run_parameters.py status --json --plan {YYYY-MM-DD}-{project-slug}`, which reports
+`"kind": "legacy"` and `"done": true` (multi-agent-lanes D-P15).
 
 ### Status Legend
 
